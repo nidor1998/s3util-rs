@@ -22,6 +22,19 @@ pub enum ExitStatus {
     Warning,
 }
 
+impl ExitStatus {
+    pub fn code(&self) -> i32 {
+        match self {
+            ExitStatus::Success => EXIT_CODE_SUCCESS,
+            ExitStatus::Warning => EXIT_CODE_WARNING,
+        }
+    }
+}
+
+pub const EXIT_CODE_SUCCESS: i32 = 0;
+pub const EXIT_CODE_ERROR: i32 = 1;
+pub const EXIT_CODE_WARNING: i32 = 3;
+
 ///
 /// and `Err` for errors.
 pub async fn run_cp(config: Config) -> Result<ExitStatus> {

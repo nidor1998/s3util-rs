@@ -29,15 +29,13 @@ async fn main() -> Result<()> {
             start_tracing_if_necessary(&config);
             tracing::trace!("config = {:?}", config);
 
-            match cli::run_cp(config).await {
-                Ok(cli::ExitStatus::Success) => {}
-                Ok(cli::ExitStatus::Warning) => std::process::exit(3),
-                Err(_) => std::process::exit(1),
-            }
+            let exit_code = match cli::run_cp(config).await {
+                Ok(status) => status.code(),
+                Err(_) => cli::EXIT_CODE_ERROR,
+            };
+            std::process::exit(exit_code);
         }
     }
-
-    Ok(())
 }
 
 fn start_tracing_if_necessary(config: &Config) -> bool {
