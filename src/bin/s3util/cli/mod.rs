@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use aws_sdk_s3::types::RequestPayer;
 use tracing::{error, trace};
 
@@ -49,12 +49,9 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
     trace!(direction = ?direction, "detected transfer direction");
 
-    // Determine source/target keys and storage paths for cp.
-    // s3sync's Storage model uses base_path + key internally.
-    // For local: base = parent dir, key = filename.
-    // For S3: prefix is already the full object key, key = "".
-    let (source_storage_path, source_key, target_storage_path, target_key) =
-        extract_storage_paths_and_keys(&config, &direction)?;
+    // For cp, the full path is always passed as the key to get_object/put_object.
+    // Storage instances are created with an empty base path so that key = full path.
+    let (source_key, target_key) = extract_keys(&config)?;
 
     let show_progress = ui_config::is_progress_indicator_needed(&config);
     let show_result = ui_config::is_show_result_needed(&config);
@@ -76,7 +73,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = LocalStorageFactory::create(
                 config.clone(),
-                source_storage_path,
+                empty_local_storage_path(),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 None,
@@ -90,7 +87,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                target_storage_path,
+                empty_s3_storage_path(&config.target),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -122,7 +119,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                source_storage_path,
+                empty_s3_storage_path(&config.source),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -136,7 +133,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = LocalStorageFactory::create(
                 config.clone(),
-                target_storage_path,
+                empty_local_storage_path(),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 None,
@@ -173,7 +170,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                source_storage_path,
+                empty_s3_storage_path(&config.source),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -187,7 +184,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                target_storage_path,
+                empty_s3_storage_path(&config.target),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -219,7 +216,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                target_storage_path,
+                empty_s3_storage_path(&config.target),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -249,7 +246,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                source_storage_path,
+                empty_s3_storage_path(&config.source),
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -316,72 +313,35 @@ fn get_path_strings(source: &StoragePath, target: &StoragePath) -> (String, Stri
     (source_str, target_str)
 }
 
-/// For cp, source and target paths are independent.
-/// s3sync's Storage uses base_path + key internally:
-///   - S3: full_key = prefix + key
-///   - Local: file_path = path / key
-///
-/// For cp we split each side so that:
-///   - Local: StoragePath = parent dir, key = filename
-///   - S3: StoragePath = S3 { bucket, prefix="" }, key = full object key
-///   - Stdio: no Storage needed, key = target S3 key or source S3 key
-///
-/// Returns (source_storage_path, source_key, target_storage_path, target_key).
-fn extract_storage_paths_and_keys(
-    config: &Config,
-    direction: &TransferDirection,
-) -> Result<(StoragePath, String, StoragePath, String)> {
-    let (source_storage_path, source_key) = split_for_storage(&config.source)?;
-    let (target_storage_path, target_key) = split_for_storage(&config.target)?;
-
-    // For stdio directions, the stdio side has no Storage — use a dummy.
-    match direction {
-        TransferDirection::LocalToS3 | TransferDirection::S3ToLocal | TransferDirection::S3ToS3 => {
-        }
-        TransferDirection::StdioToS3 => {
-            // source is stdio — only target matters
-        }
-        TransferDirection::S3ToStdio => {
-            // target is stdio — only source matters
-        }
-    }
-
-    Ok((
-        source_storage_path,
-        source_key,
-        target_storage_path,
-        target_key,
-    ))
+/// Extract the full path as the key for each side.
+/// For cp, the full path is always passed to get_object/put_object.
+/// Storage instances are created with empty base paths.
+fn extract_keys(config: &Config) -> Result<(String, String)> {
+    let source_key = match &config.source {
+        StoragePath::S3 { prefix, .. } => prefix.clone(),
+        StoragePath::Local(path) => path.to_string_lossy().to_string(),
+        StoragePath::Stdio => String::new(),
+    };
+    let target_key = match &config.target {
+        StoragePath::S3 { prefix, .. } => prefix.clone(),
+        StoragePath::Local(path) => path.to_string_lossy().to_string(),
+        StoragePath::Stdio => String::new(),
+    };
+    Ok((source_key, target_key))
 }
 
-/// Split a StoragePath into (base StoragePath for Storage creation, key for operations).
-fn split_for_storage(path: &StoragePath) -> Result<(StoragePath, String)> {
-    match path {
-        StoragePath::S3 { bucket, prefix } => {
-            // S3: Storage gets bucket with empty prefix, key is the full object key.
-            Ok((
-                StoragePath::S3 {
-                    bucket: bucket.clone(),
-                    prefix: String::new(),
-                },
-                prefix.clone(),
-            ))
-        }
-        StoragePath::Local(path) => {
-            // Local: Storage gets parent dir, key is the filename.
-            let parent = path
-                .parent()
-                .ok_or_else(|| anyhow!("local path has no parent directory: {:?}", path))?;
-            let filename = path
-                .file_name()
-                .ok_or_else(|| anyhow!("local path has no filename: {:?}", path))?
-                .to_string_lossy()
-                .to_string();
-            Ok((StoragePath::Local(parent.to_path_buf()), filename))
-        }
-        StoragePath::Stdio => {
-            // Stdio has no Storage — return dummy values.
-            Ok((StoragePath::Stdio, String::new()))
-        }
+/// Create a LocalStorage base path (empty — full path is passed as the key).
+fn empty_local_storage_path() -> StoragePath {
+    StoragePath::Local(".".into())
+}
+
+/// Create an S3Storage base path with empty prefix (full key is passed to operations).
+fn empty_s3_storage_path(original: &StoragePath) -> StoragePath {
+    match original {
+        StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+            bucket: bucket.clone(),
+            prefix: String::new(),
+        },
+        _ => unreachable!("expected S3 storage path"),
     }
 }
