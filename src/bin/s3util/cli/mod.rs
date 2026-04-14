@@ -17,9 +17,14 @@ pub mod ctrl_c_handler;
 pub mod indicator;
 pub mod ui_config;
 
-/// Returns `Ok(true)` if the transfer completed with warnings, `Ok(false)` for clean success,
+pub enum ExitStatus {
+    Success,
+    Warning,
+}
+
+///
 /// and `Err` for errors.
-pub async fn run_cp(config: Config) -> Result<bool> {
+pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let cancellation_token = create_pipeline_cancellation_token();
     ctrl_c_handler::spawn_ctrl_c_handler(cancellation_token.clone());
 
@@ -260,10 +265,10 @@ pub async fn run_cp(config: Config) -> Result<bool> {
     }
 
     if has_warning.load(std::sync::atomic::Ordering::SeqCst) {
-        return Ok(true);
+        return Ok(ExitStatus::Warning);
     }
 
-    Ok(false)
+    Ok(ExitStatus::Success)
 }
 
 fn get_path_strings(source: &StoragePath, target: &StoragePath) -> (String, String) {
