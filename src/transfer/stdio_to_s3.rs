@@ -24,7 +24,7 @@ use crate::types::{ObjectChecksum, SyncStatistics};
 pub async fn transfer(
     config: &Config,
     target: Storage,
-    key: &str,
+    target_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -62,7 +62,7 @@ pub async fn transfer(
     };
 
     let object_checksum = ObjectChecksum {
-        key: key.to_string(),
+        key: target_key.to_string(),
         version_id: None,
         checksum_algorithm: config.additional_checksum_algorithm.clone(),
         checksum_type: None,
@@ -72,7 +72,7 @@ pub async fn transfer(
 
     let _put_object_output = target
         .put_object(
-            key,
+            target_key,
             target_clone,
             source_size,
             None,
@@ -86,11 +86,11 @@ pub async fn transfer(
         .await
         .context("stdio_to_s3: target.put_object() failed.")?;
 
-    info!(key = key, "stdin transfer completed.");
+    info!(target_key = target_key, "stdin transfer completed.");
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
-            key: key.to_string(),
+            key: target_key.to_string(),
         })
         .await;
 

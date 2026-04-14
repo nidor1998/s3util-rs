@@ -16,7 +16,8 @@ pub async fn transfer(
     config: &Config,
     source: Storage,
     target: Storage,
-    key: &str,
+    source_key: &str,
+    target_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -30,7 +31,7 @@ pub async fn transfer(
         // Server-side copy: use head_object to get metadata, no actual download
         let head_object_output = source
             .head_object(
-                key,
+                source_key,
                 config.version_id.clone(),
                 config.additional_checksum_mode.clone(),
                 None,
@@ -45,7 +46,7 @@ pub async fn transfer(
         // Download + upload: download from source
         source
             .get_object(
-                key,
+                source_key,
                 config.version_id.clone(),
                 config.additional_checksum_mode.clone(),
                 None,
@@ -76,7 +77,7 @@ pub async fn transfer(
     } else {
         // Try to get tagging from source
         let tagging_output = source_clone
-            .get_object_tagging(key, config.version_id.clone())
+            .get_object_tagging(source_key, config.version_id.clone())
             .await;
         if let Ok(tagging_output) = tagging_output {
             if tagging_output.tag_set().is_empty() {
@@ -104,7 +105,7 @@ pub async fn transfer(
 
     // Build object checksum
     let object_checksum = ObjectChecksum {
-        key: key.to_string(),
+        key: target_key.to_string(),
         version_id: config.version_id.clone(),
         checksum_algorithm: config.additional_checksum_algorithm.clone(),
         checksum_type: None,
@@ -121,7 +122,7 @@ pub async fn transfer(
 
     let put_object_output = target
         .put_object(
-            key,
+            target_key,
             source_clone,
             source_size,
             source_additional_checksum,
@@ -136,14 +137,23 @@ pub async fn transfer(
         .context("s3_to_s3: target.put_object() failed.")?;
 
     if put_object_output.e_tag.is_some() {
-        info!(key = key, size = source_size, "transfer completed.");
+        info!(
+            source_key = source_key,
+            target_key = target_key,
+            size = source_size,
+            "transfer completed."
+        );
     } else {
-        warn!(key = key, "transfer completed but no ETag returned.");
+        warn!(
+            source_key = source_key,
+            target_key = target_key,
+            "transfer completed but no ETag returned."
+        );
     }
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
-            key: key.to_string(),
+            key: target_key.to_string(),
         })
         .await;
 

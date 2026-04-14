@@ -15,7 +15,7 @@ use crate::types::token::PipelineCancellationToken;
 pub async fn transfer(
     config: &Config,
     source: Storage,
-    key: &str,
+    source_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -26,7 +26,7 @@ pub async fn transfer(
     // Get object from S3 source
     let get_object_output = source
         .get_object(
-            key,
+            source_key,
             config.version_id.clone(),
             config.additional_checksum_mode.clone(),
             None,
@@ -76,7 +76,7 @@ pub async fn transfer(
         .context("s3_to_stdio: failed to flush stdout")?;
 
     info!(
-        key = key,
+        source_key = source_key,
         size = content_length,
         bytes_written = total_bytes,
         "stdout transfer completed."
@@ -84,7 +84,7 @@ pub async fn transfer(
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
-            key: key.to_string(),
+            key: source_key.to_string(),
         })
         .await;
 

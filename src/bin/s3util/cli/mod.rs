@@ -49,8 +49,12 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
     trace!(direction = ?direction, "detected transfer direction");
 
-    // Determine key for the transfer
-    let key = extract_key(&config, &direction)?;
+    // Determine source/target keys and storage paths for cp.
+    // s3sync's Storage model uses base_path + key internally.
+    // For local: base = parent dir, key = filename.
+    // For S3: prefix is already the full object key, key = "".
+    let (source_storage_path, source_key, target_storage_path, target_key) =
+        extract_storage_paths_and_keys(&config, &direction)?;
 
     let show_progress = ui_config::is_progress_indicator_needed(&config);
     let show_result = ui_config::is_show_result_needed(&config);
@@ -64,7 +68,6 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
     let result = match direction {
         TransferDirection::LocalToS3 => {
-            let source_request_payer = None;
             let target_request_payer = if config.target_request_payer {
                 Some(RequestPayer::Requester)
             } else {
@@ -73,11 +76,11 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = LocalStorageFactory::create(
                 config.clone(),
-                config.source.clone(),
+                source_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 None,
-                source_request_payer,
+                None,
                 None,
                 None,
                 has_warning.clone(),
@@ -87,7 +90,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                config.target.clone(),
+                target_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -103,7 +106,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 &config,
                 source,
                 target,
-                &key,
+                &source_key,
+                &target_key,
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
@@ -118,7 +122,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                config.source.clone(),
+                source_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -132,7 +136,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = LocalStorageFactory::create(
                 config.clone(),
-                config.target.clone(),
+                target_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 None,
@@ -148,7 +152,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 &config,
                 source,
                 target,
-                &key,
+                &source_key,
+                &target_key,
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
@@ -168,7 +173,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                config.source.clone(),
+                source_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -182,7 +187,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                config.target.clone(),
+                target_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -198,7 +203,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 &config,
                 source,
                 target,
-                &key,
+                &source_key,
+                &target_key,
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
@@ -213,7 +219,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let target = S3StorageFactory::create(
                 config.clone(),
-                config.target.clone(),
+                target_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.target_client_config.clone(),
@@ -228,7 +234,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             s3util_rs::transfer::stdio_to_s3::transfer(
                 &config,
                 target,
-                &key,
+                &target_key,
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
@@ -243,7 +249,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
             let source = S3StorageFactory::create(
                 config.clone(),
-                config.source.clone(),
+                source_storage_path,
                 cancellation_token.clone(),
                 stats_sender.clone(),
                 config.source_client_config.clone(),
@@ -258,7 +264,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             s3util_rs::transfer::s3_to_stdio::transfer(
                 &config,
                 source,
-                &key,
+                &source_key,
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
@@ -310,62 +316,72 @@ fn get_path_strings(source: &StoragePath, target: &StoragePath) -> (String, Stri
     (source_str, target_str)
 }
 
-fn extract_key(config: &Config, direction: &TransferDirection) -> Result<String> {
+/// For cp, source and target paths are independent.
+/// s3sync's Storage uses base_path + key internally:
+///   - S3: full_key = prefix + key
+///   - Local: file_path = path / key
+///
+/// For cp we split each side so that:
+///   - Local: StoragePath = parent dir, key = filename
+///   - S3: StoragePath = S3 { bucket, prefix="" }, key = full object key
+///   - Stdio: no Storage needed, key = target S3 key or source S3 key
+///
+/// Returns (source_storage_path, source_key, target_storage_path, target_key).
+fn extract_storage_paths_and_keys(
+    config: &Config,
+    direction: &TransferDirection,
+) -> Result<(StoragePath, String, StoragePath, String)> {
+    let (source_storage_path, source_key) = split_for_storage(&config.source)?;
+    let (target_storage_path, target_key) = split_for_storage(&config.target)?;
+
+    // For stdio directions, the stdio side has no Storage — use a dummy.
     match direction {
-        TransferDirection::LocalToS3 => {
-            // Key is the filename from the local path
-            if let StoragePath::Local(path) = &config.source {
-                Ok(path
-                    .file_name()
-                    .map(|f| f.to_string_lossy().to_string())
-                    .unwrap_or_default())
-            } else {
-                Err(anyhow!("expected local source path for LocalToS3"))
-            }
-        }
-        TransferDirection::S3ToLocal => {
-            // Key is the S3 object key (prefix)
-            if let StoragePath::S3 { prefix, .. } = &config.source {
-                Ok(extract_object_key(prefix))
-            } else {
-                Err(anyhow!("expected S3 source path for S3ToLocal"))
-            }
-        }
-        TransferDirection::S3ToS3 => {
-            // Key is the S3 object key from the source
-            if let StoragePath::S3 { prefix, .. } = &config.source {
-                Ok(extract_object_key(prefix))
-            } else {
-                Err(anyhow!("expected S3 source path for S3ToS3"))
-            }
+        TransferDirection::LocalToS3 | TransferDirection::S3ToLocal | TransferDirection::S3ToS3 => {
         }
         TransferDirection::StdioToS3 => {
-            // Key is from the target S3 path
-            if let StoragePath::S3 { prefix, .. } = &config.target {
-                Ok(extract_object_key(prefix))
-            } else {
-                Err(anyhow!("expected S3 target path for StdioToS3"))
-            }
+            // source is stdio — only target matters
         }
         TransferDirection::S3ToStdio => {
-            // Key is the S3 object key from the source
-            if let StoragePath::S3 { prefix, .. } = &config.source {
-                Ok(extract_object_key(prefix))
-            } else {
-                Err(anyhow!("expected S3 source path for S3ToStdio"))
-            }
+            // target is stdio — only source matters
         }
     }
+
+    Ok((
+        source_storage_path,
+        source_key,
+        target_storage_path,
+        target_key,
+    ))
 }
 
-/// Extract the object key from an S3 prefix.
-/// For "dir1/dir2/file.txt" -> "file.txt"
-/// For "file.txt" -> "file.txt"
-/// For "" -> ""
-fn extract_object_key(prefix: &str) -> String {
-    if prefix.is_empty() {
-        return String::new();
+/// Split a StoragePath into (base StoragePath for Storage creation, key for operations).
+fn split_for_storage(path: &StoragePath) -> Result<(StoragePath, String)> {
+    match path {
+        StoragePath::S3 { bucket, prefix } => {
+            // S3: Storage gets bucket with empty prefix, key is the full object key.
+            Ok((
+                StoragePath::S3 {
+                    bucket: bucket.clone(),
+                    prefix: String::new(),
+                },
+                prefix.clone(),
+            ))
+        }
+        StoragePath::Local(path) => {
+            // Local: Storage gets parent dir, key is the filename.
+            let parent = path
+                .parent()
+                .ok_or_else(|| anyhow!("local path has no parent directory: {:?}", path))?;
+            let filename = path
+                .file_name()
+                .ok_or_else(|| anyhow!("local path has no filename: {:?}", path))?
+                .to_string_lossy()
+                .to_string();
+            Ok((StoragePath::Local(parent.to_path_buf()), filename))
+        }
+        StoragePath::Stdio => {
+            // Stdio has no Storage — return dummy values.
+            Ok((StoragePath::Stdio, String::new()))
+        }
     }
-    // For cp (single object), the prefix IS the key
-    prefix.to_string()
 }
