@@ -2,7 +2,7 @@ use std::io;
 use std::io::Write;
 
 use async_channel::Receiver;
-use indicatif::{HumanBytes, HumanCount, HumanDuration, ProgressBar, ProgressStyle};
+use indicatif::{HumanBytes, HumanCount, ProgressBar, ProgressStyle};
 use s3util_rs::types::SyncStatistics;
 use simple_moving_average::{SMA, SumTreeSMA};
 use tokio::task::JoinHandle;
@@ -103,7 +103,7 @@ pub fn show_indicator(
                         progress_text.set_style(ProgressStyle::with_template("{msg}").unwrap());
 
                         let mut parts = vec![
-                            format!("{:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(sync_bytes_per_sec)),
+                            format!("transferred {:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(sync_bytes_per_sec)),
                             format!("transferred {:>3} objects | {:>3} objects/sec", total_sync_count, HumanCount(objects_per_sec)),
                         ];
                         if total_e_tag_verified_count > 0 {
@@ -118,7 +118,6 @@ pub fn show_indicator(
                         if total_warning_count > 0 {
                             parts.push(format!("warning {} objects", total_warning_count));
                         }
-                        parts.push(format!("duration {}", HumanDuration(elapsed)));
                         let result_message = parts.join(",  ");
 
                         progress_text.finish_with_message(result_message);
@@ -137,7 +136,7 @@ pub fn show_indicator(
 
             if show_progress {
                 let mut parts = vec![
-                    format!("{:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(ma_synced_bytes.get_average()).to_string()),
+                    format!("transferred {:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(ma_synced_bytes.get_average()).to_string()),
                     format!("transferred {:>3} objects | {:>3} objects/sec", total_sync_count, HumanCount(ma_synced_count.get_average()).to_string()),
                 ];
                 if total_e_tag_verified_count > 0 {

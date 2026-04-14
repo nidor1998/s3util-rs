@@ -29,8 +29,10 @@ async fn main() -> Result<()> {
             start_tracing_if_necessary(&config);
             tracing::trace!("config = {:?}", config);
 
-            if let Err(_e) = cli::run_cp(config).await {
-                std::process::exit(1);
+            match cli::run_cp(config).await {
+                Ok(false) => {} // clean success, exit 0
+                Ok(true) => std::process::exit(3), // warning
+                Err(_) => std::process::exit(1),   // error
             }
         }
     }

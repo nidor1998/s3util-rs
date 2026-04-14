@@ -69,6 +69,7 @@ pub struct Config {
     pub version_id: Option<String>,
     pub is_stdio_source: bool,
     pub is_stdio_target: bool,
+    /// Always false for cp. Kept for s3sync storage layer compatibility.
     pub dry_run: bool,
 }
 
