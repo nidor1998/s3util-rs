@@ -6,3 +6,5 @@ pub mod config;
 pub mod storage;
 pub mod transfer;
 pub mod types;
+
+pub use config::Config;

@@ -1098,6 +1098,7 @@ impl TryFrom<CpArgs> for Config {
             version_id: value.version_id,
             is_stdio_source,
             is_stdio_target,
+            dry_run: false,
         })
     }
 }
