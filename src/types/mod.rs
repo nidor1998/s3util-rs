@@ -104,6 +104,7 @@ pub enum SyncStatistics {
 pub enum StoragePath {
     S3 { bucket: String, prefix: String },
     Local(PathBuf),
+    Stdio,
 }
 
 #[derive(Debug, Clone)]
