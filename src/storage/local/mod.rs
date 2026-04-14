@@ -1195,6 +1195,7 @@ impl StorageTrait for LocalStorage {
     }
 }
 
+#[cfg(test)]
 fn remove_local_path_prefix(path: &str, prefix: &str) -> String {
     if path == prefix {
         let path = PathBuf::from(path);

@@ -11,8 +11,6 @@ pub mod async_callback;
 pub mod error;
 pub mod token;
 
-pub(crate) const MINIMUM_CHUNKSIZE: usize = 5 * 1024 * 1024;
-
 #[derive(Clone, Default)]
 pub struct ObjectChecksum {
     pub key: String,
