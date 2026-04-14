@@ -5,6 +5,7 @@ use aws_sdk_s3::operation::abort_multipart_upload::AbortMultipartUploadOutput;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadOutput;
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
+use aws_sdk_s3::operation::put_object::builders::PutObjectOutputBuilder;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
@@ -30,12 +31,14 @@ use crate::storage::{
     convert_to_buf_byte_stream_with_callback, get_range_from_content_range,
     parse_range_header_string,
 };
-use crate::types::SyncStatistics;
 use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
 use crate::types::error::S3syncError;
+use crate::types::event_callback::{EventData, EventType};
+use crate::types::preprocess_callback::{UploadMetadata, is_callback_cancelled};
 use crate::types::token::PipelineCancellationToken;
-
-const S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY: &str = "s3sync-origin-last-modified";
+use crate::types::{
+    S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY, SyncStatistics,
+};
 
 const MISMATCH_WARNING_WITH_HELP: &str = "mismatch. object in the target storage may be corrupted. \
  or the current multipart_threshold or multipart_chunksize may be different when uploading to the source. \
@@ -183,6 +186,10 @@ impl UploadManager {
             get_object_output = Self::modify_last_modified_metadata(get_object_output);
         }
 
+        if self.config.enable_versioning {
+            get_object_output = Self::update_versioning_metadata(get_object_output);
+        }
+
         get_object_output
     }
 
@@ -216,6 +223,40 @@ impl UploadManager {
         get_object_output.cache_control = None;
         get_object_output.expires_string = None;
         get_object_output.website_redirect_location = None;
+
+        get_object_output
+    }
+
+    fn update_versioning_metadata(mut get_object_output: GetObjectOutput) -> GetObjectOutput {
+        if get_object_output.version_id().is_none() {
+            return get_object_output;
+        }
+
+        let source_version_id = get_object_output.version_id().unwrap();
+
+        let mut metadata = get_object_output.metadata().cloned().unwrap_or_default();
+
+        let last_modified = DateTime::from_millis(
+            get_object_output
+                .last_modified()
+                .unwrap()
+                .to_millis()
+                .unwrap(),
+        )
+        .to_chrono_utc()
+        .unwrap()
+        .to_rfc3339_opts(SecondsFormat::Secs, false);
+
+        metadata.insert(
+            S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY.to_string(),
+            source_version_id.to_string(),
+        );
+        metadata.insert(
+            S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
+            last_modified,
+        );
+
+        get_object_output.metadata = Some(metadata);
 
         get_object_output
     }
@@ -257,62 +298,44 @@ impl UploadManager {
             None
         };
 
-        let create_multipart_upload_output = self
-            .client
-            .create_multipart_upload()
-            .set_request_payer(self.request_payer.clone())
-            .set_storage_class(storage_class)
-            .bucket(bucket)
-            .key(key)
-            .set_metadata(if self.config.metadata.is_none() {
-                get_object_output_first_chunk.metadata().cloned()
-            } else {
-                self.config.metadata.clone()
-            })
-            .set_tagging(self.tagging.clone())
-            .set_website_redirect_location(if self.config.website_redirect.is_none() {
-                get_object_output_first_chunk
-                    .website_redirect_location()
-                    .map(|value| value.to_string())
-            } else {
-                self.config.website_redirect.clone()
-            })
-            .set_content_type(if self.config.content_type.is_none() {
-                get_object_output_first_chunk
-                    .content_type()
-                    .map(|value| value.to_string())
-            } else {
-                self.config.content_type.clone()
-            })
-            .set_content_encoding(if self.config.content_encoding.is_none() {
-                get_object_output_first_chunk
-                    .content_encoding()
-                    .map(|value| value.to_string())
-            } else {
-                self.config.content_encoding.clone()
-            })
-            .set_cache_control(if self.config.cache_control.is_none() {
+        let mut upload_metadata = UploadMetadata {
+            acl: self.config.canned_acl.clone(),
+            cache_control: if self.config.cache_control.is_none() {
                 get_object_output_first_chunk
                     .cache_control()
                     .map(|value| value.to_string())
             } else {
                 self.config.cache_control.clone()
-            })
-            .set_content_disposition(if self.config.content_disposition.is_none() {
+            },
+            content_disposition: if self.config.content_disposition.is_none() {
                 get_object_output_first_chunk
                     .content_disposition()
                     .map(|value| value.to_string())
             } else {
                 self.config.content_disposition.clone()
-            })
-            .set_content_language(if self.config.content_language.is_none() {
+            },
+            content_encoding: if self.config.content_encoding.is_none() {
+                get_object_output_first_chunk
+                    .content_encoding()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_encoding.clone()
+            },
+            content_language: if self.config.content_language.is_none() {
                 get_object_output_first_chunk
                     .content_language()
                     .map(|value| value.to_string())
             } else {
                 self.config.content_language.clone()
-            })
-            .set_expires(if self.config.expires.is_none() {
+            },
+            content_type: if self.config.content_type.is_none() {
+                get_object_output_first_chunk
+                    .content_type()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_type.clone()
+            },
+            expires: if self.config.expires.is_none() {
                 get_object_output_first_chunk
                     .expires_string()
                     .map(|expires_string| {
@@ -323,13 +346,63 @@ impl UploadManager {
                     &self.config.expires.unwrap().to_rfc3339(),
                     DateTimeFormat::DateTimeWithOffset,
                 )?)
-            })
+            },
+            metadata: if self.config.metadata.is_none() {
+                get_object_output_first_chunk.metadata().cloned()
+            } else {
+                self.config.metadata.clone()
+            },
+            request_payer: self.request_payer.clone(),
+            storage_class: storage_class.clone(),
+            website_redirect_location: if self.config.website_redirect.is_none() {
+                get_object_output_first_chunk
+                    .website_redirect_location()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.website_redirect.clone()
+            },
+            tagging: self.tagging.clone(),
+        };
+
+        let callback_result = self
+            .config
+            .preprocess_manager
+            .execute_preprocessing(key, &get_object_output_first_chunk, &mut upload_metadata)
+            .await;
+        if let Err(e) = callback_result {
+            if is_callback_cancelled(&e) {
+                debug!(
+                    key = key,
+                    "PreprocessCallback execute_preprocessing() cancelled. Skipping upload."
+                );
+                return Ok(PutObjectOutputBuilder::default().build());
+            } else {
+                return Err(e.context("PreprocessCallback before_upload() failed."));
+            }
+        }
+
+        let create_multipart_upload_output = self
+            .client
+            .create_multipart_upload()
+            .set_request_payer(upload_metadata.request_payer)
+            .set_storage_class(upload_metadata.storage_class)
+            .bucket(bucket)
+            .key(key)
+            .set_metadata(upload_metadata.metadata)
+            .set_tagging(upload_metadata.tagging)
+            .set_website_redirect_location(upload_metadata.website_redirect_location)
+            .set_content_type(upload_metadata.content_type)
+            .set_content_encoding(upload_metadata.content_encoding)
+            .set_cache_control(upload_metadata.cache_control)
+            .set_content_disposition(upload_metadata.content_disposition)
+            .set_content_language(upload_metadata.content_language)
+            .set_expires(upload_metadata.expires)
             .set_server_side_encryption(self.config.sse.clone())
             .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
             .set_sse_customer_algorithm(self.config.target_sse_c.clone())
             .set_sse_customer_key(self.config.target_sse_c_key.clone().key.clone())
             .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
-            .set_acl(self.config.canned_acl.clone())
+            .set_acl(upload_metadata.acl)
             .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
             .set_checksum_type(checksum_type)
             .send()
@@ -372,10 +445,10 @@ impl UploadManager {
         let source_local_storage = source_e_tag.is_none();
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output_first_chunk.storage_class().cloned();
-        let _source_version_id = get_object_output_first_chunk
+        let source_version_id = get_object_output_first_chunk
             .version_id()
             .map(|v| v.to_string());
-        let _source_last_modified = get_object_output_first_chunk.last_modified().copied();
+        let source_last_modified = get_object_output_first_chunk.last_modified().copied();
 
         let upload_parts = if self.is_auto_chunksize_enabled() {
             self.upload_parts_with_auto_chunksize(
@@ -427,6 +500,21 @@ impl UploadManager {
             "{complete_multipart_upload_output:?}"
         );
 
+        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
+        event_data.key = Some(key.to_string());
+        // skipcq: RS-W1070
+        event_data.source_version_id = source_version_id.clone();
+        event_data.target_version_id = complete_multipart_upload_output
+            .version_id
+            .clone()
+            .map(|v| v.to_string());
+        // skipcq: RS-W1070
+        event_data.source_etag = source_e_tag.clone();
+        event_data.source_last_modified = source_last_modified;
+        event_data.source_size = Some(self.source_total_size);
+        event_data.target_size = Some(self.source_total_size); // Assuming the size is the same as source
+        self.config.event_manager.trigger_event(event_data).await;
+
         let source_e_tag = if source_local_storage {
             Some(self.generate_e_tag_hash(self.calculate_parts_count(source_content_length as i64)))
         } else {
@@ -453,6 +541,14 @@ impl UploadManager {
                 &source_e_tag,
                 &target_sse,
                 &target_e_tag,
+                source_version_id.clone(),
+                complete_multipart_upload_output
+                    .version_id
+                    .clone()
+                    .map(|v| v.to_string()),
+                source_last_modified,
+                self.source_total_size,
+                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -470,6 +566,14 @@ impl UploadManager {
                 &source_e_tag,
                 &target_e_tag,
                 source_remote_storage,
+                source_version_id,
+                complete_multipart_upload_output
+                    .version_id
+                    .clone()
+                    .map(|v| v.to_string()),
+                source_last_modified,
+                self.source_total_size,
+                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -488,6 +592,11 @@ impl UploadManager {
         source_e_tag: &Option<String>,
         target_sse: &Option<ServerSideEncryption>,
         target_e_tag: &Option<String>,
+        source_version_id: Option<String>,
+        target_version_id: Option<String>,
+        source_last_modified: Option<DateTime>,
+        source_content_length: u64,
+        target_content_length: u64,
     ) {
         let verify_result = storage::e_tag_verify::verify_e_tag(
             !self.config.disable_multipart_verify,
@@ -498,6 +607,18 @@ impl UploadManager {
             target_sse,
             target_e_tag,
         );
+
+        let mut event_data = EventData::new(EventType::UNDEFINED);
+        event_data.key = Some(key.to_string());
+        event_data.source_version_id = source_version_id;
+        event_data.target_version_id = target_version_id;
+        // skipcq: RS-W1070
+        event_data.source_etag = source_e_tag.clone();
+        // skipcq: RS-W1070
+        event_data.target_etag = target_e_tag.clone();
+        event_data.source_last_modified = source_last_modified;
+        event_data.source_size = Some(source_content_length);
+        event_data.target_size = Some(target_content_length);
 
         if let Some(e_tag_match) = verify_result {
             if !e_tag_match {
@@ -527,6 +648,9 @@ impl UploadManager {
                     .await;
                     self.has_warning.store(true, Ordering::SeqCst);
 
+                    event_data.event_type = EventType::SYNC_ETAG_MISMATCH;
+                    self.config.event_manager.trigger_event(event_data).await;
+
                     let source_e_tag = source_e_tag.clone().unwrap();
                     let target_e_tag = target_e_tag.clone().unwrap();
 
@@ -542,6 +666,9 @@ impl UploadManager {
                     key: key.to_string(),
                 })
                 .await;
+
+                event_data.event_type = EventType::SYNC_ETAG_VERIFIED;
+                self.config.event_manager.trigger_event(event_data).await;
 
                 debug!(
                     key = &key,
@@ -627,6 +754,7 @@ impl UploadManager {
             let server_side_copy = self.config.server_side_copy;
 
             let stats_sender = self.stats_sender.clone();
+            let event_manager = self.config.event_manager.clone();
 
             let mut buffer = if !server_side_copy {
                 let mut buffer = Vec::<u8>::with_capacity(multipart_chunksize as usize);
@@ -828,6 +956,16 @@ impl UploadManager {
                         convert_copy_to_upload_part_output(upload_part_copy_output);
                 }
 
+                let mut event_data = EventData::new(EventType::SYNC_WRITE);
+                event_data.key = Some(target_key.clone());
+                // skipcq: RS-W1070
+                event_data.source_version_id = source_version_id.clone();
+                event_data.source_size = Some(source_total_size as u64);
+                event_data.upload_id = Some(target_upload_id.clone());
+                event_data.part_number = Some(part_number as u64);
+                event_data.byte_written = Some(upload_size as u64);
+                event_manager.trigger_event(event_data).await;
+
                 let mut upload_size_vec = total_upload_size.lock().unwrap();
                 upload_size_vec.push(upload_size);
 
@@ -919,8 +1057,6 @@ impl UploadManager {
         upload_id: &str,
         get_object_output_first_chunk: GetObjectOutput,
     ) -> Result<Vec<CompletedPart>> {
-        // This is a simplified version that delegates to upload_parts for now.
-        // The auto-chunksize logic uses object_parts to determine chunk sizes.
         let shared_source_version_id = get_object_output_first_chunk
             .version_id()
             .map(|v| v.to_string());
@@ -946,7 +1082,7 @@ impl UploadManager {
 
             let source = dyn_clone::clone_box(&*(self.source));
             let source_key = self.source_key.clone();
-            let _source_total_size = self.source_total_size as usize;
+            let source_total_size = self.source_total_size as usize;
             let copy_source = if self.config.server_side_copy {
                 self.source
                     .generate_copy_source_key(source_key.as_ref(), source_version_id.clone())
@@ -990,15 +1126,17 @@ impl UploadManager {
             let server_side_copy = self.config.server_side_copy;
 
             let stats_sender = self.stats_sender.clone();
+            let event_manager = self.config.event_manager.clone();
 
             let mut buffer = if !server_side_copy {
                 let mut buffer = Vec::<u8>::with_capacity(object_part_chunksize as usize);
                 buffer.resize_with(object_part_chunksize as usize, Default::default);
                 buffer
             } else {
-                Vec::new()
+                Vec::new() // For server-side copy, we do not need to read the body.
             };
 
+            // For the first part, we read the data from the supplied body.
             if part_number == 1 && !server_side_copy {
                 let result = body.read_exact(buffer.as_mut_slice()).await;
                 if let Err(e) = result {
@@ -1020,7 +1158,7 @@ impl UploadManager {
                 .acquire_owned()
                 .await?;
             let task: JoinHandle<Result<()>> = task::spawn(async move {
-                let _permit = permit;
+                let _permit = permit; // Keep the semaphore permit in scope
                 let range = format!("bytes={}-{}", offset, offset + object_part_chunksize - 1);
 
                 debug!(
@@ -1030,6 +1168,7 @@ impl UploadManager {
                 );
 
                 let upload_size;
+                // If the part number is greater than 1, we need to get the object from the source storage.
                 if part_number > 1 {
                     if !server_side_copy {
                         let get_object_output = source
@@ -1191,6 +1330,16 @@ impl UploadManager {
                         convert_copy_to_upload_part_output(upload_part_copy_output);
                 }
 
+                let mut event_data = EventData::new(EventType::SYNC_WRITE);
+                event_data.key = Some(target_key.clone());
+                // skipcq: RS-W1070
+                event_data.source_version_id = source_version_id.clone();
+                event_data.source_size = Some(source_total_size as u64);
+                event_data.upload_id = Some(target_upload_id.clone());
+                event_data.part_number = Some(part_number as u64);
+                event_data.byte_written = Some(upload_size as u64);
+                event_manager.trigger_event(event_data).await;
+
                 let mut locked_upload_parts = upload_parts.lock().unwrap();
                 locked_upload_parts.push(
                     CompletedPart::builder()
@@ -1262,12 +1411,14 @@ impl UploadManager {
             )));
         }
 
+        // Etags are concatenated in the order of part number. Otherwise, ETag verification will fail.
         let mut locked_multipart_etags = shared_multipart_etags.lock().unwrap();
         locked_multipart_etags.sort_by_key(|e| e.part_number);
         for etag in locked_multipart_etags.iter() {
             self.concatnated_md5_hash.append(&mut etag.digest.clone());
         }
 
+        // CompletedParts must be sorted by part number. Otherwise, CompleteMultipartUpload will fail.
         let mut parts = shared_upload_parts.lock().unwrap().clone();
         parts.sort_by_key(|part| part.part_number.unwrap());
         Ok(parts)
@@ -1287,7 +1438,7 @@ impl UploadManager {
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output.storage_class().cloned();
         let source_version_id = get_object_output.version_id().map(|v| v.to_string());
-        let _source_last_modified = get_object_output.last_modified().copied();
+        let source_last_modified = get_object_output.last_modified().copied();
 
         let buffer = if !self.config.server_side_copy {
             let mut body = get_object_output.body.into_async_read();
@@ -1304,7 +1455,7 @@ impl UploadManager {
 
             buffer
         } else {
-            Vec::new()
+            Vec::new() // For server-side copy, we do not need to read the body.
         };
 
         let md5_digest_base64 = if !self.express_onezone_storage
@@ -1329,6 +1480,87 @@ impl UploadManager {
             self.config.storage_class.clone()
         };
 
+        let mut upload_metadata = UploadMetadata {
+            acl: self.config.canned_acl.clone(),
+            cache_control: if self.config.cache_control.is_none() {
+                get_object_output
+                    .cache_control()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.cache_control.clone()
+            },
+            content_disposition: if self.config.content_disposition.is_none() {
+                get_object_output
+                    .content_disposition()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_disposition.clone()
+            },
+            content_encoding: if self.config.content_encoding.is_none() {
+                get_object_output
+                    .content_encoding()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_encoding.clone()
+            },
+            content_language: if self.config.content_language.is_none() {
+                get_object_output
+                    .content_language()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_language.clone()
+            },
+            content_type: if self.config.content_type.is_none() {
+                get_object_output
+                    .content_type()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.content_type.clone()
+            },
+            expires: if self.config.expires.is_none() {
+                get_object_output.expires_string().map(|expires_string| {
+                    DateTime::from_str(expires_string, DateTimeFormat::HttpDate).unwrap()
+                })
+            } else {
+                Some(DateTime::from_str(
+                    &self.config.expires.unwrap().to_rfc3339(),
+                    DateTimeFormat::DateTimeWithOffset,
+                )?)
+            },
+            metadata: if self.config.metadata.is_none() {
+                get_object_output.metadata().cloned()
+            } else {
+                self.config.metadata.clone()
+            },
+            request_payer: self.request_payer.clone(),
+            storage_class: storage_class.clone(),
+            website_redirect_location: if self.config.website_redirect.is_none() {
+                get_object_output
+                    .website_redirect_location()
+                    .map(|value| value.to_string())
+            } else {
+                self.config.website_redirect.clone()
+            },
+            tagging: self.tagging.clone(),
+        };
+
+        let callback_result = self
+            .config
+            .preprocess_manager
+            .execute_preprocessing(key, &get_object_output, &mut upload_metadata)
+            .await;
+        if let Err(e) = callback_result {
+            if is_callback_cancelled(&e) {
+                debug!(
+                    key = key,
+                    "PreprocessCallback execute_preprocessing() cancelled. Skipping upload."
+                );
+                return Ok(PutObjectOutputBuilder::default().build());
+            } else {
+                return Err(e.context("PreprocessCallback before_upload() failed."));
+            }
+        }
+
         let put_object_output = if self.config.server_side_copy {
             let copy_source = self
                 .source
@@ -1337,70 +1569,21 @@ impl UploadManager {
                 .client
                 .copy_object()
                 .copy_source(copy_source)
-                .set_request_payer(self.request_payer.clone())
-                .set_storage_class(storage_class)
+                .set_request_payer(upload_metadata.request_payer)
+                .set_storage_class(upload_metadata.storage_class)
                 .bucket(bucket)
                 .key(key)
                 .metadata_directive(MetadataDirective::Replace)
                 .tagging_directive(TaggingDirective::Replace)
-                .set_metadata(if self.config.metadata.is_none() {
-                    get_object_output.metadata().cloned()
-                } else {
-                    self.config.metadata.clone()
-                })
-                .set_tagging(self.tagging.clone())
-                .set_website_redirect_location(if self.config.website_redirect.is_none() {
-                    get_object_output
-                        .website_redirect_location()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.website_redirect.clone()
-                })
-                .set_content_type(if self.config.content_type.is_none() {
-                    get_object_output
-                        .content_type()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_type.clone()
-                })
-                .set_content_encoding(if self.config.content_encoding.is_none() {
-                    get_object_output
-                        .content_encoding()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_encoding.clone()
-                })
-                .set_cache_control(if self.config.cache_control.is_none() {
-                    get_object_output
-                        .cache_control()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.cache_control.clone()
-                })
-                .set_content_disposition(if self.config.content_disposition.is_none() {
-                    get_object_output
-                        .content_disposition()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_disposition.clone()
-                })
-                .set_content_language(if self.config.content_language.is_none() {
-                    get_object_output
-                        .content_language()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_language.clone()
-                })
-                .set_expires(if self.config.expires.is_none() {
-                    get_object_output.expires_string().map(|expires_string| {
-                        DateTime::from_str(expires_string, DateTimeFormat::HttpDate).unwrap()
-                    })
-                } else {
-                    Some(DateTime::from_str(
-                        &self.config.expires.unwrap().to_rfc3339(),
-                        DateTimeFormat::DateTimeWithOffset,
-                    )?)
-                })
+                .set_metadata(upload_metadata.metadata)
+                .set_tagging(upload_metadata.tagging)
+                .set_website_redirect_location(upload_metadata.website_redirect_location)
+                .set_content_type(upload_metadata.content_type)
+                .set_content_encoding(upload_metadata.content_encoding)
+                .set_cache_control(upload_metadata.cache_control)
+                .set_content_disposition(upload_metadata.content_disposition)
+                .set_content_language(upload_metadata.content_language)
+                .set_expires(upload_metadata.expires)
                 .set_server_side_encryption(self.config.sse.clone())
                 .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
                 .set_sse_customer_algorithm(self.config.target_sse_c.clone())
@@ -1409,7 +1592,7 @@ impl UploadManager {
                 .set_copy_source_sse_customer_algorithm(self.config.source_sse_c.clone())
                 .set_copy_source_sse_customer_key(self.config.source_sse_c_key.clone().key.clone())
                 .set_copy_source_sse_customer_key_md5(self.config.source_sse_c_key_md5.clone())
-                .set_acl(self.config.canned_acl.clone())
+                .set_acl(upload_metadata.acl)
                 .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
                 .set_copy_source_if_match(self.copy_source_if_match.clone())
                 .set_if_none_match(self.if_none_match.clone())
@@ -1423,77 +1606,28 @@ impl UploadManager {
             let builder = self
                 .client
                 .put_object()
-                .set_request_payer(self.request_payer.clone())
-                .set_storage_class(storage_class)
+                .set_request_payer(upload_metadata.request_payer)
+                .set_storage_class(upload_metadata.storage_class)
                 .bucket(bucket)
                 .key(key)
                 .content_length(self.source_total_size as i64)
                 .body(buffer_stream)
-                .set_metadata(if self.config.metadata.is_none() {
-                    get_object_output.metadata().cloned()
-                } else {
-                    self.config.metadata.clone()
-                })
-                .set_tagging(self.tagging.clone())
-                .set_website_redirect_location(if self.config.website_redirect.is_none() {
-                    get_object_output
-                        .website_redirect_location()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.website_redirect.clone()
-                })
+                .set_metadata(upload_metadata.metadata)
+                .set_tagging(upload_metadata.tagging)
+                .set_website_redirect_location(upload_metadata.website_redirect_location)
                 .set_content_md5(md5_digest_base64)
-                .set_content_type(if self.config.content_type.is_none() {
-                    get_object_output
-                        .content_type()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_type.clone()
-                })
-                .set_content_encoding(if self.config.content_encoding.is_none() {
-                    get_object_output
-                        .content_encoding()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_encoding.clone()
-                })
-                .set_cache_control(if self.config.cache_control.is_none() {
-                    get_object_output
-                        .cache_control()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.cache_control.clone()
-                })
-                .set_content_disposition(if self.config.content_disposition.is_none() {
-                    get_object_output
-                        .content_disposition()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_disposition.clone()
-                })
-                .set_content_language(if self.config.content_language.is_none() {
-                    get_object_output
-                        .content_language()
-                        .map(|value| value.to_string())
-                } else {
-                    self.config.content_language.clone()
-                })
-                .set_expires(if self.config.expires.is_none() {
-                    get_object_output.expires_string().map(|expires_string| {
-                        DateTime::from_str(expires_string, DateTimeFormat::HttpDate).unwrap()
-                    })
-                } else {
-                    Some(DateTime::from_str(
-                        &self.config.expires.unwrap().to_rfc3339(),
-                        DateTimeFormat::DateTimeWithOffset,
-                    )?)
-                })
+                .set_content_type(upload_metadata.content_type)
+                .set_content_encoding(upload_metadata.content_encoding)
+                .set_cache_control(upload_metadata.cache_control)
+                .set_content_disposition(upload_metadata.content_disposition)
+                .set_content_language(upload_metadata.content_language)
+                .set_expires(upload_metadata.expires)
                 .set_server_side_encryption(self.config.sse.clone())
                 .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
                 .set_sse_customer_algorithm(self.config.target_sse_c.clone())
                 .set_sse_customer_key(self.config.target_sse_c_key.clone().key.clone())
                 .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
-                .set_acl(self.config.canned_acl.clone())
+                .set_acl(upload_metadata.acl)
                 .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
                 .set_if_match(self.if_match.clone())
                 .set_if_none_match(self.if_none_match.clone());
@@ -1521,6 +1655,26 @@ impl UploadManager {
             "put_object() complete",
         );
 
+        let mut event_data = EventData::new(EventType::SYNC_WRITE);
+        event_data.key = Some(key.to_string());
+        // skipcq: RS-W1070
+        event_data.source_version_id = source_version_id.clone();
+        event_data.source_size = Some(self.source_total_size);
+        event_data.byte_written = Some(self.source_total_size); // Assuming the size is the same as source
+        self.config.event_manager.trigger_event(event_data).await;
+
+        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
+        event_data.key = Some(key.to_string());
+        // skipcq: RS-W1070
+        event_data.source_version_id = source_version_id.clone();
+        event_data.target_version_id = put_object_output.version_id().map(|v| v.to_string());
+        // skipcq: RS-W1070
+        event_data.source_etag = source_e_tag.clone();
+        event_data.source_last_modified = get_object_output.last_modified().copied();
+        event_data.source_size = Some(self.source_total_size);
+        event_data.target_size = Some(self.source_total_size); // Assuming the size is the same as source
+        self.config.event_manager.trigger_event(event_data).await;
+
         let source_e_tag = if source_local_storage {
             Some(self.generate_e_tag_hash(0))
         } else {
@@ -1543,6 +1697,11 @@ impl UploadManager {
                 &source_e_tag,
                 &target_sse,
                 &target_e_tag,
+                source_version_id.clone(),
+                put_object_output.version_id().map(|v| v.to_string()),
+                source_last_modified,
+                self.source_total_size,
+                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -1560,6 +1719,11 @@ impl UploadManager {
                 &source_e_tag,
                 &target_e_tag,
                 source_remote_storage,
+                source_version_id,
+                put_object_output.version_id().map(|v| v.to_string()),
+                source_last_modified,
+                self.source_total_size,
+                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -1574,8 +1738,13 @@ impl UploadManager {
         source_checksum: Option<String>,
         target_checksum: Option<String>,
         source_e_tag: &Option<String>,
-        _target_e_tag: &Option<String>,
+        target_e_tag: &Option<String>,
         source_remote_storage: bool,
+        source_version_id: Option<String>,
+        target_version_id: Option<String>,
+        source_last_modified: Option<DateTime>,
+        source_content_length: u64,
+        target_content_length: u64,
     ) {
         if self.config.additional_checksum_mode.is_some() && source_checksum.is_none() {
             self.send_stats(SyncWarning {
@@ -1586,6 +1755,22 @@ impl UploadManager {
 
             let message = "additional checksum algorithm is different from the target storage. skip additional checksum verification.";
             warn!(key = &key, message);
+
+            let mut event_data = EventData::new(EventType::SYNC_WARNING);
+            event_data.key = Some(key.to_string());
+            // skipcq: RS-W1070
+            event_data.source_version_id = source_version_id.clone();
+            // skipcq: RS-W1070
+            event_data.target_version_id = target_version_id.clone();
+            event_data.source_last_modified = source_last_modified;
+            // skipcq: RS-W1070
+            event_data.source_etag = source_e_tag.clone();
+            event_data.source_size = Some(source_content_length);
+            // skipcq: RS-W1070
+            event_data.target_etag = target_e_tag.clone();
+            event_data.target_size = Some(target_content_length);
+            event_data.message = Some(message.to_string());
+            self.config.event_manager.trigger_event(event_data).await;
         }
 
         #[allow(clippy::unnecessary_unwrap)]
@@ -1599,6 +1784,22 @@ impl UploadManager {
                 .as_ref()
                 .unwrap()
                 .as_str();
+
+            let mut event_data = EventData::new(EventType::UNDEFINED);
+            event_data.key = Some(key.to_string());
+            event_data.source_version_id = source_version_id;
+            event_data.target_version_id = target_version_id;
+            event_data.source_last_modified = source_last_modified;
+            // skipcq: RS-W1070
+            event_data.source_etag = source_e_tag.clone();
+            event_data.source_size = Some(source_content_length);
+            // skipcq: RS-W1070
+            event_data.target_etag = target_e_tag.clone();
+            event_data.target_size = Some(target_content_length);
+            event_data.source_checksum = Some(source_checksum.clone());
+            event_data.target_checksum = Some(target_checksum.clone());
+            event_data.checksum_algorithm =
+                Some(self.config.additional_checksum_algorithm.clone().unwrap());
 
             if target_checksum != source_checksum {
                 if source_remote_storage
@@ -1629,6 +1830,9 @@ impl UploadManager {
                             .to_string()
                     };
 
+                    event_data.event_type = EventType::SYNC_CHECKSUM_MISMATCH;
+                    self.config.event_manager.trigger_event(event_data).await;
+
                     warn!(
                         key = &key,
                         additional_checksum_algorithm = additional_checksum_algorithm,
@@ -1642,6 +1846,9 @@ impl UploadManager {
                     key: key.to_string(),
                 })
                 .await;
+
+                event_data.event_type = EventType::SYNC_CHECKSUM_VERIFIED;
+                self.config.event_manager.trigger_event(event_data).await;
 
                 debug!(
                     key = &key,
@@ -1750,7 +1957,138 @@ pub fn get_additional_checksum_from_multipart_upload_result(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::primitives::DateTime;
     use tracing_subscriber::EnvFilter;
+
+    #[test]
+    fn update_versioning_metadata_with_new() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .version_id("version1")
+            .build();
+
+        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .as_ref()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY)
+                .unwrap(),
+            "version1"
+        );
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .as_ref()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn update_versioning_metadata_with_update() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .version_id("version1")
+            .metadata("mykey", "myvalue")
+            .build();
+
+        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .as_ref()
+                .unwrap()
+                .get("mykey")
+                .unwrap(),
+            "myvalue"
+        );
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .as_ref()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY)
+                .unwrap(),
+            "version1"
+        );
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .as_ref()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn update_versioning_metadata_without_version_id() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .metadata("mykey", "myvalue")
+            .build();
+
+        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
+        assert_eq!(get_object_output.metadata().as_ref().unwrap().len(), 1);
+        assert_eq!(
+            get_object_output.metadata().unwrap().get("mykey").unwrap(),
+            "myvalue"
+        );
+    }
+
+    #[test]
+    fn modify_last_modified_metadata_with_new() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .build();
+        get_object_output = UploadManager::modify_last_modified_metadata(get_object_output);
+
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn modify_last_modified_metadata_with_update() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .metadata("key1", "value1")
+            .build();
+        get_object_output = UploadManager::modify_last_modified_metadata(get_object_output);
+
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            get_object_output.metadata().unwrap().get("key1").unwrap(),
+            "value1"
+        );
+    }
 
     #[test]
     fn calculate_parts_count_test() {

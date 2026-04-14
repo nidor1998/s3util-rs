@@ -55,8 +55,10 @@ pub trait StorageFactory {
         stats_sender: Sender<SyncStatistics>,
         client_config: Option<ClientConfig>,
         request_payer: Option<RequestPayer>,
+        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
+        object_to_list: Option<String>,
     ) -> Storage;
 }
 

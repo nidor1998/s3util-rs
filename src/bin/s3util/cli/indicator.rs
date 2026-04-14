@@ -64,6 +64,8 @@ pub fn show_indicator(
                         SyncStatistics::ChecksumVerified { .. } => {
                             total_checksum_verified_count += 1;
                         }
+                        SyncStatistics::SyncSkip { .. } => {}
+                        SyncStatistics::SyncDelete { .. } => {}
                     }
                 }
 

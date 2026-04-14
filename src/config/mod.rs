@@ -1,3 +1,5 @@
+use crate::callback::event_manager::EventManager;
+use crate::callback::preprocess_manager::PreprocessManager;
 use crate::types::{ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath};
 use aws_sdk_s3::types::{
     ChecksumAlgorithm, ChecksumMode, ObjectCannedAcl, RequestPayer, ServerSideEncryption,
@@ -71,6 +73,14 @@ pub struct Config {
     pub is_stdio_target: bool,
     /// Always false for cp. Kept for s3sync storage layer compatibility.
     pub dry_run: bool,
+    pub enable_versioning: bool,
+    pub point_in_time: Option<DateTime<Utc>>,
+    pub follow_symlinks: bool,
+    pub event_manager: EventManager,
+    pub preprocess_manager: PreprocessManager,
+    pub max_parallel_listings: u16,
+    pub max_parallel_listing_max_depth: u16,
+    pub allow_parallel_listings_in_express_one_zone: bool,
 }
 
 #[derive(Debug, Clone)]

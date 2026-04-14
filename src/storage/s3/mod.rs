@@ -26,6 +26,7 @@ use crate::storage::{
     convert_to_buf_byte_stream_with_callback,
 };
 use crate::types::SyncStatistics::SyncBytes;
+use crate::types::event_callback::{EventData, EventType};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
     ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics, get_additional_checksum,
@@ -48,8 +49,10 @@ impl StorageFactory for S3StorageFactory {
         stats_sender: Sender<SyncStatistics>,
         client_config: Option<ClientConfig>,
         request_payer: Option<RequestPayer>,
+        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
+        _object_to_list: Option<String>,
     ) -> Storage {
         S3Storage::boxed_new(
             config,
@@ -60,6 +63,7 @@ impl StorageFactory for S3StorageFactory {
                 client_config.as_ref().unwrap().create_client().await,
             )),
             request_payer,
+            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         )
@@ -76,6 +80,7 @@ struct S3Storage {
     client: Option<Arc<Client>>,
     request_payer: Option<RequestPayer>,
     stats_sender: Sender<SyncStatistics>,
+    rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
     rate_limit_bandwidth: Option<Arc<RateLimiter>>,
     has_warning: Arc<AtomicBool>,
 }
@@ -89,6 +94,7 @@ impl S3Storage {
         stats_sender: Sender<SyncStatistics>,
         client: Option<Arc<Client>>,
         request_payer: Option<RequestPayer>,
+        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
     ) -> Storage {
@@ -106,11 +112,22 @@ impl S3Storage {
             client,
             request_payer,
             stats_sender,
+            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         };
 
         Box::new(storage)
+    }
+
+    async fn exec_rate_limit_objects_per_sec(&self) {
+        if self.rate_limit_objects_per_sec.is_some() {
+            self.rate_limit_objects_per_sec
+                .as_ref()
+                .unwrap()
+                .acquire(1)
+                .await;
+        }
     }
 }
 
@@ -411,6 +428,21 @@ impl StorageTrait for S3Storage {
         if self.config.dry_run {
             self.send_stats(SyncBytes(source_size)).await;
 
+            let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
+            event_data.key = Some(key.to_string());
+            // skipcq: RS-W1070
+            event_data.source_version_id = get_object_output_first_chunk
+                .version_id()
+                .as_ref()
+                .map(|v| v.to_string());
+            event_data.source_last_modified =
+                get_object_output_first_chunk.last_modified().copied();
+            // skipcq: RS-W1070
+            event_data.source_etag = get_object_output_first_chunk.e_tag().map(|e| e.to_string());
+            event_data.source_size = Some(source_size);
+            event_data.target_size = Some(source_size); // Assuming the size is the same as source
+            self.config.event_manager.trigger_event(event_data).await;
+
             info!(
                 key = key,
                 source_version_id = version_id,
@@ -484,11 +516,13 @@ impl StorageTrait for S3Storage {
             self.has_warning.clone(),
         );
 
+        self.exec_rate_limit_objects_per_sec().await;
+
         let put_object_output = upload_manager
             .upload(&self.bucket, &target_key, get_object_output_first_chunk)
             .await?;
 
-        // If e_tag is present, we know the upload succeeded.
+        // If preprocess_callback is registered and preprocess was cancelled, e_tag will be None.
         if put_object_output.e_tag.is_some() {
             info!(
                 key = key,
@@ -522,6 +556,8 @@ impl StorageTrait for S3Storage {
 
             return Ok(PutObjectTaggingOutput::builder().build());
         }
+
+        self.exec_rate_limit_objects_per_sec().await;
 
         let result = self
             .client
@@ -567,6 +603,8 @@ impl StorageTrait for S3Storage {
 
             return Ok(DeleteObjectOutput::builder().build());
         }
+
+        self.exec_rate_limit_objects_per_sec().await;
 
         let result = self
             .client

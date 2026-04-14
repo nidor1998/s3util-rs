@@ -1,7 +1,9 @@
 #[allow(unused_imports)]
+use crate::callback::event_manager::EventManager;
+use crate::callback::preprocess_manager::PreprocessManager;
 use crate::config::args::value_parser::{
-    canned_acl, checksum_algorithm, file_exist, human_bytes, metadata, sse, storage_class,
-    storage_path, tagging, url,
+    canned_acl, checksum_algorithm, human_bytes, metadata, sse, storage_class, storage_path,
+    tagging, url,
 };
 use crate::config::{
     CLITimeoutConfig, ClientConfig, Config, ForceRetryConfig, RetryConfig, TracingConfig,
@@ -1107,6 +1109,14 @@ impl TryFrom<CpArgs> for Config {
             is_stdio_source,
             is_stdio_target,
             dry_run: false,
+            enable_versioning: false,
+            point_in_time: None,
+            follow_symlinks: false,
+            event_manager: EventManager::default(),
+            preprocess_manager: PreprocessManager::default(),
+            max_parallel_listings: 1,
+            max_parallel_listing_max_depth: 0,
+            allow_parallel_listings_in_express_one_zone: false,
         })
     }
 }

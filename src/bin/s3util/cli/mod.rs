@@ -61,7 +61,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 None,
                 source_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -73,7 +75,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.target_client_config.clone(),
                 target_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -102,7 +106,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.source_client_config.clone(),
                 source_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -114,7 +120,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 None,
                 None,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -148,7 +156,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.source_client_config.clone(),
                 source_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -160,7 +170,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.target_client_config.clone(),
                 target_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -189,7 +201,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.target_client_config.clone(),
                 target_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
@@ -217,7 +231,9 @@ pub async fn run_cp(config: Config) -> Result<bool> {
                 config.source_client_config.clone(),
                 source_request_payer,
                 None,
+                None,
                 has_warning.clone(),
+                None,
             )
             .await;
 
