@@ -103,14 +103,28 @@ pub fn show_indicator(
                         progress_text.set_style(ProgressStyle::with_template("{msg}").unwrap());
 
                         let mut parts = vec![
-                            format!("transferred {:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(sync_bytes_per_sec)),
-                            format!("transferred {:>3} objects | {:>3} objects/sec", total_sync_count, HumanCount(objects_per_sec)),
+                            format!(
+                                "transferred {:>3} | {:>3}/sec",
+                                HumanBytes(total_sync_bytes),
+                                HumanBytes(sync_bytes_per_sec)
+                            ),
+                            format!(
+                                "transferred {:>3} objects | {:>3} objects/sec",
+                                total_sync_count,
+                                HumanCount(objects_per_sec)
+                            ),
                         ];
                         if total_e_tag_verified_count > 0 {
-                            parts.push(format!("etag verified {} objects", total_e_tag_verified_count));
+                            parts.push(format!(
+                                "etag verified {} objects",
+                                total_e_tag_verified_count
+                            ));
                         }
                         if total_checksum_verified_count > 0 {
-                            parts.push(format!("checksum verified {} objects", total_checksum_verified_count));
+                            parts.push(format!(
+                                "checksum verified {} objects",
+                                total_checksum_verified_count
+                            ));
                         }
                         if total_error_count > 0 {
                             parts.push(format!("error {} objects", total_error_count));
@@ -136,14 +150,28 @@ pub fn show_indicator(
 
             if show_progress {
                 let mut parts = vec![
-                    format!("transferred {:>3} | {:>3}/sec", HumanBytes(total_sync_bytes), HumanBytes(ma_synced_bytes.get_average()).to_string()),
-                    format!("transferred {:>3} objects | {:>3} objects/sec", total_sync_count, HumanCount(ma_synced_count.get_average()).to_string()),
+                    format!(
+                        "transferred {:>3} | {:>3}/sec",
+                        HumanBytes(total_sync_bytes),
+                        HumanBytes(ma_synced_bytes.get_average()).to_string()
+                    ),
+                    format!(
+                        "transferred {:>3} objects | {:>3} objects/sec",
+                        total_sync_count,
+                        HumanCount(ma_synced_count.get_average()).to_string()
+                    ),
                 ];
                 if total_e_tag_verified_count > 0 {
-                    parts.push(format!("etag verified {} objects", total_e_tag_verified_count));
+                    parts.push(format!(
+                        "etag verified {} objects",
+                        total_e_tag_verified_count
+                    ));
                 }
                 if total_checksum_verified_count > 0 {
-                    parts.push(format!("checksum verified {} objects", total_checksum_verified_count));
+                    parts.push(format!(
+                        "checksum verified {} objects",
+                        total_checksum_verified_count
+                    ));
                 }
                 if total_error_count > 0 {
                     parts.push(format!("error {} objects", total_error_count));

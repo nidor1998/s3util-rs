@@ -169,7 +169,8 @@ mod tests {
         helper.create_bucket(&bucket2, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "auto_chunk.bin", 9 * 1024 * 1024);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "auto_chunk.bin", 9 * 1024 * 1024);
 
         // Upload
         let s3_path = format!("s3://{}/auto_chunk.bin", bucket1);

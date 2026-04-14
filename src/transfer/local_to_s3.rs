@@ -35,9 +35,7 @@ pub async fn transfer(
             config.additional_checksum_mode.clone(),
             None,
             None,
-            crate::types::SseCustomerKey {
-                key: None,
-            },
+            crate::types::SseCustomerKey { key: None },
             None,
         )
         .await

@@ -30,11 +30,11 @@ use uuid::Uuid;
 use aws_sdk_s3::types::RequestPayer;
 use sha2::{Digest, Sha256};
 
-use s3util_rs::config::args::{Commands, parse_from_args};
 use s3util_rs::config::Config;
+use s3util_rs::config::args::{Commands, parse_from_args};
+use s3util_rs::storage::StorageFactory;
 use s3util_rs::storage::local::LocalStorageFactory;
 use s3util_rs::storage::s3::S3StorageFactory;
-use s3util_rs::storage::StorageFactory;
 use s3util_rs::transfer::{TransferDirection, detect_direction};
 use s3util_rs::types::token::create_pipeline_cancellation_token;
 use s3util_rs::types::{StoragePath, SyncStatistics};
@@ -531,7 +531,12 @@ impl TestHelper {
         file_path
     }
 
-    pub fn create_random_data_file(dir: &Path, name: &str, size_mb: usize, extra: i32) -> Result<PathBuf> {
+    pub fn create_random_data_file(
+        dir: &Path,
+        name: &str,
+        size_mb: usize,
+        extra: i32,
+    ) -> Result<PathBuf> {
         let output_path = dir.join(name);
 
         // Use deterministic pseudo-random data for reproducible tests
@@ -862,7 +867,9 @@ impl TestHelper {
                     String::new()
                 }
             }
-            TransferDirection::S3ToLocal | TransferDirection::S3ToS3 | TransferDirection::S3ToStdio => {
+            TransferDirection::S3ToLocal
+            | TransferDirection::S3ToS3
+            | TransferDirection::S3ToStdio => {
                 if let StoragePath::S3 { prefix, .. } = &config.source {
                     prefix.to_string()
                 } else {

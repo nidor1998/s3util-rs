@@ -19,7 +19,9 @@ mod tests {
 
         // Upload an object first
         let test_content = b"hello from s3";
-        helper.put_object(&bucket, "download.txt", test_content.to_vec()).await;
+        helper
+            .put_object(&bucket, "download.txt", test_content.to_vec())
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("download.txt");
@@ -55,7 +57,9 @@ mod tests {
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        helper.put_object(&bucket, "etag_test.dat", vec![0u8; 1024]).await;
+        helper
+            .put_object(&bucket, "etag_test.dat", vec![0u8; 1024])
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("etag_test.dat");
@@ -88,7 +92,9 @@ mod tests {
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        helper.put_object(&bucket, "no_etag.dat", vec![1u8; 512]).await;
+        helper
+            .put_object(&bucket, "no_etag.dat", vec![1u8; 512])
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("no_etag.dat");
@@ -123,7 +129,9 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         // Upload a file larger than multipart threshold
-        helper.put_sized_object(&bucket, "large_download.bin", 9 * 1024 * 1024).await;
+        helper
+            .put_sized_object(&bucket, "large_download.bin", 9 * 1024 * 1024)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("large_download.bin");
@@ -160,7 +168,8 @@ mod tests {
 
         // First, upload with SSE-C via cp
         let local_dir = TestHelper::create_temp_dir();
-        let upload_file = TestHelper::create_test_file(&local_dir, "ssec_upload.txt", b"sse-c download test");
+        let upload_file =
+            TestHelper::create_test_file(&local_dir, "ssec_upload.txt", b"sse-c download test");
 
         let s3_path = format!("s3://{}/ssec_dl.txt", bucket);
         let upload_stats = helper

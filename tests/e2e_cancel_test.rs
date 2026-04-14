@@ -21,7 +21,8 @@ mod tests {
 
         let local_dir = TestHelper::create_temp_dir();
         // Create a large file so upload takes enough time to cancel
-        let test_file = TestHelper::create_sized_file(&local_dir, "cancel_test.bin", 30 * 1024 * 1024);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "cancel_test.bin", 30 * 1024 * 1024);
 
         let target = format!("s3://{}/cancel_test.bin", bucket);
 

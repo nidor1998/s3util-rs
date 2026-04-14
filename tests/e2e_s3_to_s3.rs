@@ -22,7 +22,9 @@ mod tests {
         helper.create_bucket(&bucket2, REGION).await;
 
         // Upload source object
-        helper.put_object(&bucket1, "copy_test.txt", b"copy me".to_vec()).await;
+        helper
+            .put_object(&bucket1, "copy_test.txt", b"copy me".to_vec())
+            .await;
 
         let source = format!("s3://{}/copy_test.txt", bucket1);
         let target = format!("s3://{}/copy_test.txt", bucket2);
@@ -42,7 +44,11 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
 
-        assert!(helper.is_object_exist(&bucket2, "copy_test.txt", None).await);
+        assert!(
+            helper
+                .is_object_exist(&bucket2, "copy_test.txt", None)
+                .await
+        );
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -58,7 +64,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "ssc_test.txt", b"server side copy".to_vec()).await;
+        helper
+            .put_object(&bucket1, "ssc_test.txt", b"server side copy".to_vec())
+            .await;
 
         let source = format!("s3://{}/ssc_test.txt", bucket1);
         let target = format!("s3://{}/ssc_test.txt", bucket2);
@@ -96,7 +104,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "sc.txt", b"storage class copy".to_vec()).await;
+        helper
+            .put_object(&bucket1, "sc.txt", b"storage class copy".to_vec())
+            .await;
 
         let source = format!("s3://{}/sc.txt", bucket1);
         let target = format!("s3://{}/sc.txt", bucket2);
@@ -135,7 +145,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "meta.txt", b"metadata copy test".to_vec()).await;
+        helper
+            .put_object(&bucket1, "meta.txt", b"metadata copy test".to_vec())
+            .await;
 
         let source = format!("s3://{}/meta.txt", bucket1);
         let target = format!("s3://{}/meta.txt", bucket2);
@@ -179,7 +191,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_sized_object(&bucket1, "large_copy.bin", 9 * 1024 * 1024).await;
+        helper
+            .put_sized_object(&bucket1, "large_copy.bin", 9 * 1024 * 1024)
+            .await;
 
         let source = format!("s3://{}/large_copy.bin", bucket1);
         let target = format!("s3://{}/large_copy.bin", bucket2);
@@ -216,7 +230,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_sized_object(&bucket1, "ssc_large.bin", 9 * 1024 * 1024).await;
+        helper
+            .put_sized_object(&bucket1, "ssc_large.bin", 9 * 1024 * 1024)
+            .await;
 
         let source = format!("s3://{}/ssc_large.bin", bucket1);
         let target = format!("s3://{}/ssc_large.bin", bucket2);
@@ -254,7 +270,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "kms.txt", b"kms copy test".to_vec()).await;
+        helper
+            .put_object(&bucket1, "kms.txt", b"kms copy test".to_vec())
+            .await;
 
         let source = format!("s3://{}/kms.txt", bucket1);
         let target = format!("s3://{}/kms.txt", bucket2);

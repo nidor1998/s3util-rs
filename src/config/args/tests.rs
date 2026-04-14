@@ -27,9 +27,11 @@ mod tests {
     fn both_stdio_rejected() {
         let result = build_config_from_args(args_with("-", "-"));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("source and target cannot both be stdin/stdout"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("source and target cannot both be stdin/stdout")
+        );
     }
 
     #[test]
@@ -47,9 +49,11 @@ mod tests {
             &["--server-side-copy"],
         ));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("--server-side-copy, both source and target must be s3://"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--server-side-copy, both source and target must be s3://")
+        );
     }
 
     #[test]
@@ -60,9 +64,11 @@ mod tests {
             &["--server-side-copy"],
         ));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("incompatible with --server-side-copy"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("incompatible with --server-side-copy")
+        );
     }
 
     #[test]
@@ -73,9 +79,11 @@ mod tests {
             &["--version-id", "abc123"],
         ));
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .contains("--version-id, source must be s3://"));
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--version-id, source must be s3://")
+        );
     }
 
     #[test]

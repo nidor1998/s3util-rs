@@ -23,7 +23,8 @@ mod tests {
             .await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "express.txt", b"express one zone test");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "express.txt", b"express one zone test");
 
         let target = format!("s3://{}/express.txt", bucket);
         let stats = helper
@@ -57,7 +58,8 @@ mod tests {
             .await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "express_large.bin", 9 * 1024 * 1024);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "express_large.bin", 9 * 1024 * 1024);
 
         let target = format!("s3://{}/express_large.bin", bucket);
         let stats = helper
@@ -92,7 +94,8 @@ mod tests {
 
         // Upload first
         let local_dir = TestHelper::create_temp_dir();
-        let upload_file = TestHelper::create_test_file(&local_dir, "upload.txt", b"express download test");
+        let upload_file =
+            TestHelper::create_test_file(&local_dir, "upload.txt", b"express download test");
         let s3_path = format!("s3://{}/download_test.txt", bucket);
         let upload_stats = helper
             .cp_test_data(vec![

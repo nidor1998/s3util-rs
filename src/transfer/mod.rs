@@ -1,11 +1,11 @@
 use anyhow::{Result, anyhow};
 
 pub mod local_to_s3;
+pub mod progress;
 pub mod s3_to_local;
 pub mod s3_to_s3;
-pub mod stdio_to_s3;
 pub mod s3_to_stdio;
-pub mod progress;
+pub mod stdio_to_s3;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TransferDirection {
@@ -25,7 +25,12 @@ fn is_stdio(path: &str) -> bool {
 }
 
 pub fn detect_direction(source: &str, target: &str) -> Result<TransferDirection> {
-    match (is_stdio(source), is_stdio(target), is_s3_path(source), is_s3_path(target)) {
+    match (
+        is_stdio(source),
+        is_stdio(target),
+        is_s3_path(source),
+        is_s3_path(target),
+    ) {
         (true, true, _, _) => Err(anyhow!("both source and target cannot be stdio")),
         (true, _, _, true) => Ok(TransferDirection::StdioToS3),
         (_, true, true, _) => Ok(TransferDirection::S3ToStdio),
@@ -44,27 +49,42 @@ mod tests {
 
     #[test]
     fn detect_local_to_s3() {
-        assert_eq!(detect_direction("/tmp/file.txt", "s3://bucket/key").unwrap(), TransferDirection::LocalToS3);
+        assert_eq!(
+            detect_direction("/tmp/file.txt", "s3://bucket/key").unwrap(),
+            TransferDirection::LocalToS3
+        );
     }
 
     #[test]
     fn detect_s3_to_local() {
-        assert_eq!(detect_direction("s3://bucket/key", "/tmp/file.txt").unwrap(), TransferDirection::S3ToLocal);
+        assert_eq!(
+            detect_direction("s3://bucket/key", "/tmp/file.txt").unwrap(),
+            TransferDirection::S3ToLocal
+        );
     }
 
     #[test]
     fn detect_s3_to_s3() {
-        assert_eq!(detect_direction("s3://bucket1/key", "s3://bucket2/key").unwrap(), TransferDirection::S3ToS3);
+        assert_eq!(
+            detect_direction("s3://bucket1/key", "s3://bucket2/key").unwrap(),
+            TransferDirection::S3ToS3
+        );
     }
 
     #[test]
     fn detect_stdio_to_s3() {
-        assert_eq!(detect_direction("-", "s3://bucket/key").unwrap(), TransferDirection::StdioToS3);
+        assert_eq!(
+            detect_direction("-", "s3://bucket/key").unwrap(),
+            TransferDirection::StdioToS3
+        );
     }
 
     #[test]
     fn detect_s3_to_stdio() {
-        assert_eq!(detect_direction("s3://bucket/key", "-").unwrap(), TransferDirection::S3ToStdio);
+        assert_eq!(
+            detect_direction("s3://bucket/key", "-").unwrap(),
+            TransferDirection::S3ToStdio
+        );
     }
 
     #[test]

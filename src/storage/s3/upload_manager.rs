@@ -30,10 +30,10 @@ use crate::storage::{
     convert_to_buf_byte_stream_with_callback, get_range_from_content_range,
     parse_range_header_string,
 };
+use crate::types::SyncStatistics;
 use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::SyncStatistics;
 
 const S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY: &str = "s3sync-origin-last-modified";
 

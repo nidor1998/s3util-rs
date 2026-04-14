@@ -6,9 +6,9 @@ use aws_sdk_s3::types::RequestPayer;
 use tracing::{error, trace};
 
 use s3util_rs::Config;
+use s3util_rs::storage::StorageFactory;
 use s3util_rs::storage::local::LocalStorageFactory;
 use s3util_rs::storage::s3::S3StorageFactory;
-use s3util_rs::storage::StorageFactory;
 use s3util_rs::transfer::{TransferDirection, detect_direction};
 use s3util_rs::types::StoragePath;
 use s3util_rs::types::token::create_pipeline_cancellation_token;
@@ -39,12 +39,8 @@ pub async fn run_cp(config: Config) -> Result<bool> {
     let log_sync_summary = config.tracing_config.is_some();
 
     // Start indicator
-    let indicator_handle = indicator::show_indicator(
-        stats_receiver,
-        show_progress,
-        show_result,
-        log_sync_summary,
-    );
+    let indicator_handle =
+        indicator::show_indicator(stats_receiver, show_progress, show_result, log_sync_summary);
 
     let has_warning = Arc::new(AtomicBool::new(false));
 

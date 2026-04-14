@@ -2,11 +2,11 @@ use anyhow::{Context, Result};
 use async_channel::Sender;
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_smithy_types::body::SdkBody;
 use aws_smithy_types::DateTime;
+use aws_smithy_types::body::SdkBody;
+use futures_util::stream::TryStreamExt;
 use http_body_util::{BodyExt, StreamBody};
 use hyper::body::Frame;
-use futures_util::stream::TryStreamExt;
 use tokio::io::BufReader;
 use tokio_util::io::ReaderStream;
 use tracing::info;
@@ -48,9 +48,7 @@ pub async fn transfer(
         .set_body(Some(byte_stream))
         .set_content_length(None)
         .set_content_type(config.content_type.clone())
-        .set_last_modified(Some(DateTime::from_secs(
-            chrono::Utc::now().timestamp(),
-        )))
+        .set_last_modified(Some(DateTime::from_secs(chrono::Utc::now().timestamp())))
         .build();
 
     // For stdin, size is unknown so we use 0 and let the upload manager handle it

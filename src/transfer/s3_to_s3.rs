@@ -75,7 +75,9 @@ pub async fn transfer(
         config.tagging.clone()
     } else {
         // Try to get tagging from source
-        let tagging_output = source_clone.get_object_tagging(key, config.version_id.clone()).await;
+        let tagging_output = source_clone
+            .get_object_tagging(key, config.version_id.clone())
+            .await;
         if let Ok(tagging_output) = tagging_output {
             if tagging_output.tag_set().is_empty() {
                 None

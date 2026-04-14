@@ -122,10 +122,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
 
         let head = helper.head_object(&bucket, "sc.txt", None).await;
-        assert_eq!(
-            head.storage_class().unwrap(),
-            &StorageClass::StandardIa
-        );
+        assert_eq!(head.storage_class().unwrap(), &StorageClass::StandardIa);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -249,7 +246,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "sha256.txt", b"sha256 checksum test");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "sha256.txt", b"sha256 checksum test");
 
         let target = format!("s3://{}/sha256.txt", bucket);
         let stats = helper
@@ -285,7 +283,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "crc32.txt", b"crc32 checksum test");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "crc32.txt", b"crc32 checksum test");
 
         let target = format!("s3://{}/crc32.txt", bucket);
         let stats = helper
@@ -358,7 +357,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "etag.txt", b"etag verification test");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "etag.txt", b"etag verification test");
 
         let target = format!("s3://{}/etag.txt", bucket);
         let stats = helper
@@ -459,7 +459,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "nomd5.txt", b"no md5 header test");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "nomd5.txt", b"no md5 header test");
 
         let target = format!("s3://{}/nomd5.txt", bucket);
         let stats = helper

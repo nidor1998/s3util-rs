@@ -5,8 +5,8 @@ use tracing::info;
 
 use crate::Config;
 use crate::storage::Storage;
-use crate::types::token::PipelineCancellationToken;
 use crate::types::SyncStatistics;
+use crate::types::token::PipelineCancellationToken;
 
 /// Transfer an S3 object to stdout.
 ///
@@ -67,12 +67,13 @@ pub async fn transfer(
             .context("s3_to_stdio: failed to write to stdout")?;
 
         total_bytes += n as u64;
-        let _ = stats_sender
-            .send(SyncStatistics::SyncBytes(n as u64))
-            .await;
+        let _ = stats_sender.send(SyncStatistics::SyncBytes(n as u64)).await;
     }
 
-    stdout.flush().await.context("s3_to_stdio: failed to flush stdout")?;
+    stdout
+        .flush()
+        .await
+        .context("s3_to_stdio: failed to flush stdout")?;
 
     info!(
         key = key,

@@ -46,7 +46,11 @@ mod tests {
             let status = child.wait().unwrap();
             assert!(status.success() || status.code() == Some(0));
 
-            assert!(helper.is_object_exist(&bucket, "stdin_test.txt", None).await);
+            assert!(
+                helper
+                    .is_object_exist(&bucket, "stdin_test.txt", None)
+                    .await
+            );
         }
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -62,7 +66,9 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let test_content = b"content for stdout test";
-        helper.put_object(&bucket, "stdout_test.txt", test_content.to_vec()).await;
+        helper
+            .put_object(&bucket, "stdout_test.txt", test_content.to_vec())
+            .await;
 
         let source = format!("s3://{}/stdout_test.txt", bucket);
 

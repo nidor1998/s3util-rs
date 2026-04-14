@@ -9,9 +9,7 @@ use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::types::builders::ObjectPartBuilder;
-use aws_sdk_s3::types::{
-    ChecksumMode, ObjectAttributes, ObjectPart, RequestPayer, Tagging,
-};
+use aws_sdk_s3::types::{ChecksumMode, ObjectAttributes, ObjectPart, RequestPayer, Tagging};
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use leaky_bucket::RateLimiter;
 use std::path::PathBuf;

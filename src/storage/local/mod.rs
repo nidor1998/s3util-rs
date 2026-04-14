@@ -13,8 +13,8 @@ use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::types::{
-    ChecksumAlgorithm, ChecksumMode, ObjectPart, RequestPayer,
-    ServerSideEncryption, StorageClass, Tagging,
+    ChecksumAlgorithm, ChecksumMode, ObjectPart, RequestPayer, ServerSideEncryption, StorageClass,
+    Tagging,
 };
 use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_runtime_api::http::{Response, StatusCode};
@@ -52,8 +52,7 @@ use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncBytes, Sy
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
-    ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics,
-    is_full_object_checksum,
+    ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics, is_full_object_checksum,
 };
 use crate::{Config, storage};
 

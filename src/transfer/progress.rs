@@ -17,7 +17,7 @@ impl TransferProgress {
         let bar = ProgressBar::new(total_bytes);
         bar.set_style(
             ProgressStyle::with_template(
-                "[{bar:40.cyan/blue}] {percent}% {bytes}/{total_bytes} {bytes_per_sec} ETA {eta}"
+                "[{bar:40.cyan/blue}] {percent}% {bytes}/{total_bytes} {bytes_per_sec} ETA {eta}",
             )
             .unwrap()
             .progress_chars("=>-"),
@@ -35,8 +35,7 @@ impl TransferProgress {
         }
         let bar = ProgressBar::new_spinner();
         bar.set_style(
-            ProgressStyle::with_template("{spinner:.green} {bytes} {bytes_per_sec}")
-                .unwrap(),
+            ProgressStyle::with_template("{spinner:.green} {bytes} {bytes_per_sec}").unwrap(),
         );
         Self { bar, enabled: true }
     }

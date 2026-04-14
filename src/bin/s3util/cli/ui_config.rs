@@ -39,7 +39,17 @@ mod tests {
     fn is_progress_indicator_needed_json_tracing() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "--source-profile", "p", "--json-tracing", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "--source-profile",
+            "p",
+            "--json-tracing",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -52,7 +62,16 @@ mod tests {
     fn is_progress_indicator_needed_no_json_tracing() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "--source-profile", "p", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "--source-profile",
+            "p",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -65,7 +84,17 @@ mod tests {
     fn is_progress_indicator_needed_no_tracing_config() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "--source-profile", "p", "-qqq", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "--source-profile",
+            "p",
+            "-qqq",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -78,7 +107,15 @@ mod tests {
     fn is_progress_indicator_needed_default() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "--source-profile", "p", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "--source-profile",
+            "p",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -91,7 +128,17 @@ mod tests {
     fn is_progress_indicator_needed_info() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "-v", "--source-profile", "p", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "-v",
+            "--source-profile",
+            "p",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -104,7 +151,15 @@ mod tests {
     fn is_show_result_needed_default() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "--source-profile", "p", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "--source-profile",
+            "p",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -117,7 +172,17 @@ mod tests {
     fn is_show_result_needed_silent() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "-qqq", "--source-profile", "p", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "-qqq",
+            "--source-profile",
+            "p",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();
@@ -130,7 +195,18 @@ mod tests {
     fn is_show_result_needed_json_tracing() {
         init_dummy_tracing_subscriber();
 
-        let cli = Cli::try_parse_from(["s3util", "cp", "-v", "--source-profile", "p", "--json-tracing", "--show-progress", "s3://source-bucket", "/target-dir"]).unwrap();
+        let cli = Cli::try_parse_from([
+            "s3util",
+            "cp",
+            "-v",
+            "--source-profile",
+            "p",
+            "--json-tracing",
+            "--show-progress",
+            "s3://source-bucket",
+            "/target-dir",
+        ])
+        .unwrap();
         match cli.command {
             Commands::Cp(cp_args) => {
                 let config = Config::try_from(cp_args).unwrap();

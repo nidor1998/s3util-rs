@@ -19,7 +19,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "progress.txt", b"progress bar test data");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "progress.txt", b"progress bar test data");
 
         let target = format!("s3://{}/progress.txt", bucket);
         let stats = helper
@@ -53,7 +54,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "progress_large.bin", 9 * 1024 * 1024);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "progress_large.bin", 9 * 1024 * 1024);
 
         let target = format!("s3://{}/progress_large.bin", bucket);
         let stats = helper
@@ -85,7 +87,13 @@ mod tests {
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        helper.put_object(&bucket, "dl_progress.txt", b"download progress test".to_vec()).await;
+        helper
+            .put_object(
+                &bucket,
+                "dl_progress.txt",
+                b"download progress test".to_vec(),
+            )
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("dl_progress.txt");

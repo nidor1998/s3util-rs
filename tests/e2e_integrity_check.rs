@@ -22,7 +22,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "etag.dat", b"etag integrity check");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "etag.dat", b"etag integrity check");
 
         let target = format!("s3://{}/etag.dat", bucket);
         let stats = helper
@@ -123,7 +124,9 @@ mod tests {
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        helper.put_object(&bucket, "dl_etag.dat", vec![0u8; 2048]).await;
+        helper
+            .put_object(&bucket, "dl_etag.dat", vec![0u8; 2048])
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("dl_etag.dat");
@@ -157,7 +160,9 @@ mod tests {
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        helper.put_object(&bucket, "dl_no_etag.dat", vec![1u8; 512]).await;
+        helper
+            .put_object(&bucket, "dl_no_etag.dat", vec![1u8; 512])
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let local_file = local_dir.join("dl_no_etag.dat");
@@ -198,7 +203,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "s2s_etag.dat", vec![0u8; 1024]).await;
+        helper
+            .put_object(&bucket1, "s2s_etag.dat", vec![0u8; 1024])
+            .await;
 
         let source = format!("s3://{}/s2s_etag.dat", bucket1);
         let target = format!("s3://{}/s2s_etag.dat", bucket2);
@@ -234,7 +241,9 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper.put_object(&bucket1, "ssc_etag.dat", vec![0u8; 1024]).await;
+        helper
+            .put_object(&bucket1, "ssc_etag.dat", vec![0u8; 1024])
+            .await;
 
         let source = format!("s3://{}/ssc_etag.dat", bucket1);
         let target = format!("s3://{}/ssc_etag.dat", bucket2);
@@ -428,7 +437,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "crc64.dat", b"crc64nvme integrity");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "crc64.dat", b"crc64nvme integrity");
 
         let target = format!("s3://{}/crc64.dat", bucket);
         let stats = helper
@@ -466,7 +476,8 @@ mod tests {
 
         // Upload with SHA256 checksum
         let local_dir = TestHelper::create_temp_dir();
-        let upload_file = TestHelper::create_test_file(&local_dir, "upload.dat", b"sha256 roundtrip");
+        let upload_file =
+            TestHelper::create_test_file(&local_dir, "upload.dat", b"sha256 roundtrip");
 
         let s3_path = format!("s3://{}/sha256_rt.dat", bucket);
         let upload_stats = helper
@@ -579,7 +590,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "foc32.dat", b"full object checksum crc32");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "foc32.dat", b"full object checksum crc32");
 
         let target = format!("s3://{}/foc32.dat", bucket);
         let stats = helper
@@ -613,7 +625,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "foc32c.dat", b"full object checksum crc32c");
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "foc32c.dat", b"full object checksum crc32c");
 
         let target = format!("s3://{}/foc32c.dat", bucket);
         let stats = helper
@@ -647,7 +660,11 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_test_file(&local_dir, "foc64.dat", b"full object checksum crc64nvme");
+        let test_file = TestHelper::create_test_file(
+            &local_dir,
+            "foc64.dat",
+            b"full object checksum crc64nvme",
+        );
 
         let target = format!("s3://{}/foc64.dat", bucket);
         let stats = helper

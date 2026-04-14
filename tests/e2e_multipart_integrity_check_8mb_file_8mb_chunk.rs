@@ -97,7 +97,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "8mb_plus1.bin", 8 * 1024 * 1024 + 1);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "8mb_plus1.bin", 8 * 1024 * 1024 + 1);
 
         let target = format!("s3://{}/8mb_plus1.bin", bucket);
         let stats = helper
@@ -132,7 +133,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "8mb_minus1.bin", 8 * 1024 * 1024 - 1);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "8mb_minus1.bin", 8 * 1024 * 1024 - 1);
 
         let target = format!("s3://{}/8mb_minus1.bin", bucket);
         let stats = helper
@@ -164,7 +166,8 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let local_dir = TestHelper::create_temp_dir();
-        let test_file = TestHelper::create_sized_file(&local_dir, "8mb_sha256.bin", 8 * 1024 * 1024);
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "8mb_sha256.bin", 8 * 1024 * 1024);
 
         let target = format!("s3://{}/8mb_sha256.bin", bucket);
         let stats = helper

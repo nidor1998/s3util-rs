@@ -73,8 +73,7 @@ const BOTH_STDIO_SPECIFIED: &str = "source and target cannot both be stdin/stdou
 const BOTH_LOCAL_SPECIFIED: &str = "source and target cannot both be local paths\n";
 const SERVER_SIDE_COPY_REQUIRES_BOTH_S3: &str =
     "with --server-side-copy, both source and target must be s3://\n";
-const VERSION_ID_REQUIRES_S3_SOURCE: &str =
-    "with --version-id, source must be s3://\n";
+const VERSION_ID_REQUIRES_S3_SOURCE: &str = "with --version-id, source must be s3://\n";
 const STDIO_INCOMPATIBLE_WITH_SERVER_SIDE_COPY: &str =
     "stdin/stdout (-) is incompatible with --server-side-copy\n";
 const LOCAL_STORAGE_SPECIFIED_WITH_STORAGE_CLASS: &str =
@@ -358,7 +357,12 @@ Example: key1=value1&key2=value2"#)]
     source_sse_c: Option<String>,
 
     /// Source SSE-C customer-provided encryption key(256bit key. must be base64 encoded)
-    #[arg(long, env, requires = "source_sse_c_key_md5", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        requires = "source_sse_c_key_md5",
+        help_heading = "Encryption"
+    )]
     source_sse_c_key: Option<String>,
 
     /// Source base64 encoded MD5 digest of source_sse_c_key
@@ -370,7 +374,12 @@ Example: key1=value1&key2=value2"#)]
     target_sse_c: Option<String>,
 
     /// Target SSE-C customer-provided encryption key(256bit key. must be base64 encoded)
-    #[arg(long, env, requires = "target_sse_c_key_md5", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        requires = "target_sse_c_key_md5",
+        help_heading = "Encryption"
+    )]
     target_sse_c_key: Option<String>,
 
     /// Target base64 encoded MD5 digest of target-sse-c-key
@@ -785,7 +794,8 @@ impl CpArgs {
         }
 
         if let Some(additional_checksum_algorithm) = &self.additional_checksum_algorithm {
-            if additional_checksum_algorithm == "SHA1" || additional_checksum_algorithm == "SHA256" {
+            if additional_checksum_algorithm == "SHA1" || additional_checksum_algorithm == "SHA256"
+            {
                 return Err(FULL_OBJECT_CHECKSUM_NOT_SUPPORTED.to_string());
             }
         }
@@ -880,8 +890,7 @@ impl CpArgs {
             },
             cli_timeout_config: CLITimeoutConfig {
                 operation_timeout_milliseconds: self.operation_timeout_milliseconds,
-                operation_attempt_timeout_milliseconds: self
-                    .operation_attempt_timeout_milliseconds,
+                operation_attempt_timeout_milliseconds: self.operation_attempt_timeout_milliseconds,
                 connect_timeout_milliseconds: self.connect_timeout_milliseconds,
                 read_timeout_milliseconds: self.read_timeout_milliseconds,
             },
@@ -913,8 +922,7 @@ impl CpArgs {
             },
             cli_timeout_config: CLITimeoutConfig {
                 operation_timeout_milliseconds: self.operation_timeout_milliseconds,
-                operation_attempt_timeout_milliseconds: self
-                    .operation_attempt_timeout_milliseconds,
+                operation_attempt_timeout_milliseconds: self.operation_attempt_timeout_milliseconds,
                 connect_timeout_milliseconds: self.connect_timeout_milliseconds,
                 read_timeout_milliseconds: self.read_timeout_milliseconds,
             },
