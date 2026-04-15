@@ -399,6 +399,7 @@ impl StorageTrait for S3Storage {
         &self,
         key: &str,
         source: Storage,
+        source_key: &str,
         source_size: u64,
         source_additional_checksum: Option<String>,
         mut get_object_output_first_chunk: GetObjectOutput,
@@ -413,7 +414,6 @@ impl StorageTrait for S3Storage {
             version_id = source_version_id.to_string();
         }
         let target_key = key.to_string();
-        let source_key = key;
         let source_last_modified = aws_smithy_types::DateTime::from_millis(
             get_object_output_first_chunk
                 .last_modified()

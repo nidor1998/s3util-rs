@@ -66,6 +66,7 @@ pub async fn transfer(
         .put_object(
             target_key,
             source_clone,
+            source_key,
             source_size,
             source_additional_checksum,
             get_object_output,

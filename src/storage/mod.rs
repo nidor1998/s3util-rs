@@ -125,6 +125,7 @@ pub trait StorageTrait: DynClone {
         &self,
         key: &str,
         source: Storage,
+        source_key: &str,
         source_size: u64,
         source_additional_checksum: Option<String>,
         get_object_output_first_chunk: GetObjectOutput,
