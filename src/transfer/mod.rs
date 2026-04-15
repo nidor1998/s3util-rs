@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 
+pub mod first_chunk;
 pub mod local_to_s3;
 pub mod progress;
 pub mod s3_to_local;
