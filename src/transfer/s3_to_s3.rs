@@ -1,17 +1,23 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::storage::{Storage, convert_head_to_get_object_output};
+use crate::transfer::first_chunk;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{ObjectChecksum, SyncStatistics, get_additional_checksum};
+use crate::types::{SyncStatistics, get_additional_checksum};
 
 /// Transfer an S3 object from one S3 location to another.
 ///
 /// Supports two modes:
 /// - Server-side copy: uses head_object on source + put_object with copy_source on target
 /// - Download + upload: get_object from source + put_object to target
+///
+/// Uses first-chunk optimization: for objects above the multipart threshold,
+/// only the first chunk is fetched initially via a range request. The upload
+/// manager then fetches remaining chunks lazily during multipart upload.
+/// Ported from s3sync/src/pipeline/syncer.rs.
 pub async fn transfer(
     config: &Config,
     source: Storage,
@@ -27,29 +33,67 @@ pub async fn transfer(
 
     let source_clone = dyn_clone::clone_box(&*source);
 
+    // Get source size via head_object (without range) to calculate first chunk range.
+    // For server-side copy, we also need the metadata from this head_object.
+    let head_object_output = source
+        .head_object(
+            source_key,
+            config.version_id.clone(),
+            config.additional_checksum_mode.clone(),
+            None,
+            config.source_sse_c.clone(),
+            config.source_sse_c_key.clone(),
+            config.source_sse_c_key_md5.clone(),
+        )
+        .await
+        .context("s3_to_s3: source.head_object() failed.")?;
+
+    let source_size = head_object_output.content_length().unwrap_or(0);
+
+    // Get the first chunk range if multipart upload is required.
+    let range = first_chunk::get_first_chunk_range(
+        &*source,
+        config,
+        source_size,
+        source_key,
+        config.version_id.clone(),
+    )
+    .await?;
+
+    debug!(
+        key = source_key,
+        size = source_size,
+        range = range.as_deref(),
+        "first chunk range for the object",
+    );
+
     let get_object_output = if config.server_side_copy {
-        // Server-side copy: use head_object to get metadata, no actual download
-        let head_object_output = source
-            .head_object(
-                source_key,
-                config.version_id.clone(),
-                config.additional_checksum_mode.clone(),
-                None,
-                config.source_sse_c.clone(),
-                config.source_sse_c_key.clone(),
-                config.source_sse_c_key_md5.clone(),
-            )
-            .await
-            .context("s3_to_s3: source.head_object() failed.")?;
-        convert_head_to_get_object_output(head_object_output)
+        // Server-side copy: use head_object with range to get metadata
+        if range.is_some() {
+            let ranged_head = source
+                .head_object(
+                    source_key,
+                    config.version_id.clone(),
+                    config.additional_checksum_mode.clone(),
+                    range.clone(),
+                    config.source_sse_c.clone(),
+                    config.source_sse_c_key.clone(),
+                    config.source_sse_c_key_md5.clone(),
+                )
+                .await
+                .context("s3_to_s3: source.head_object(range) failed.")?;
+            convert_head_to_get_object_output(ranged_head)
+        } else {
+            convert_head_to_get_object_output(head_object_output)
+        }
     } else {
-        // Download + upload: download from source
+        // Download + upload: download from source with range
         source
             .get_object(
                 source_key,
                 config.version_id.clone(),
                 config.additional_checksum_mode.clone(),
-                None,
+                range.clone(),
                 config.source_sse_c.clone(),
                 config.source_sse_c_key.clone(),
                 config.source_sse_c_key_md5.clone(),
@@ -62,7 +106,10 @@ pub async fn transfer(
         return Ok(());
     }
 
-    let source_size = get_object_output.content_length().unwrap_or(0) as u64;
+    // Validate content range if range was used
+    if range.is_some() {
+        first_chunk::validate_content_range(&get_object_output, range.as_ref().unwrap())?;
+    }
 
     let source_additional_checksum = get_additional_checksum(
         &get_object_output,
@@ -103,15 +150,29 @@ pub async fn transfer(
         }
     };
 
-    // Build object checksum
-    let object_checksum = ObjectChecksum {
-        key: target_key.to_string(),
-        version_id: config.version_id.clone(),
-        checksum_algorithm: config.additional_checksum_algorithm.clone(),
-        checksum_type: None,
-        object_parts: None,
-        final_checksum: source_additional_checksum.clone(),
-    };
+    // Build object checksum using the s3sync-ported helpers
+    let final_checksum = first_chunk::get_final_checksum(
+        &*source,
+        &*target,
+        config,
+        &get_object_output,
+        range.as_deref(),
+        source_key,
+        config.version_id.clone(),
+        None,
+    )
+    .await;
+
+    let object_checksum = first_chunk::build_object_checksum(
+        &*source,
+        &*target,
+        config,
+        target_key,
+        &get_object_output,
+        None,
+        final_checksum,
+    )
+    .await?;
 
     // Build copy_source_if_match from source ETag if config requires it
     let copy_source_if_match = if config.copy_source_if_match {
@@ -124,11 +185,11 @@ pub async fn transfer(
         .put_object(
             target_key,
             source_clone,
-            source_size,
+            source_size as u64,
             source_additional_checksum,
             get_object_output,
             tagging,
-            Some(object_checksum),
+            object_checksum,
             None,
             None,
             copy_source_if_match,
