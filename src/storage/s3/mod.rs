@@ -75,7 +75,6 @@ impl StorageFactory for S3StorageFactory {
 struct S3Storage {
     config: Config,
     bucket: String,
-    prefix: String,
     cancellation_token: PipelineCancellationToken,
     client: Option<Arc<Client>>,
     request_payer: Option<RequestPayer>,
@@ -98,8 +97,8 @@ impl S3Storage {
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
     ) -> Storage {
-        let (bucket, prefix) = if let StoragePath::S3 { bucket, prefix } = path {
-            (bucket, prefix)
+        let bucket = if let StoragePath::S3 { bucket, .. } = path {
+            bucket
         } else {
             panic!("s3 path not found")
         };
@@ -107,7 +106,6 @@ impl S3Storage {
         let storage = S3Storage {
             config,
             bucket,
-            prefix,
             cancellation_token,
             client,
             request_payer,
@@ -159,7 +157,7 @@ impl StorageTrait for S3Storage {
                 .head_object()
                 .set_request_payer(self.request_payer.clone())
                 .bucket(&self.bucket)
-                .key(generate_full_key(&self.prefix, key))
+                .key(key)
                 .set_version_id(version_id)
                 .set_checksum_mode(checksum_mode)
                 .set_range(range)
@@ -180,7 +178,7 @@ impl StorageTrait for S3Storage {
             .get_object()
             .set_request_payer(self.request_payer.clone())
             .bucket(&self.bucket)
-            .key(generate_full_key(&self.prefix, key))
+            .key(key)
             .set_version_id(version_id)
             .set_checksum_mode(checksum_mode)
             .set_range(range)
@@ -206,7 +204,7 @@ impl StorageTrait for S3Storage {
             .get_object_tagging()
             .set_request_payer(self.request_payer.clone())
             .bucket(&self.bucket)
-            .key(generate_full_key(&self.prefix, key))
+            .key(key)
             .set_version_id(version_id)
             .send()
             .await
@@ -232,7 +230,7 @@ impl StorageTrait for S3Storage {
             .head_object()
             .set_request_payer(self.request_payer.clone())
             .bucket(&self.bucket)
-            .key(generate_full_key(&self.prefix, key))
+            .key(key)
             .set_range(range)
             .set_version_id(version_id)
             .set_checksum_mode(checksum_mode)
@@ -262,7 +260,7 @@ impl StorageTrait for S3Storage {
             .head_object()
             .set_request_payer(self.request_payer.clone())
             .bucket(&self.bucket)
-            .key(generate_full_key(&self.prefix, key))
+            .key(key)
             .set_version_id(version_id)
             .part_number(1)
             .set_checksum_mode(checksum_mode)
@@ -291,7 +289,7 @@ impl StorageTrait for S3Storage {
             .head_object()
             .set_request_payer(self.request_payer.clone())
             .bucket(&self.bucket)
-            .key(generate_full_key(&self.prefix, key))
+            .key(key)
             .set_version_id(version_id.clone())
             .part_number(1)
             .set_sse_customer_algorithm(sse_c.clone())
@@ -322,7 +320,7 @@ impl StorageTrait for S3Storage {
                 .head_object()
                 .set_request_payer(self.request_payer.clone())
                 .bucket(&self.bucket)
-                .key(generate_full_key(&self.prefix, key))
+                .key(key)
                 .set_version_id(version_id.clone())
                 .part_number(part_number)
                 .set_sse_customer_algorithm(sse_c.clone())
@@ -361,7 +359,7 @@ impl StorageTrait for S3Storage {
                 .get_object_attributes()
                 .set_request_payer(self.request_payer.clone())
                 .bucket(&self.bucket)
-                .key(generate_full_key(&self.prefix, key))
+                .key(key)
                 .set_version_id(version_id.clone())
                 .object_attributes(ObjectAttributes::ObjectParts)
                 .set_part_number_marker(part_number_marker)
@@ -414,7 +412,7 @@ impl StorageTrait for S3Storage {
         if let Some(source_version_id) = get_object_output_first_chunk.version_id().as_ref() {
             version_id = source_version_id.to_string();
         }
-        let target_key = generate_full_key(&self.prefix, key);
+        let target_key = key.to_string();
         let source_key = key;
         let source_last_modified = aws_smithy_types::DateTime::from_millis(
             get_object_output_first_chunk
@@ -543,7 +541,7 @@ impl StorageTrait for S3Storage {
         version_id: Option<String>,
         tagging: Tagging,
     ) -> Result<PutObjectTaggingOutput> {
-        let target_key = generate_full_key(&self.prefix, key);
+        let target_key = key.to_string();
         let version_id_str = version_id.clone().unwrap_or_default();
 
         if self.config.dry_run {
@@ -589,7 +587,7 @@ impl StorageTrait for S3Storage {
         version_id: Option<String>,
         if_match: Option<String>,
     ) -> Result<DeleteObjectOutput> {
-        let target_key = generate_full_key(&self.prefix, key);
+        let target_key = key.to_string();
         let version_id_str = version_id.clone().unwrap_or_default();
 
         if self.config.dry_run {
@@ -654,18 +652,17 @@ impl StorageTrait for S3Storage {
     }
 
     fn generate_copy_source_key(&self, key: &str, version_id: Option<String>) -> String {
-        let full_key = generate_full_key(&self.prefix, key);
-        let full_key = urlencoding::encode(&full_key);
+        let encoded_key = urlencoding::encode(key);
 
         if version_id.is_some() {
             return format!(
                 "{}/{}?versionId={}",
                 &self.bucket,
-                full_key,
+                encoded_key,
                 version_id.unwrap()
             );
         }
-        format!("{}/{}", &self.bucket, full_key)
+        format!("{}/{}", &self.bucket, encoded_key)
     }
 
     fn set_warning(&self) {
@@ -676,10 +673,6 @@ impl StorageTrait for S3Storage {
 
 pub fn remove_s3_prefix(key: &str, prefix: &str) -> String {
     key.to_string().replacen(prefix, "", 1)
-}
-
-pub fn generate_full_key(prefix: &str, key: &str) -> String {
-    format!("{prefix}{key}")
 }
 
 fn is_express_onezone_storage(bucket: &str) -> bool {
@@ -712,16 +705,6 @@ mod tests {
         assert!(!is_express_onezone_storage("bucket-x-s3"));
         assert!(!is_express_onezone_storage("bucket--x-s3s"));
         assert!(!is_express_onezone_storage("bucket"));
-    }
-
-    #[tokio::test]
-    async fn generate_full_key_test() {
-        init_dummy_tracing_subscriber();
-
-        assert_eq!(generate_full_key("dir1/", "data1"), "dir1/data1");
-        assert_eq!(generate_full_key("dir1", "data1"), "dir1data1");
-
-        assert_eq!(generate_full_key("data1", "data1"), "data1data1");
     }
 
     fn init_dummy_tracing_subscriber() {

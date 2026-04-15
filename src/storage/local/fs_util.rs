@@ -39,6 +39,10 @@ pub fn set_last_modified(
     )
 }
 
+pub fn set_last_modified_for_path(path: &PathBuf, seconds: i64, nanos: u32) -> std::io::Result<()> {
+    set_file_mtime(path, FileTime::from_unix_time(seconds, nanos))
+}
+
 pub fn is_key_a_directory(key: &str) -> bool {
     if cfg!(windows) && key.ends_with('\\') {
         return true;
@@ -54,6 +58,34 @@ pub async fn create_temp_file_from_key(path: &Path, key: &str) -> Result<NamedTe
     let file =
         NamedTempFile::new_in(temp_directory_path).context("NamedTempFile::new_in failed.")?;
     Ok(file)
+}
+
+pub async fn create_temp_file_for_key(key: &str) -> Result<NamedTempFile> {
+    create_parent_directory(key).await?;
+
+    let path = PathBuf::from(key);
+    let parent = path.parent().unwrap_or(Path::new("."));
+    let file = NamedTempFile::new_in(parent).context("NamedTempFile::new_in failed.")?;
+    Ok(file)
+}
+
+pub async fn create_parent_directory(key: &str) -> Result<bool> {
+    let path = PathBuf::from(key);
+    let parent = path.parent().unwrap_or(Path::new("."));
+
+    let result = parent.try_exists();
+    if result.is_ok() && result? {
+        return Ok(false);
+    }
+
+    tokio::fs::create_dir_all(parent)
+        .await
+        .context("tokio::fs::create_dir_all() failed.")?;
+
+    let directory = parent.to_string_lossy().to_string();
+    debug!(key = key, directory = directory, "directory created.");
+
+    Ok(true)
 }
 
 pub async fn create_directory_hierarchy_from_key(path: PathBuf, key: &str) -> Result<bool> {

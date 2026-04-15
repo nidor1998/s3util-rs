@@ -95,7 +95,6 @@ impl StorageFactory for LocalStorageFactory {
 #[derive(Clone)]
 struct LocalStorage {
     config: Config,
-    path: PathBuf,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
     rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
@@ -114,15 +113,12 @@ impl LocalStorage {
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
     ) -> Storage {
-        let local_path = if let StoragePath::Local(local_path) = path {
-            local_path
-        } else {
+        if !matches!(path, StoragePath::Local(_)) {
             panic!("local path not found")
-        };
+        }
 
         let storage = LocalStorage {
             config,
-            path: local_path,
             cancellation_token,
             stats_sender,
             rate_limit_objects_per_sec,
@@ -443,9 +439,7 @@ impl LocalStorage {
             self.send_stats(SyncBytes(get_object_output.content_length().unwrap() as u64))
                 .await;
 
-            let real_path = fs_util::key_to_file_path(self.path.to_path_buf(), key)
-                .to_string_lossy()
-                .to_string();
+            let real_path = PathBuf::from(key).to_string_lossy().to_string();
 
             let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
             event_data.key = Some(key.to_string());
@@ -473,12 +467,12 @@ impl LocalStorage {
         }
 
         if fs_util::is_key_a_directory(key) {
-            fs_util::create_directory_hierarchy_from_key(self.path.clone(), key).await?;
+            fs_util::create_parent_directory(key).await?;
 
             return Ok(PutObjectOutput::builder().build());
         }
 
-        let mut temp_file = fs_util::create_temp_file_from_key(&self.path, key).await?;
+        let mut temp_file = fs_util::create_temp_file_for_key(key).await?;
         let mut file = tokio::fs::File::from_std(temp_file.as_file_mut().try_clone()?);
 
         let seconds = get_object_output.last_modified().as_ref().unwrap().secs();
@@ -531,10 +525,10 @@ impl LocalStorage {
         file.flush().await?;
         drop(file);
 
-        let real_path = fs_util::key_to_file_path(self.path.to_path_buf(), key);
+        let real_path = PathBuf::from(key);
         temp_file.persist(&real_path)?;
 
-        fs_util::set_last_modified(self.path.to_path_buf(), key, seconds, nanos)?;
+        fs_util::set_last_modified_for_path(&real_path, seconds, nanos)?;
 
         let target_object_parts = if let Some(object_checksum) = &object_checksum {
             object_checksum.object_parts.clone()
@@ -639,14 +633,14 @@ impl LocalStorage {
         }
 
         if fs_util::is_key_a_directory(key) {
-            fs_util::create_directory_hierarchy_from_key(self.path.clone(), key).await?;
+            fs_util::create_parent_directory(key).await?;
 
             return Ok(PutObjectOutput::builder().build());
         }
 
         let shared_total_upload_size = Arc::new(Mutex::new(Vec::new()));
 
-        let mut temp_file = fs_util::create_temp_file_from_key(&self.path, key).await?;
+        let mut temp_file = fs_util::create_temp_file_for_key(key).await?;
         let mut file = tokio::fs::File::from_std(temp_file.as_file_mut().try_clone()?);
 
         let config_chunksize = self.config.transfer_config.multipart_chunksize as usize;
@@ -891,12 +885,11 @@ impl LocalStorage {
         file.flush().await?;
         drop(file);
 
-        let real_path = fs_util::key_to_file_path(self.path.to_path_buf(), key);
+        let real_path = PathBuf::from(key);
         temp_file.persist(&real_path)?;
 
-        fs_util::set_last_modified(
-            self.path.to_path_buf(),
-            key,
+        fs_util::set_last_modified_for_path(
+            &real_path,
             source_last_modified_seconds,
             source_last_modified_nanos,
         )?;
@@ -983,8 +976,7 @@ impl StorageTrait for LocalStorage {
         _sse_c_key: SseCustomerKey,
         _sse_c_key_md5: Option<String>,
     ) -> Result<GetObjectOutput> {
-        let mut path = self.path.clone();
-        path.push(key);
+        let path = PathBuf::from(key);
 
         if !path.clone().try_exists()? {
             let (get_object_error, response) = build_no_such_key_response();
@@ -1145,7 +1137,7 @@ impl StorageTrait for LocalStorage {
         _sse_c_key: SseCustomerKey,
         _sse_c_key_md5: Option<String>,
     ) -> Result<HeadObjectOutput> {
-        let path = fs_util::key_to_file_path(self.path.to_path_buf(), key);
+        let path = PathBuf::from(key);
 
         let result = path.try_exists();
         if let Err(e) = result {
@@ -1284,7 +1276,7 @@ impl StorageTrait for LocalStorage {
         _version_id: Option<String>,
         _if_match: Option<String>,
     ) -> Result<DeleteObjectOutput> {
-        let file_to_delete = fs_util::key_to_file_path(self.path.to_path_buf(), key);
+        let file_to_delete = PathBuf::from(key);
         let lossy_path = file_to_delete.to_string_lossy().to_string();
 
         if self.config.dry_run {
@@ -1316,7 +1308,7 @@ impl StorageTrait for LocalStorage {
         let _ = self.stats_sender.send(stats).await;
     }
     fn get_local_path(&self) -> PathBuf {
-        self.path.clone()
+        PathBuf::new()
     }
 
     fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
