@@ -13,14 +13,14 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
     BucketInfo, BucketLocationConstraint, BucketType, ChecksumMode, CreateBucketConfiguration,
-    DataRedundancy, LocationInfo, LocationType, Object, Tag, Tagging,
+    DataRedundancy, LocationInfo, LocationType, Object, Tag,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
@@ -279,6 +279,16 @@ impl TestHelper {
             .send()
             .await
             .unwrap()
+    }
+
+    pub async fn get_object_bytes(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+    ) -> Vec<u8> {
+        let output = self.get_object(bucket, key, version_id).await;
+        output.body.collect().await.unwrap().into_bytes().to_vec()
     }
 
     pub async fn get_object_tagging(
@@ -578,6 +588,16 @@ impl TestHelper {
             .collect::<String>()
     }
 
+    pub fn get_sha256_from_bytes(data: &[u8]) -> String {
+        let mut hasher = Sha256::new();
+        hasher.update(data);
+        let hash_result = hasher.finalize();
+        hash_result
+            .iter()
+            .map(|b| format!("{:02x}", b))
+            .collect::<String>()
+    }
+
     pub fn md5_digest(path: &str) -> String {
         let mut file = File::open(path).unwrap();
         let mut buffer = Vec::new();
@@ -637,7 +657,7 @@ impl TestHelper {
 
         let direction = detect_direction(&source_str, &target_str).unwrap();
 
-        let key = Self::extract_key_for_test(&config, &direction);
+        let (source_key, target_key) = Self::extract_keys_for_test(&config, &direction);
         let has_warning = Arc::new(AtomicBool::new(false));
 
         let result = match direction {
@@ -650,25 +670,36 @@ impl TestHelper {
 
                 let source = LocalStorageFactory::create(
                     config.clone(),
-                    config.source.clone(),
+                    StoragePath::Local(".".into()),
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     None,
                     None,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
+                let empty_target = match &config.target {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let target = S3StorageFactory::create(
                     config.clone(),
-                    config.target.clone(),
+                    empty_target,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.target_client_config.clone(),
                     target_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
@@ -676,7 +707,8 @@ impl TestHelper {
                     &config,
                     source,
                     target,
-                    &key,
+                    &source_key,
+                    &target_key,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                 )
@@ -689,27 +721,38 @@ impl TestHelper {
                     None
                 };
 
+                let empty_source = match &config.source {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let source = S3StorageFactory::create(
                     config.clone(),
-                    config.source.clone(),
+                    empty_source,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.source_client_config.clone(),
                     source_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
                 let target = LocalStorageFactory::create(
                     config.clone(),
-                    config.target.clone(),
+                    StoragePath::Local(".".into()),
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     None,
                     None,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
@@ -717,7 +760,8 @@ impl TestHelper {
                     &config,
                     source,
                     target,
-                    &key,
+                    &source_key,
+                    &target_key,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                 )
@@ -735,27 +779,45 @@ impl TestHelper {
                     None
                 };
 
+                let empty_source = match &config.source {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let source = S3StorageFactory::create(
                     config.clone(),
-                    config.source.clone(),
+                    empty_source,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.source_client_config.clone(),
                     source_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
+                let empty_target = match &config.target {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let target = S3StorageFactory::create(
                     config.clone(),
-                    config.target.clone(),
+                    empty_target,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.target_client_config.clone(),
                     target_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
@@ -763,7 +825,8 @@ impl TestHelper {
                     &config,
                     source,
                     target,
-                    &key,
+                    &source_key,
+                    &target_key,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                 )
@@ -776,22 +839,31 @@ impl TestHelper {
                     None
                 };
 
+                let empty_target = match &config.target {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let target = S3StorageFactory::create(
                     config.clone(),
-                    config.target.clone(),
+                    empty_target,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.target_client_config.clone(),
                     target_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
                 s3util_rs::transfer::stdio_to_s3::transfer(
                     &config,
                     target,
-                    &key,
+                    &target_key,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                 )
@@ -804,22 +876,31 @@ impl TestHelper {
                     None
                 };
 
+                let empty_source = match &config.source {
+                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                        bucket: bucket.clone(),
+                        prefix: String::new(),
+                    },
+                    other => other.clone(),
+                };
                 let source = S3StorageFactory::create(
                     config.clone(),
-                    config.source.clone(),
+                    empty_source,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                     config.source_client_config.clone(),
                     source_request_payer,
                     None,
+                    None,
                     has_warning.clone(),
+                    None,
                 )
                 .await;
 
                 s3util_rs::transfer::s3_to_stdio::transfer(
                     &config,
                     source,
-                    &key,
+                    &source_key,
                     cancellation_token.clone(),
                     stats_sender.clone(),
                 )
@@ -856,33 +937,36 @@ impl TestHelper {
         (stats.sync_error > 0, stats.sync_warning > 0)
     }
 
-    fn extract_key_for_test(config: &Config, direction: &TransferDirection) -> String {
-        match direction {
-            TransferDirection::LocalToS3 => {
-                if let StoragePath::Local(path) = &config.source {
-                    path.file_name()
-                        .map(|f| f.to_string_lossy().to_string())
-                        .unwrap_or_default()
+    /// Extract (source_key, target_key) matching the CLI's extract_keys logic.
+    fn extract_keys_for_test(config: &Config, _direction: &TransferDirection) -> (String, String) {
+        let source_key = match &config.source {
+            StoragePath::S3 { prefix, .. } => prefix.clone(),
+            StoragePath::Local(path) => path.to_string_lossy().to_string(),
+            StoragePath::Stdio => String::new(),
+        };
+        let source_basename = std::path::Path::new(&source_key)
+            .file_name()
+            .map(|f| f.to_string_lossy().to_string())
+            .unwrap_or(source_key.clone());
+
+        let target_key = match &config.target {
+            StoragePath::S3 { prefix, .. } => {
+                if prefix.is_empty() || prefix.ends_with('/') {
+                    format!("{prefix}{source_basename}")
                 } else {
-                    String::new()
+                    prefix.clone()
                 }
             }
-            TransferDirection::S3ToLocal
-            | TransferDirection::S3ToS3
-            | TransferDirection::S3ToStdio => {
-                if let StoragePath::S3 { prefix, .. } = &config.source {
-                    prefix.to_string()
+            StoragePath::Local(path) => {
+                let p = path.clone();
+                if p.is_dir() || p.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) {
+                    p.join(&source_basename).to_string_lossy().to_string()
                 } else {
-                    String::new()
+                    p.to_string_lossy().to_string()
                 }
             }
-            TransferDirection::StdioToS3 => {
-                if let StoragePath::S3 { prefix, .. } = &config.target {
-                    prefix.to_string()
-                } else {
-                    String::new()
-                }
-            }
-        }
+            StoragePath::Stdio => String::new(),
+        };
+        (source_key, target_key)
     }
 }
