@@ -59,6 +59,102 @@ pub const TEST_WEBSITE_REDIRECT: &str = "/redirect";
 
 pub const TEST_EXPIRES: &str = "2055-05-20T00:00:00.000Z";
 
+// Second set of metadata constants (same names as s3sync's TEST_*2).
+// Used for re-sync/update tests to verify metadata changes.
+pub const TEST_CONTENT_DISPOSITION2: &str = "attachment; filename=\"filename2.jpg\"";
+pub const TEST_CONTENT_ENCODING2: &str = "gzip";
+pub const TEST_CONTENT_LANGUAGE2: &str = "en-US,en-GB";
+pub const TEST_CACHE_CONTROL2: &str = "s-maxage=1704800";
+pub const TEST_CONTENT_TYPE2: &str = "application/excel";
+pub const TEST_TAGGING2: &str = "tag1=tag_value1&tag2=tag_valueNew";
+pub const TEST_METADATA_STRING2: &str = "key1=value1,key2=value2,key3=value3";
+pub const TEST_WEBSITE_REDIRECT2: &str = "/redirect2";
+pub const TEST_EXPIRES2: &str = "2055-04-20T00:00:00.000Z";
+
+pub static TEST_METADATA2: Lazy<HashMap<String, String>> = Lazy::new(|| {
+    HashMap::from([
+        ("key1".to_string(), "value1".to_string()),
+        ("key2".to_string(), "value2".to_string()),
+        ("key3".to_string(), "value3".to_string()),
+    ])
+});
+
+// ---------------------------------------------------------------
+// Hard-coded ETag / SHA256 constants for deterministic test data.
+// These are pre-computed from known test data and used to verify
+// data integrity after upload and download operations, exactly
+// replicating s3sync's verification mechanism.
+// ---------------------------------------------------------------
+
+// 9 MiB zero-filled file (create_sized_file with 9 * 1024 * 1024)
+pub const ETAG_9M_ZEROS_NO_CHUNK: &str = "\"b82b4ab87e44976024abc14a1670dac0\"";
+pub const ETAG_9M_ZEROS_8M_CHUNK: &str = "\"d126ef08817d0490e207e456cb0ae080-2\"";
+pub const SHA256_9M_ZEROS: &str =
+    "d2ee4703cd9698945ca7b9fe1689ea3095597eac1a0afd8dba00cac7894fdc43";
+
+// 9 MiB zero-filled file with 5 MiB chunks
+pub const ETAG_9M_ZEROS_5M_CHUNK: &str = "\"31decc4297aaa550907441d49af1735c-2\"";
+
+// Empty file
+pub const ETAG_EMPTY: &str = "\"d41d8cd98f00b204e9800998ecf8427e\"";
+pub const SHA256_EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
+// Random data files use the same seed file as s3sync (test_data/random_data_seed).
+// All constants below are pre-computed from that seed, matching s3sync exactly.
+// Constant names follow s3sync's naming convention for human readability.
+
+// 5M file with 5M chunk (same names as s3sync)
+pub const ETAG_5M_FILE_5M_CHUNK: &str = "\"41c54a21b664d10684a24bb15b86b81b-1\"";
+pub const ETAG_5M_PLUS_1_FILE_5M_CHUNK: &str = "\"c9f6c942564f9ebead5cb09e63b70dd7-2\"";
+pub const ETAG_5M_MINUS_1_FILE_5M_CHUNK: &str = "\"74222dcf8ba716d84efe0dc716360087\"";
+pub const SHA256_5M_FILE_WHOLE: &str =
+    "27d49a61d9a504bf66761f4d3143702d97876ddf5864d4ba22467cd04cdc67f0";
+
+// 8M file with 8M chunk (same names as s3sync)
+pub const ETAG_8M_FILE_NO_CHUNK: &str = "\"e9d3e2caa0ac28fd50b183dac706ee29\"";
+pub const ETAG_8M_FILE_5M_CHUNK: &str = "\"ebff86fc334a63cefaad7a0b621a0109-2\"";
+pub const ETAG_8M_FILE_8M_CHUNK: &str = "\"13698b45ee34dbf0611fe527f76abfc7-1\"";
+pub const ETAG_8M_PLUS_1_FILE_8M_CHUNK: &str = "\"61b0524a157f9391c45c09ae2b48dde4-2\"";
+pub const ETAG_8M_MINUS_1_FILE_8M_CHUNK: &str = "\"c9c7b65a175f43ff8147d8027403e177\"";
+pub const SHA256_8M_FILE_WHOLE: &str =
+    "cd5f57c6ffe3f685104aba6ec7268baab8790603034bdec830228b572d84c5a4";
+
+// 9M file (used in e2e_integrity_check and edge cases)
+pub const ETAG_9M_FILE_NO_CHUNK: &str = "\"f4420c17234bf1af66cb4de063b28a87\"";
+pub const ETAG_9M_FILE_5M_CHUNK: &str = "\"1ff4e384cc994ba509e38b8a58d9472b-2\"";
+pub const ETAG_9M_FILE_7M_CHUNK: &str = "\"edaca60811bb44eceac3a6990ccad6c3-2\"";
+pub const ETAG_9M_FILE_8M_CHUNK: &str = "\"62a3a89ec6809979873b115670cc4c32-2\"";
+pub const ETAG_9M_FILE_9M_CHUNK: &str = "\"83789ae97e315329fe7642d5ac6c444b-1\"";
+pub const SHA256_9M_FILE_WHOLE: &str =
+    "497dfda0dfdb3b0ec8506a3b0afdc15c7612398eeb9ade7ef75fa386f2f70bc4";
+
+// 10M file with 5M chunk (same names as s3sync)
+pub const ETAG_10M_FILE_5M_CHUNK: &str = "\"fd863860e4b73868097377d43bd65a58-2\"";
+pub const ETAG_10M_PLUS_1_FILE_5M_CHUNK: &str = "\"527cc728f7dd89f1ef3256e2ff5c808c-3\"";
+pub const ETAG_10M_MINUS_1_FILE_5M_CHUNK: &str = "\"6e11660e4457458f925f9a92227be331-2\"";
+pub const SHA256_10M_FILE_WHOLE: &str =
+    "d5fc3f080e832d82161f9461291f87989b81a9e6281c33589d9563adefb46055";
+
+// 16M file with 5M chunk (same names as s3sync)
+pub const ETAG_16M_FILE_5M_CHUNK: &str = "\"db5daa6fb02e1c6b2063c5469b99e096-4\"";
+pub const ETAG_16M_PLUS_1_FILE_5M_CHUNK: &str = "\"5e7e959b1416576b46fe9a7b3dea4c5e-4\"";
+pub const ETAG_16M_MINUS_1_FILE_5M_CHUNK: &str = "\"cd769ef00f81a6d450848efda5e8870d-4\"";
+pub const SHA256_16M_FILE_WHOLE: &str =
+    "23bf32cdfd60784647663a160aee7c46ca7941173d48ad37db52713fda4562e1";
+
+// 16M file with 8M chunk (same names as s3sync)
+pub const ETAG_16M_FILE_8M_CHUNK: &str = "\"93724d91845349c1695f224995fa68ea-2\"";
+pub const ETAG_16M_PLUS_1_FILE_8M_CHUNK: &str = "\"4c72ed54398639c8fdbf38f9455353c9-3\"";
+pub const ETAG_16M_MINUS_1_FILE_8M_CHUNK: &str = "\"a34a18fab3e8715b3b1edc3cb9a52647-2\"";
+
+// 30M file with 8M chunk (same names as s3sync)
+pub const ETAG_30M_FILE_NO_CHUNK: &str = "\"94189ebb786dbc25aaf22d3d96e88aeb\"";
+pub const ETAG_30M_FILE_8M_CHUNK: &str = "\"a81230a7666d413e511f9c2c2523947a-4\"";
+pub const ETAG_30M_PLUS_1_FILE_8M_CHUNK: &str = "\"e10f60edd59877a2d1cd80b837460b80-4\"";
+pub const ETAG_30M_MINUS_1_FILE_8M_CHUNK: &str = "\"4f36b633babe3a74e08884d6056ab6df-4\"";
+pub const SHA256_30M_FILE_WHOLE_HEX: &str =
+    "05c1c771d4886e4cefdf0a4c0b907913fe2f829dd767418c94ea278b0b8bc3f9";
+
 pub static TEST_METADATA: Lazy<HashMap<String, String>> = Lazy::new(|| {
     HashMap::from([
         ("key1".to_string(), "value1".to_string()),
@@ -181,6 +277,13 @@ impl TestHelper {
             .send()
             .await
             .unwrap();
+    }
+
+    pub async fn create_bucket_with_sse_c_encryption(&self, bucket: &str, region: &str) {
+        self.create_bucket(bucket, region).await;
+        // Note: SSE-C is per-request encryption (key provided in each request header).
+        // No PutBucketEncryption call needed — the --sse-c and --sse-c-key CLI args
+        // handle this at the request level.
     }
 
     pub async fn is_bucket_exist(&self, bucket: &str) -> bool {
@@ -518,6 +621,71 @@ impl TestHelper {
         true
     }
 
+    pub async fn verify_test_object_metadata2(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+    ) -> bool {
+        let head_object_output = self
+            .client
+            .head_object()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id.clone())
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(
+            head_object_output.cache_control().unwrap(),
+            TEST_CACHE_CONTROL2
+        );
+        assert_eq!(
+            head_object_output.content_disposition().unwrap(),
+            TEST_CONTENT_DISPOSITION2
+        );
+        assert_eq!(
+            head_object_output.content_encoding().unwrap(),
+            TEST_CONTENT_ENCODING2
+        );
+        assert_eq!(
+            head_object_output.content_language().unwrap(),
+            TEST_CONTENT_LANGUAGE2
+        );
+        assert_eq!(
+            head_object_output.content_type().unwrap(),
+            TEST_CONTENT_TYPE2
+        );
+        assert_eq!(
+            head_object_output.metadata().unwrap(),
+            &TEST_METADATA2.clone()
+        );
+        assert_eq!(
+            head_object_output.expires_string.unwrap(),
+            DateTime::from_str(TEST_EXPIRES2, DateTimeFormat::DateTime)
+                .unwrap()
+                .fmt(DateTimeFormat::HttpDate)
+                .unwrap()
+                .to_string()
+        );
+
+        let get_object_tagging_output = self
+            .get_object_tagging(bucket, key, version_id.clone())
+            .await;
+
+        let tag_set = get_object_tagging_output.tag_set();
+        let tag_map = Self::tag_set_to_map(tag_set);
+        let expected_tag_map = HashMap::from([
+            ("tag1".to_string(), "tag_value1".to_string()),
+            ("tag2".to_string(), "tag_valueNew".to_string()),
+        ]);
+
+        assert_eq!(tag_map, expected_tag_map);
+
+        true
+    }
+
     // ---------------------------------------------------------------
     // File utilities
     // ---------------------------------------------------------------
@@ -541,6 +709,8 @@ impl TestHelper {
         file_path
     }
 
+    /// Create a random data file using the same seed file as s3sync.
+    /// This ensures the pre-computed ETag/SHA256 constants match exactly.
     pub fn create_random_data_file(
         dir: &Path,
         name: &str,
@@ -549,12 +719,13 @@ impl TestHelper {
     ) -> Result<PathBuf> {
         let output_path = dir.join(name);
 
-        // Use deterministic pseudo-random data for reproducible tests
-        let mut data = Vec::with_capacity(size_mb * 1024 * 1024 + 1);
-        let pattern: Vec<u8> = (0..1024).map(|i| (i % 256) as u8).collect();
+        let mut seed_file = File::open(RANDOM_DATA_SEED_FILE)?;
+        let mut seed_data = vec![0u8; 1024];
+        seed_file.read_exact(&mut seed_data)?;
 
+        let mut data = Vec::with_capacity(size_mb * 1024 * 1024 + 1);
         for _ in 0..size_mb * 1024 {
-            data.extend_from_slice(&pattern);
+            data.extend_from_slice(&seed_data);
         }
 
         if extra > 0 {
@@ -603,6 +774,111 @@ impl TestHelper {
         let mut buffer = Vec::new();
         file.read_to_end(&mut buffer).unwrap();
         format!("{:x}", md5::compute(&buffer))
+    }
+
+    /// Compute the MD5 hex digest of a byte slice.
+    pub fn compute_md5_hex(data: &[u8]) -> String {
+        format!("{:x}", md5::compute(data))
+    }
+
+    /// Compute the expected S3 ETag for a single-part upload.
+    /// Returns a quoted string like `"\"<md5>\""`.
+    pub fn expected_single_part_etag(data: &[u8]) -> String {
+        format!("\"{}\"", Self::compute_md5_hex(data))
+    }
+
+    /// Compute the expected S3 ETag for a multipart upload with the given chunk size.
+    /// Returns a quoted string like `"\"<md5>-<n>\""`.
+    pub fn expected_multipart_etag(data: &[u8], chunk_size: usize) -> String {
+        let mut part_md5s = Vec::new();
+        for chunk in data.chunks(chunk_size) {
+            part_md5s.extend_from_slice(&md5::compute(chunk).0);
+        }
+        let num_parts = (data.len() + chunk_size - 1) / chunk_size;
+        format!("\"{}-{}\"", Self::compute_md5_hex(&part_md5s), num_parts)
+    }
+
+    /// Verify that an uploaded object's ETag matches the expected MD5
+    /// of the given content (single-part upload).
+    pub async fn verify_uploaded_object_etag(
+        &self,
+        bucket: &str,
+        key: &str,
+        expected_content: &[u8],
+    ) {
+        let head = self.head_object(bucket, key, None).await;
+        let actual_etag = head.e_tag().unwrap();
+        let expected_etag = Self::expected_single_part_etag(expected_content);
+        assert_eq!(
+            actual_etag, expected_etag,
+            "ETag mismatch for s3://{}/{}: actual={}, expected={}",
+            bucket, key, actual_etag, expected_etag
+        );
+    }
+
+    /// Verify that an uploaded object's ETag matches a hard-coded expected value.
+    pub async fn verify_uploaded_object_etag_value(
+        &self,
+        bucket: &str,
+        key: &str,
+        expected_etag: &str,
+    ) {
+        let head = self.head_object(bucket, key, None).await;
+        let actual_etag = head.e_tag().unwrap();
+        assert_eq!(
+            actual_etag, expected_etag,
+            "ETag mismatch for s3://{}/{}: actual={}, expected={}",
+            bucket, key, actual_etag, expected_etag
+        );
+    }
+
+    /// Verify that a downloaded file's MD5 matches the expected content's MD5.
+    pub fn verify_downloaded_file_md5(path: &str, expected_content: &[u8]) {
+        let actual_md5 = Self::md5_digest(path);
+        let expected_md5 = Self::compute_md5_hex(expected_content);
+        assert_eq!(
+            actual_md5, expected_md5,
+            "MD5 mismatch for {}: actual={}, expected={}",
+            path, actual_md5, expected_md5
+        );
+    }
+
+    /// Verify that a downloaded file's MD5 matches a hard-coded expected value.
+    pub fn verify_downloaded_file_md5_value(path: &str, expected_md5: &str) {
+        let actual_md5 = Self::md5_digest(path);
+        assert_eq!(
+            actual_md5, expected_md5,
+            "MD5 mismatch for {}: actual={}, expected={}",
+            path, actual_md5, expected_md5
+        );
+    }
+
+    /// Verify that a downloaded file's SHA256 matches a hard-coded expected value.
+    pub fn verify_downloaded_file_sha256(path: &str, expected_sha256: &str) {
+        let actual_sha256 = Self::get_sha256_from_file(path);
+        assert_eq!(
+            actual_sha256, expected_sha256,
+            "SHA256 mismatch for {}: actual={}, expected={}",
+            path, actual_sha256, expected_sha256
+        );
+    }
+
+    /// Verify that an S3 object's content matches the expected bytes
+    /// by downloading and comparing MD5.
+    pub async fn verify_object_content_md5(
+        &self,
+        bucket: &str,
+        key: &str,
+        expected_content: &[u8],
+    ) {
+        let bytes = self.get_object_bytes(bucket, key, None).await;
+        let actual_md5 = Self::compute_md5_hex(&bytes);
+        let expected_md5 = Self::compute_md5_hex(expected_content);
+        assert_eq!(
+            actual_md5, expected_md5,
+            "Content MD5 mismatch for s3://{}/{}: actual={}, expected={}",
+            bucket, key, actual_md5, expected_md5
+        );
     }
 
     pub fn tag_set_to_map(tag_set: &[Tag]) -> HashMap<String, String> {
