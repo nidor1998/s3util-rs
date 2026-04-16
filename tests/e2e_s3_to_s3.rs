@@ -4,6 +4,8 @@ mod common;
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashMap;
+
     use aws_sdk_s3::types::{ServerSideEncryption, StorageClass};
 
     use common::*;
@@ -1564,6 +1566,591 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
 
         std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_all_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(
+                &bucket1,
+                "ssc_all_meta.txt",
+                b"ssc all metadata test".to_vec(),
+            )
+            .await;
+
+        let source = format!("s3://{}/ssc_all_meta.txt", bucket1);
+        let target = format!("s3://{}/ssc_all_meta.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--cache-control",
+                TEST_CACHE_CONTROL,
+                "--content-disposition",
+                TEST_CONTENT_DISPOSITION,
+                "--content-encoding",
+                TEST_CONTENT_ENCODING,
+                "--content-language",
+                TEST_CONTENT_LANGUAGE,
+                "--content-type",
+                TEST_CONTENT_TYPE,
+                "--metadata",
+                TEST_METADATA_STRING,
+                "--tagging",
+                TEST_TAGGING,
+                "--expires",
+                TEST_EXPIRES,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_test_object_metadata(&bucket2, "ssc_all_meta.txt", None)
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_all_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_all_meta.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_all_meta.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_all_meta.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--cache-control",
+                TEST_CACHE_CONTROL,
+                "--content-disposition",
+                TEST_CONTENT_DISPOSITION,
+                "--content-encoding",
+                TEST_CONTENT_ENCODING,
+                "--content-language",
+                TEST_CONTENT_LANGUAGE,
+                "--content-type",
+                TEST_CONTENT_TYPE,
+                "--metadata",
+                TEST_METADATA_STRING,
+                "--tagging",
+                TEST_TAGGING,
+                "--expires",
+                TEST_EXPIRES,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_test_object_metadata(&bucket2, "ssc_mp_all_meta.bin", None)
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_tagging() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "tagging.txt", b"tagging test".to_vec())
+            .await;
+
+        let source = format!("s3://{}/tagging.txt", bucket1);
+        let target = format!("s3://{}/tagging.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--tagging",
+                TEST_TAGGING,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let tagging = helper
+            .get_object_tagging(&bucket2, "tagging.txt", None)
+            .await;
+        let tag_map = TestHelper::tag_set_to_map(tagging.tag_set());
+        let expected = HashMap::from([
+            ("tag1".to_string(), "tag_value1".to_string()),
+            ("tag2".to_string(), "tag_value2".to_string()),
+        ]);
+        assert_eq!(tag_map, expected);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_with_tagging() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "ssc_tagging.txt", b"ssc tagging test".to_vec())
+            .await;
+
+        let source = format!("s3://{}/ssc_tagging.txt", bucket1);
+        let target = format!("s3://{}/ssc_tagging.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--tagging",
+                TEST_TAGGING,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let tagging = helper
+            .get_object_tagging(&bucket2, "ssc_tagging.txt", None)
+            .await;
+        let tag_map = TestHelper::tag_set_to_map(tagging.tag_set());
+        let expected = HashMap::from([
+            ("tag1".to_string(), "tag_value1".to_string()),
+            ("tag2".to_string(), "tag_value2".to_string()),
+        ]);
+        assert_eq!(tag_map, expected);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_special_chars() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let key = "c++☃test";
+        helper
+            .put_object(&bucket1, key, b"special chars ssc test".to_vec())
+            .await;
+
+        let source = format!("s3://{}/{}", bucket1, key);
+        let target = format!("s3://{}/{}", bucket2, key);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert!(helper.is_object_exist(&bucket2, key, None).await);
+        helper
+            .verify_object_content_md5(&bucket2, key, b"special chars ssc test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_special_chars_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let key = "c++☃test";
+        helper
+            .put_sized_object(&bucket1, key, 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/{}", bucket1, key);
+        let target = format!("s3://{}/{}", bucket2, key);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, key, None).await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper.get_object_bytes(&bucket2, key, None).await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_with_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_meta.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_meta.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_meta.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--cache-control",
+                TEST_CACHE_CONTROL,
+                "--content-type",
+                TEST_CONTENT_TYPE,
+                "--metadata",
+                TEST_METADATA_STRING,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "ssc_mp_meta.bin", None).await;
+        assert_eq!(head.cache_control().unwrap(), TEST_CACHE_CONTROL);
+        assert_eq!(head.content_type().unwrap(), TEST_CONTENT_TYPE);
+        assert_eq!(head.metadata().unwrap(), &TEST_METADATA.clone());
+        let bytes = helper
+            .get_object_bytes(&bucket2, "ssc_mp_meta.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_auto_chunksize_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_auto_meta.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_auto_meta.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_auto_meta.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--cache-control",
+                TEST_CACHE_CONTROL,
+                "--content-type",
+                TEST_CONTENT_TYPE,
+                "--metadata",
+                TEST_METADATA_STRING,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket2, "ssc_mp_auto_meta.bin", None)
+            .await;
+        assert_eq!(head.cache_control().unwrap(), TEST_CACHE_CONTROL);
+        assert_eq!(head.content_type().unwrap(), TEST_CONTENT_TYPE);
+        assert_eq!(head.metadata().unwrap(), &TEST_METADATA.clone());
+        let bytes = helper
+            .get_object_bytes(&bucket2, "ssc_mp_auto_meta.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_with_website_redirect() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(
+                &bucket1,
+                "ssc_redirect.txt",
+                b"ssc website redirect test".to_vec(),
+            )
+            .await;
+
+        let source = format!("s3://{}/ssc_redirect.txt", bucket1);
+        let target = format!("s3://{}/ssc_redirect.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--website-redirect-location",
+                "/redirect",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "ssc_redirect.txt", None).await;
+        assert_eq!(head.website_redirect_location().unwrap(), "/redirect");
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_with_website_redirect() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_redirect.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_redirect.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_redirect.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--website-redirect-location",
+                "/redirect",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket2, "ssc_mp_redirect.bin", None)
+            .await;
+        assert_eq!(head.website_redirect_location().unwrap(), "/redirect");
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_full_object_crc32() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_full_crc32.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_full_crc32.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_full_crc32.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--additional-checksum-algorithm",
+                "CRC32",
+                "--full-object-checksum",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket2, "ssc_mp_full_crc32.bin", None)
+            .await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper
+            .get_object_bytes(&bucket2, "ssc_mp_full_crc32.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_multipart_full_object_crc32c() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "ssc_mp_full_crc32c.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/ssc_mp_full_crc32c.bin", bucket1);
+        let target = format!("s3://{}/ssc_mp_full_crc32c.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                "--full-object-checksum",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket2, "ssc_mp_full_crc32c.bin", None)
+            .await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper
+            .get_object_bytes(&bucket2, "ssc_mp_full_crc32c.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
