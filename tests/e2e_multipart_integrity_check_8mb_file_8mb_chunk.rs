@@ -10,7 +10,7 @@ mod tests {
 
     const SHA256_8M_PLUS_1_FILE_WHOLE: &str =
         "e0a269be5fbff701eba9a07f82027f5a1e22bebc8df2f2027840a02184b84b3c";
-    const SHA256_8M_MINUS_1_FILE_WHOLE: &str =
+    const _SHA256_8M_MINUS_1_FILE_WHOLE: &str =
         "2c7ffa514126e20d9e4fce79b97ff739cb213852400dc1dab07a529da4ec3e44";
 
     /// Upload an 8 MiB file with 8 MiB chunk (single-part multipart) and verify ETag.
