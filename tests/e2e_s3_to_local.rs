@@ -173,7 +173,9 @@ mod tests {
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         // First, upload with SSE-C via cp
         let local_dir = TestHelper::create_temp_dir();
@@ -959,7 +961,9 @@ mod tests {
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         // Upload 9MiB with SSE-C via cp (triggers multipart upload)
         let local_dir = TestHelper::create_temp_dir();

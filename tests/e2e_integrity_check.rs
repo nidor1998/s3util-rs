@@ -3370,7 +3370,9 @@ mod tests {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file = TestHelper::create_test_file(&local_dir, "ssec.dat", b"sse-c integrity");
@@ -3405,7 +3407,9 @@ mod tests {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file =
@@ -3463,8 +3467,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file =
@@ -3829,7 +3837,9 @@ mod tests {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         TestHelper::create_sized_file(&local_dir, "ssec_mp.bin", 9 * 1024 * 1024);
@@ -3864,7 +3874,9 @@ mod tests {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         TestHelper::create_sized_file(&local_dir, "ssec_mp.bin", 9 * 1024 * 1024);
@@ -3920,8 +3932,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         TestHelper::create_sized_file(&local_dir, "ssec_mp_s2s.bin", 9 * 1024 * 1024);

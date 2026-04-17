@@ -13,7 +13,9 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
     BucketInfo, BucketLocationConstraint, BucketType, ChecksumMode, CreateBucketConfiguration,
-    DataRedundancy, LocationInfo, LocationType, Object, Tag,
+    DataRedundancy, LocationInfo, LocationType, Object, ServerSideEncryption,
+    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+    Tag,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -281,9 +283,26 @@ impl TestHelper {
 
     pub async fn create_bucket_with_sse_c_encryption(&self, bucket: &str, region: &str) {
         self.create_bucket(bucket, region).await;
-        // Note: SSE-C is per-request encryption (key provided in each request header).
-        // No PutBucketEncryption call needed — the --sse-c and --sse-c-key CLI args
-        // handle this at the request level.
+
+        let default_encryption = ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build()
+            .unwrap();
+        let rule = ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(default_encryption)
+            .build();
+        let config = ServerSideEncryptionConfiguration::builder()
+            .rules(rule)
+            .build()
+            .unwrap();
+
+        self.client
+            .put_bucket_encryption()
+            .bucket(bucket)
+            .server_side_encryption_configuration(config)
+            .send()
+            .await
+            .unwrap();
     }
 
     pub async fn is_bucket_exist(&self, bucket: &str) -> bool {

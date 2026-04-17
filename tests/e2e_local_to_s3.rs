@@ -189,7 +189,9 @@ mod tests {
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file = TestHelper::create_test_file(&local_dir, "ssec.txt", b"sse-c test");
@@ -1474,7 +1476,9 @@ mod tests {
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file =
@@ -1849,7 +1853,9 @@ mod tests {
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
 
         let local_dir = TestHelper::create_temp_dir();
         let test_file =

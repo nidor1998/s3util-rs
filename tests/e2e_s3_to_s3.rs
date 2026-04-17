@@ -1371,8 +1371,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         // Upload 9MiB with SSE-C into bucket1 via cp
         let tmp_dir = TestHelper::create_temp_dir();
@@ -1437,8 +1441,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         // Upload small object with SSE-C into bucket1 via cp
         let tmp_dir = TestHelper::create_temp_dir();
@@ -1507,8 +1515,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         // Upload 9MiB with SSE-C into bucket1 via cp (triggers multipart upload)
         let tmp_dir = TestHelper::create_temp_dir();
@@ -2159,8 +2171,12 @@ mod tests {
         let helper = TestHelper::new().await;
         let bucket1 = TestHelper::generate_bucket_name();
         let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket1, REGION)
+            .await;
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket2, REGION)
+            .await;
 
         // Upload 9MiB with SSE-C and 5MiB chunks into bucket1 via cp
         let tmp_dir = TestHelper::create_temp_dir();
