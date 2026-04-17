@@ -3366,7 +3366,6 @@ mod tests {
     // --- Single-part SSE-C ---
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn local_to_s3_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
@@ -3402,7 +3401,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_local_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
@@ -3460,7 +3458,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_s3_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
@@ -3828,7 +3825,6 @@ mod tests {
     // --- Multipart SSE-C ---
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn local_to_s3_multipart_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
@@ -3864,7 +3860,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_local_multipart_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
@@ -3920,7 +3915,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_s3_multipart_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;

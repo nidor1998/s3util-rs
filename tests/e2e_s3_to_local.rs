@@ -168,7 +168,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_local_with_sse_c() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -955,7 +954,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "AWS now blocks SSE-C by default on new buckets (account-level setting)"]
     async fn s3_to_local_with_sse_c_multipart_upload() {
         TestHelper::init_dummy_tracing_subscriber();
 
