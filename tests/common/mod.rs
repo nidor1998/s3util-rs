@@ -12,10 +12,10 @@ use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
-    BucketInfo, BucketLocationConstraint, BucketType, ChecksumMode, CreateBucketConfiguration,
-    DataRedundancy, LocationInfo, LocationType, Object, ServerSideEncryption,
-    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
-    Tag,
+    BlockedEncryptionTypes, BucketInfo, BucketLocationConstraint, BucketType, ChecksumMode,
+    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object,
+    ServerSideEncryption, ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
+    ServerSideEncryptionRule, Tag,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -288,8 +288,11 @@ impl TestHelper {
             .sse_algorithm(ServerSideEncryption::Aes256)
             .build()
             .unwrap();
+        // Explicitly unblock SSE-C (new buckets block it by default since April 2026)
+        let unblocked = BlockedEncryptionTypes::builder().build();
         let rule = ServerSideEncryptionRule::builder()
             .apply_server_side_encryption_by_default(default_encryption)
+            .blocked_encryption_types(unblocked)
             .build();
         let config = ServerSideEncryptionConfiguration::builder()
             .rules(rule)
