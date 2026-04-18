@@ -85,7 +85,6 @@ pub struct UploadManager {
 /// `AsyncReadExt::read_exact` can't distinguish "EOF at a clean boundary" from
 /// "EOF mid-read"; this helper treats any short read that terminates with
 /// `read() -> Ok(0)` as a clean EOF and returns the accumulated count.
-#[allow(dead_code)] // temporary: caller is upload_parts_stream, which is dead until Task 7
 async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
     buf: &mut [u8],
@@ -979,7 +978,135 @@ impl UploadManager {
         Ok(parts)
     }
 
-    #[allow(dead_code)] // temporary: caller added in Task 7 (upload_stream)
+    #[allow(dead_code)] // temporary: caller added in Task 8 (S3Storage::put_object_stream)
+    pub async fn upload_stream(
+        &mut self,
+        bucket: &str,
+        key: &str,
+        reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+    ) -> Result<PutObjectOutput> {
+        let checksum_type = if self.config.full_object_checksum {
+            Some(ChecksumType::FullObject)
+        } else {
+            None
+        };
+
+        // Build minimal metadata from config. For stdin-sourced streams, there is
+        // no source GetObjectOutput to pull metadata from; we rely purely on what
+        // the user configured on the CLI.
+        let create_output = self
+            .client
+            .create_multipart_upload()
+            .set_request_payer(self.request_payer.clone())
+            .set_storage_class(self.config.storage_class.clone())
+            .bucket(bucket)
+            .key(key)
+            .set_metadata(self.config.metadata.clone())
+            .set_tagging(self.tagging.clone())
+            .set_content_type(self.config.content_type.clone())
+            .set_server_side_encryption(self.config.sse.clone())
+            .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
+            .set_sse_customer_algorithm(self.config.target_sse_c.clone())
+            .set_sse_customer_key(self.config.target_sse_c_key.clone().key.clone())
+            .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
+            .set_acl(self.config.canned_acl.clone())
+            .set_checksum_algorithm(self.config.additional_checksum_algorithm.clone())
+            .set_checksum_type(checksum_type.clone())
+            .send()
+            .await
+            .context("aws_sdk_s3::client::Client create_multipart_upload() failed.")?;
+
+        let upload_id = create_output.upload_id().unwrap().to_string();
+
+        let result = self
+            .upload_parts_stream(bucket, key, &upload_id, reader)
+            .await;
+
+        let (parts, total_size, source_additional_checksum) = match result {
+            Ok(v) => v,
+            Err(e) => {
+                let _ = self.abort_multipart_upload(bucket, key, &upload_id).await;
+                return Err(e);
+            }
+        };
+
+        if parts.is_empty() {
+            let _ = self.abort_multipart_upload(bucket, key, &upload_id).await;
+            return Err(anyhow!(
+                "upload_stream: no parts uploaded (empty stream reached streaming path)"
+            ));
+        }
+
+        // Store the computed source checksum so validate_checksum picks it up.
+        self.source_additional_checksum = source_additional_checksum.clone();
+
+        let completed_multipart_upload = CompletedMultipartUpload::builder()
+            .set_parts(Some(parts))
+            .build();
+
+        let complete_output = self
+            .client
+            .complete_multipart_upload()
+            .set_request_payer(self.request_payer.clone())
+            .bucket(bucket)
+            .key(key)
+            .upload_id(&upload_id)
+            .multipart_upload(completed_multipart_upload)
+            .set_sse_customer_algorithm(self.config.target_sse_c.clone())
+            .set_sse_customer_key(self.config.target_sse_c_key.clone().key.clone())
+            .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
+            .set_checksum_type(checksum_type)
+            .set_if_none_match(self.if_none_match.clone())
+            .send()
+            .await
+            .context("aws_sdk_s3::client::Client complete_multipart_upload() failed.")?;
+
+        trace!(key = key, upload_id = upload_id, "{complete_output:?}");
+
+        // ETag verification — for stdin there's no source ETag to compare against,
+        // but we compute the synthetic source ETag from the per-part MD5s (same
+        // pattern as the local-source branch in upload_parts_and_complete).
+        if !self.config.disable_etag_verify
+            && !self.express_onezone_storage
+            && !self.config.disable_content_md5_header
+        {
+            let parts_count = ((total_size as f64)
+                / (self.config.transfer_config.multipart_chunksize as f64))
+                .ceil() as i64;
+            let source_e_tag = Some(self.generate_e_tag_hash(parts_count));
+            let target_sse = complete_output.server_side_encryption().cloned();
+            let target_e_tag = complete_output.e_tag().map(|e| e.to_string());
+
+            self.verify_e_tag(key, &None, false, &source_e_tag, &target_sse, &target_e_tag)
+                .await;
+        }
+
+        if !self.config.disable_additional_checksum_verify {
+            let target_checksum = get_additional_checksum_from_multipart_upload_result(
+                &complete_output,
+                self.config.additional_checksum_algorithm.clone(),
+            );
+
+            self.validate_checksum(
+                key,
+                source_additional_checksum,
+                target_checksum,
+                &None,
+                false,
+            )
+            .await;
+        }
+
+        let _ = self
+            .stats_sender
+            .send(SyncStatistics::SyncBytes(total_size))
+            .await;
+
+        Ok(PutObjectOutput::builder()
+            .e_tag(complete_output.e_tag().unwrap())
+            .build())
+    }
+
     // skipcq: RS-R1000
     async fn upload_parts_stream(
         &mut self,
@@ -1183,8 +1310,7 @@ impl UploadManager {
                 );
                 drop(locked_upload_parts);
 
-                let _ = stats_sender
-                    .send_blocking(SyncStatistics::SyncBytes(part_size as u64));
+                let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(part_size as u64));
 
                 Ok(())
             });
