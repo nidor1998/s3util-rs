@@ -5,8 +5,8 @@ use tracing::{debug, info, warn};
 use crate::Config;
 use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
 use crate::transfer::first_chunk;
-use crate::types::SyncStatistics;
 use crate::types::token::PipelineCancellationToken;
+use crate::types::{SyncStatistics, get_additional_checksum};
 
 /// Transfer an S3 object from one S3 location to another.
 ///
@@ -110,6 +110,14 @@ pub async fn transfer(
         first_chunk::validate_content_range(&get_object_output, range.as_ref().unwrap())?;
     }
 
+    // Raw source checksum from the (possibly ranged) GetObject response.
+    // Used as a fallback when final_checksum isn't fetched (e.g., --enable-additional-checksum
+    // not set but the SDK still surfaces a full-object checksum like CRC64NVME).
+    let source_additional_checksum_raw = get_additional_checksum(
+        &get_object_output,
+        config.additional_checksum_algorithm.clone(),
+    );
+
     // Get tagging
     let tagging = if config.disable_tagging {
         None
@@ -183,12 +191,11 @@ pub async fn transfer(
         None
     };
 
-    // Source checksum for verification. `get_final_checksum` returns None unless
-    // --enable-additional-checksum is set, which is the explicit user opt-in for
-    // source verification. Without that flag, we deliberately skip verification
-    // rather than silently comparing whatever checksum fields the SDK happened to
-    // populate on the GetObject response.
-    let source_checksum_for_verify = final_checksum.clone();
+    // Prefer final_checksum (HEAD-fetched for ranged requests when --enable-additional-checksum
+    // is set) over the raw ranged response. For composite multipart checksums (SHA256 etc.),
+    // a ranged GET doesn't carry the composite value, but HEAD does. When mode is not set,
+    // get_final_checksum returns None and we fall back to whatever the ranged GET exposed.
+    let source_checksum_for_verify = final_checksum.clone().or(source_additional_checksum_raw);
 
     let put_object_output = target
         .put_object(
