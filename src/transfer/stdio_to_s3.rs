@@ -16,6 +16,7 @@ use crate::types::{ObjectChecksum, SyncStatistics};
 /// Read up to `limit` bytes from `reader` into a fresh `Vec<u8>`.
 /// If the returned Vec's length is `< limit`, the reader reached EOF.
 /// If `== limit`, the limit was reached and the reader may have more data.
+/// `limit` must be > 0; with `limit = 0` the EOF vs limit-reached distinction collapses.
 #[allow(dead_code)] // temporary: caller added in Task 10 (transfer dispatch)
 async fn probe_up_to<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
@@ -221,7 +222,8 @@ mod probe_tests {
     async fn leaves_remaining_bytes_in_reader() {
         let data = vec![5u8; 50];
         let mut reader = Cursor::new(data);
-        let _probed = probe_up_to(&mut reader, 20).await.unwrap();
+        let probed = probe_up_to(&mut reader, 20).await.unwrap();
+        assert_eq!(probed, vec![5u8; 20]);
         // Read the rest — should be 30 bytes left
         let mut rest = Vec::new();
         tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut rest)
