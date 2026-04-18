@@ -383,6 +383,13 @@ fn extract_keys(config: &Config) -> Result<(String, String)> {
         StoragePath::S3 { prefix, .. } => {
             // If target is empty or ends with '/', treat as directory prefix — append source basename
             if prefix.is_empty() || prefix.ends_with('/') {
+                // With a stdin source there's no basename to derive, so the user must
+                // spell the target key explicitly (e.g. `s3://bucket/key`).
+                if source_basename.is_empty() {
+                    return Err(anyhow!(
+                        "target S3 key is required when source is stdin (e.g. s3://bucket/key)"
+                    ));
+                }
                 format!("{prefix}{source_basename}")
             } else {
                 prefix.clone()
@@ -577,5 +584,19 @@ mod tests {
         let (src, tgt) = extract_keys(&config).unwrap();
         assert_eq!(src, "");
         assert_eq!(tgt, "key");
+    }
+
+    #[test]
+    fn extract_keys_stdio_to_s3_bucket_only_errors() {
+        let config = build_config(vec!["s3util", "cp", "-", "s3://b"]);
+        let err = extract_keys(&config).unwrap_err();
+        assert!(err.to_string().contains("target S3 key is required"));
+    }
+
+    #[test]
+    fn extract_keys_stdio_to_s3_prefix_with_slash_errors() {
+        let config = build_config(vec!["s3util", "cp", "-", "s3://b/dir/"]);
+        let err = extract_keys(&config).unwrap_err();
+        assert!(err.to_string().contains("target S3 key is required"));
     }
 }
