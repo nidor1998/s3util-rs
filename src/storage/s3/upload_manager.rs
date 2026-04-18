@@ -1036,14 +1036,11 @@ impl UploadManager {
             ));
         }
 
-        // Store the computed source checksum so validate_checksum picks it up.
-        self.source_additional_checksum = source_additional_checksum.clone();
-
         let completed_multipart_upload = CompletedMultipartUpload::builder()
             .set_parts(Some(parts))
             .build();
 
-        let complete_output = self
+        let complete_output = match self
             .client
             .complete_multipart_upload()
             .set_request_payer(self.request_payer.clone())
@@ -1058,7 +1055,14 @@ impl UploadManager {
             .set_if_none_match(self.if_none_match.clone())
             .send()
             .await
-            .context("aws_sdk_s3::client::Client complete_multipart_upload() failed.")?;
+            .context("aws_sdk_s3::client::Client complete_multipart_upload() failed.")
+        {
+            Ok(output) => output,
+            Err(e) => {
+                let _ = self.abort_multipart_upload(bucket, key, &upload_id).await;
+                return Err(e);
+            }
+        };
 
         trace!(key = key, upload_id = upload_id, "{complete_output:?}");
 
@@ -1069,9 +1073,7 @@ impl UploadManager {
             && !self.express_onezone_storage
             && !self.config.disable_content_md5_header
         {
-            let parts_count = ((total_size as f64)
-                / (self.config.transfer_config.multipart_chunksize as f64))
-                .ceil() as i64;
+            let parts_count = self.calculate_parts_count(total_size as i64);
             let source_e_tag = Some(self.generate_e_tag_hash(parts_count));
             let target_sse = complete_output.server_side_encryption().cloned();
             let target_e_tag = complete_output.e_tag().map(|e| e.to_string());
@@ -1095,11 +1097,6 @@ impl UploadManager {
             )
             .await;
         }
-
-        let _ = self
-            .stats_sender
-            .send(SyncStatistics::SyncBytes(total_size))
-            .await;
 
         Ok(PutObjectOutput::builder()
             .e_tag(complete_output.e_tag().unwrap())
