@@ -11,7 +11,6 @@ use aws_sdk_s3::operation::head_object::{HeadObjectError, HeadObjectOutput};
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::primitives::ByteStream;
-use aws_sdk_s3::primitives::DateTime;
 use aws_sdk_s3::types::{
     ChecksumAlgorithm, ChecksumMode, ObjectPart, RequestPayer, ServerSideEncryption, StorageClass,
     Tagging,
@@ -20,7 +19,6 @@ use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_runtime_api::http::{Response, StatusCode};
 use aws_smithy_types::body::SdkBody;
 use aws_smithy_types::byte_stream::Length;
-use aws_smithy_types_convert::date_time::DateTimeExt;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use leaky_bucket::RateLimiter;
@@ -47,9 +45,8 @@ use crate::storage::e_tag_verify::{
 use crate::storage::{
     Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
 };
-use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncBytes, SyncWarning};
+use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
 use crate::types::error::S3syncError;
-use crate::types::event_callback::{EventData, EventType};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
     ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics, is_full_object_checksum,
@@ -74,7 +71,6 @@ impl StorageFactory for LocalStorageFactory {
         stats_sender: Sender<SyncStatistics>,
         _client_config: Option<ClientConfig>,
         _request_payer: Option<RequestPayer>,
-        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
         _object_to_list: Option<String>,
@@ -84,7 +80,6 @@ impl StorageFactory for LocalStorageFactory {
             path,
             cancellation_token,
             stats_sender,
-            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         )
@@ -97,19 +92,16 @@ struct LocalStorage {
     config: Config,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-    rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
     rate_limit_bandwidth: Option<Arc<RateLimiter>>,
     has_warning: Arc<AtomicBool>,
 }
 
 impl LocalStorage {
-    #[allow(clippy::too_many_arguments)]
     async fn create(
         config: Config,
         path: StoragePath,
         cancellation_token: PipelineCancellationToken,
         stats_sender: Sender<SyncStatistics>,
-        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
     ) -> Storage {
@@ -121,22 +113,11 @@ impl LocalStorage {
             config,
             cancellation_token,
             stats_sender,
-            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         };
 
         Box::new(storage)
-    }
-
-    async fn exec_rate_limit_objects_per_sec(&self) {
-        if self.rate_limit_objects_per_sec.is_some() {
-            self.rate_limit_objects_per_sec
-                .as_ref()
-                .unwrap()
-                .acquire(1)
-                .await;
-        }
     }
 
     // I can't find a way to simplify this function.
@@ -154,18 +135,7 @@ impl LocalStorage {
         target_object_parts: Option<Vec<ObjectPart>>,
         target_content_length: u64,
         source_express_onezone_storage: bool,
-        source_version_id: Option<String>,
-        source_last_modified: Option<DateTime>,
     ) -> Result<()> {
-        let mut event_data = EventData::new(EventType::UNDEFINED);
-        event_data.key = Some(key.to_string());
-        event_data.source_version_id = source_version_id;
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        event_data.source_size = Some(source_content_length);
-        event_data.target_size = Some(target_content_length);
-        event_data.source_last_modified = source_last_modified;
-
         let key = key.to_string();
         if !self.config.disable_etag_verify && !source_express_onezone_storage {
             debug!(
@@ -198,6 +168,22 @@ impl LocalStorage {
                         .await?,
                     )
                 }
+            } else if self.config.transfer_config.auto_chunksize
+                && !is_multipart_upload_e_tag(source_e_tag)
+            {
+                // --auto-chunksize with a single-part source: match S3's single-part ETag
+                // via a whole-file hash. Without this branch, the fallback below would
+                // use default multipart settings and synthesize a chunked local ETag,
+                // even though the user explicitly asked us to match the source's chunking.
+                Some(
+                    generate_e_tag_hash_from_path(
+                        real_path,
+                        source_content_length as usize + 1,
+                        source_content_length as usize + 1,
+                        self.cancellation_token.clone(),
+                    )
+                    .await?,
+                )
             } else {
                 Some(
                     generate_e_tag_hash_from_path(
@@ -248,14 +234,6 @@ impl LocalStorage {
                                 .to_string()
                         };
 
-                        event_data.event_type = EventType::SYNC_ETAG_MISMATCH;
-                        // skipcq: RS-W1070
-                        event_data.target_etag = target_e_tag.clone();
-                        self.config
-                            .event_manager
-                            .trigger_event(event_data.clone())
-                            .await;
-
                         let source_e_tag = source_e_tag.clone().unwrap();
                         let target_e_tag = target_e_tag.clone().unwrap();
                         warn!(
@@ -269,14 +247,6 @@ impl LocalStorage {
                         self.set_warning();
                     }
                 } else {
-                    event_data.event_type = EventType::SYNC_ETAG_VERIFIED;
-                    // skipcq: RS-W1070
-                    event_data.target_etag = target_e_tag.clone();
-                    self.config
-                        .event_manager
-                        .trigger_event(event_data.clone())
-                        .await;
-
                     let source_e_tag = source_e_tag.clone().unwrap();
                     let target_e_tag = target_e_tag.clone().unwrap();
 
@@ -299,13 +269,6 @@ impl LocalStorage {
                 message
             );
 
-            event_data.event_type = EventType::SYNC_WARNING;
-            event_data.message = Some(message.to_string());
-            self.config
-                .event_manager
-                .trigger_event(event_data.clone())
-                .await;
-
             self.send_stats(SyncWarning { key: key.clone() }).await;
             self.set_warning();
         }
@@ -316,13 +279,6 @@ impl LocalStorage {
         if self.config.additional_checksum_mode.is_none() {
             return Ok(());
         }
-
-        event_data.event_type = EventType::UNDEFINED;
-        event_data.message = None;
-        // skipcq: RS-W1070
-        event_data.checksum_algorithm = source_checksum_algorithm.clone();
-        // skipcq: RS-W1070
-        event_data.source_checksum = source_final_checksum.clone();
 
         if let Some(source_final_checksum) = source_final_checksum {
             debug!(
@@ -368,10 +324,6 @@ impl LocalStorage {
                 source_checksum_algorithm.as_ref().unwrap().as_str();
 
             if source_final_checksum != target_final_checksum {
-                event_data.event_type = EventType::SYNC_CHECKSUM_MISMATCH;
-                event_data.target_checksum = Some(target_final_checksum.clone());
-                self.config.event_manager.trigger_event(event_data).await;
-
                 warn!(
                     key = key,
                     additional_checksum_algorithm = additional_checksum_algorithm,
@@ -383,10 +335,6 @@ impl LocalStorage {
                 self.send_stats(SyncWarning { key }).await;
                 self.set_warning();
             } else {
-                event_data.event_type = EventType::SYNC_CHECKSUM_VERIFIED;
-                event_data.target_checksum = Some(target_final_checksum.clone());
-                self.config.event_manager.trigger_event(event_data).await;
-
                 debug!(
                     key = &key,
                     additional_checksum_algorithm = additional_checksum_algorithm,
@@ -423,47 +371,9 @@ impl LocalStorage {
             None
         };
         let source_storage_class = get_object_output.storage_class().cloned();
-        let source_version_id = get_object_output.version_id().map(|v| v.to_string());
-
-        let source_last_modified =
-            DateTime::from_millis(get_object_output.last_modified.unwrap().to_millis()?)
-                .to_chrono_utc()?
-                .to_rfc3339();
-        let source_last_modified_raw = get_object_output.last_modified().copied();
 
         if fs_util::check_directory_traversal(key) {
             return Err(anyhow!(S3syncError::DirectoryTraversalError));
-        }
-
-        if self.config.dry_run {
-            self.send_stats(SyncBytes(get_object_output.content_length().unwrap() as u64))
-                .await;
-
-            let real_path = PathBuf::from(key).to_string_lossy().to_string();
-
-            let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-            event_data.key = Some(key.to_string());
-            // skipcq: RS-W1070
-            event_data.source_version_id = get_object_output
-                .version_id()
-                .as_ref()
-                .map(|v| v.to_string());
-            event_data.source_last_modified = get_object_output.last_modified;
-            // skipcq: RS-W1070
-            event_data.source_etag = source_e_tag.clone();
-            event_data.source_size = get_object_output.content_length().map(|v| v as u64);
-            event_data.target_size = get_object_output.content_length().map(|v| v as u64); // Assuming the size is the same as source
-            self.config.event_manager.trigger_event(event_data).await;
-
-            info!(
-                key = key,
-                real_path = real_path,
-                source_last_modified = source_last_modified,
-                size = get_object_output.content_length().unwrap(),
-                "[dry-run] sync completed.",
-            );
-
-            return Ok(PutObjectOutput::builder().build());
         }
 
         if fs_util::is_key_a_directory(key) {
@@ -481,8 +391,6 @@ impl LocalStorage {
             .as_ref()
             .unwrap()
             .subsec_nanos();
-
-        self.exec_rate_limit_objects_per_sec().await;
 
         let byte_stream = convert_to_buf_byte_stream_with_callback(
             get_object_output.body.into_async_read(),
@@ -538,25 +446,6 @@ impl LocalStorage {
 
         let target_content_length = fs_util::get_file_size(&real_path).await?;
 
-        let mut event_data = EventData::new(EventType::SYNC_WRITE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.source_size = Some(source_content_length);
-        event_data.byte_written = Some(target_content_length);
-        self.config.event_manager.trigger_event(event_data).await;
-
-        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.source_last_modified = source_last_modified_raw;
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        event_data.source_size = Some(source_content_length);
-        event_data.target_size = Some(target_content_length);
-        self.config.event_manager.trigger_event(event_data).await;
-
         self.verify_local_file(
             key,
             object_checksum,
@@ -569,8 +458,6 @@ impl LocalStorage {
             target_object_parts,
             target_content_length,
             source_storage_class == Some(StorageClass::ExpressOnezone),
-            source_version_id,
-            source_last_modified_raw,
         )
         .await?;
 
@@ -622,14 +509,9 @@ impl LocalStorage {
             .as_ref()
             .unwrap()
             .subsec_nanos();
-        let source_last_modified_raw = get_object_output_first_chunk.last_modified().copied();
 
         if fs_util::check_directory_traversal(key) {
             return Err(anyhow!(S3syncError::DirectoryTraversalError));
-        }
-
-        if self.config.dry_run {
-            panic!("dry-run is not supported for multipart upload.");
         }
 
         if fs_util::is_key_a_directory(key) {
@@ -652,8 +534,6 @@ impl LocalStorage {
             None,
             None,
         );
-
-        self.exec_rate_limit_objects_per_sec().await;
 
         let first_chunk_content_length =
             get_object_output_first_chunk.content_length.unwrap() as usize;
@@ -719,8 +599,6 @@ impl LocalStorage {
             let additional_checksum_mode = self.config.additional_checksum_mode.clone();
 
             let total_upload_size = Arc::clone(&shared_total_upload_size);
-
-            let event_manager = self.config.event_manager.clone();
 
             let cancellation_token = self.cancellation_token.clone();
             let mut chunk_whole_data = Vec::<u8>::with_capacity(chunksize);
@@ -844,15 +722,6 @@ impl LocalStorage {
                 cloned_file.write_all(&chunk_whole_data).await?;
                 cloned_file.flush().await?;
 
-                let mut event_data = EventData::new(EventType::SYNC_WRITE);
-                event_data.key = Some(source_key.to_string());
-                // skipcq: RS-W1070
-                event_data.source_version_id = source_version_id.clone();
-                event_data.source_size = Some(source_size);
-                event_data.part_number = Some(part_number);
-                event_data.byte_written = Some(chunk_whole_data_size as u64);
-                event_manager.trigger_event(event_data).await;
-
                 let mut upload_size_vec = total_upload_size.lock().unwrap();
                 upload_size_vec.push(chunk_whole_data_size as u64);
 
@@ -915,17 +784,6 @@ impl LocalStorage {
 
         let target_content_length = fs_util::get_file_size(&real_path).await?;
 
-        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.source_last_modified = source_last_modified_raw;
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        event_data.source_size = Some(source_size);
-        event_data.target_size = Some(target_content_length);
-        self.config.event_manager.trigger_event(event_data).await;
-
         self.verify_local_file(
             key,
             object_checksum,
@@ -938,8 +796,6 @@ impl LocalStorage {
             target_object_parts,
             target_content_length,
             source_storage_class == Some(StorageClass::ExpressOnezone),
-            source_version_id,
-            source_last_modified_raw,
         )
         .await?;
 
@@ -1024,7 +880,7 @@ impl StorageTrait for LocalStorage {
             content_range = None;
         }
 
-        if self.config.dry_run || self.config.disable_additional_checksum_verify {
+        if self.config.disable_additional_checksum_verify {
             need_checksum = false;
         }
 
@@ -1150,10 +1006,6 @@ impl StorageTrait for LocalStorage {
             let error = e.to_string();
 
             let message = "failed to access local file.";
-            let mut event_data = EventData::new(EventType::SYNC_WARNING);
-            event_data.key = Some(key.to_string());
-            event_data.message = Some(format!("{message}: {error}"));
-            self.config.event_manager.trigger_event(event_data).await;
 
             let source = e.source();
             warn!(error = error, source = source, message);
@@ -1232,9 +1084,7 @@ impl StorageTrait for LocalStorage {
         get_object_output_first_chunk: GetObjectOutput,
         _tagging: Option<String>,
         object_checksum: Option<ObjectChecksum>,
-        _if_match: Option<String>,
         _if_none_match: Option<String>,
-        _copy_source_if_match: Option<String>,
     ) -> Result<PutObjectOutput> {
         if get_object_output_first_chunk.content_range.is_none() {
             // with --dry-run, it always goes to a single part upload.
@@ -1275,20 +1125,9 @@ impl StorageTrait for LocalStorage {
         &self,
         key: &str,
         _version_id: Option<String>,
-        _if_match: Option<String>,
     ) -> Result<DeleteObjectOutput> {
         let file_to_delete = PathBuf::from(key);
         let lossy_path = file_to_delete.to_string_lossy().to_string();
-
-        if self.config.dry_run {
-            info!(
-                key = key,
-                real_path = lossy_path,
-                "[dry-run] delete completed.",
-            );
-
-            return Ok(DeleteObjectOutput::builder().build());
-        }
 
         tokio::fs::remove_file(&file_to_delete).await?;
 

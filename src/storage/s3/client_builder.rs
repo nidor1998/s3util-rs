@@ -4,6 +4,7 @@ use aws_config::{BehaviorVersion, ConfigLoader};
 use aws_runtime::env_config::file::{EnvConfigFileKind, EnvConfigFiles};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::config::Builder;
+use std::path::PathBuf;
 use std::time::Duration;
 
 use crate::config::ClientConfig;
@@ -11,6 +12,29 @@ use aws_smithy_runtime_api::client::stalled_stream_protection::StalledStreamProt
 use aws_smithy_types::timeout::TimeoutConfig;
 use aws_types::SdkConfig;
 use aws_types::region::Region;
+
+/// Build an `EnvConfigFiles` that reflects any user-provided `--aws-config-file`
+/// and `--aws-shared-credentials-file` overrides, falling back to system defaults
+/// for whichever file the user did *not* override. Returns `None` when the user
+/// overrode nothing (so the caller leaves SDK defaults untouched).
+fn build_profile_files(
+    aws_config_file: Option<&PathBuf>,
+    aws_shared_credentials_file: Option<&PathBuf>,
+) -> Option<EnvConfigFiles> {
+    if aws_config_file.is_none() && aws_shared_credentials_file.is_none() {
+        return None;
+    }
+    let mut builder = EnvConfigFiles::builder();
+    match aws_config_file {
+        Some(p) => builder = builder.with_file(EnvConfigFileKind::Config, p),
+        None => builder = builder.include_default_config_file(true),
+    }
+    match aws_shared_credentials_file {
+        Some(p) => builder = builder.with_file(EnvConfigFileKind::Credentials, p),
+        None => builder = builder.include_default_credentials_file(true),
+    }
+    Some(builder.build())
+}
 
 impl ClientConfig {
     pub async fn create_client(&self) -> Client {
@@ -61,15 +85,13 @@ impl ClientConfig {
             crate::types::S3Credentials::Profile(profile_name) => {
                 let mut builder = aws_config::profile::ProfileFileCredentialsProvider::builder();
 
-                if let Some(aws_shared_credentials_file) = self
-                    .client_config_location
-                    .aws_shared_credentials_file
-                    .as_ref()
-                {
-                    let profile_files = EnvConfigFiles::builder()
-                        .with_file(EnvConfigFileKind::Credentials, aws_shared_credentials_file)
-                        .build();
-                    builder = builder.profile_files(profile_files)
+                if let Some(profile_files) = build_profile_files(
+                    self.client_config_location.aws_config_file.as_ref(),
+                    self.client_config_location
+                        .aws_shared_credentials_file
+                        .as_ref(),
+                ) {
+                    builder = builder.profile_files(profile_files);
                 }
 
                 config_loader =
@@ -84,10 +106,12 @@ impl ClientConfig {
         let mut builder = aws_config::profile::ProfileFileRegionProvider::builder();
 
         if let crate::types::S3Credentials::Profile(profile_name) = &self.credential {
-            if let Some(aws_config_file) = self.client_config_location.aws_config_file.as_ref() {
-                let profile_files = EnvConfigFiles::builder()
-                    .with_file(EnvConfigFileKind::Config, aws_config_file)
-                    .build();
+            if let Some(profile_files) = build_profile_files(
+                self.client_config_location.aws_config_file.as_ref(),
+                self.client_config_location
+                    .aws_shared_credentials_file
+                    .as_ref(),
+            ) {
                 builder = builder.profile_files(profile_files);
             }
             builder = builder.profile_name(profile_name)

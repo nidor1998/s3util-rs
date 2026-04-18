@@ -5,7 +5,6 @@ mod common;
 #[cfg(test)]
 mod tests {
     use common::*;
-    use uuid::Uuid;
 
     use super::*;
 

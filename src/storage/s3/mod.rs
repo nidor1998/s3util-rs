@@ -22,11 +22,8 @@ use crate::config::ClientConfig;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::storage::s3::upload_manager::UploadManager;
 use crate::storage::{
-    Storage, StorageFactory, StorageTrait, convert_head_to_get_object_output,
-    convert_to_buf_byte_stream_with_callback,
+    Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
 };
-use crate::types::SyncStatistics::SyncBytes;
-use crate::types::event_callback::{EventData, EventType};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
     ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics, get_additional_checksum,
@@ -49,7 +46,6 @@ impl StorageFactory for S3StorageFactory {
         stats_sender: Sender<SyncStatistics>,
         client_config: Option<ClientConfig>,
         request_payer: Option<RequestPayer>,
-        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
         _object_to_list: Option<String>,
@@ -63,7 +59,6 @@ impl StorageFactory for S3StorageFactory {
                 client_config.as_ref().unwrap().create_client().await,
             )),
             request_payer,
-            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         )
@@ -79,7 +74,6 @@ struct S3Storage {
     client: Option<Arc<Client>>,
     request_payer: Option<RequestPayer>,
     stats_sender: Sender<SyncStatistics>,
-    rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
     rate_limit_bandwidth: Option<Arc<RateLimiter>>,
     has_warning: Arc<AtomicBool>,
 }
@@ -93,7 +87,6 @@ impl S3Storage {
         stats_sender: Sender<SyncStatistics>,
         client: Option<Arc<Client>>,
         request_payer: Option<RequestPayer>,
-        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
     ) -> Storage {
@@ -110,22 +103,11 @@ impl S3Storage {
             client,
             request_payer,
             stats_sender,
-            rate_limit_objects_per_sec,
             rate_limit_bandwidth,
             has_warning,
         };
 
         Box::new(storage)
-    }
-
-    async fn exec_rate_limit_objects_per_sec(&self) {
-        if self.rate_limit_objects_per_sec.is_some() {
-            self.rate_limit_objects_per_sec
-                .as_ref()
-                .unwrap()
-                .acquire(1)
-                .await;
-        }
     }
 }
 
@@ -149,28 +131,6 @@ impl StorageTrait for S3Storage {
         sse_c_key: SseCustomerKey,
         sse_c_key_md5: Option<String>,
     ) -> Result<GetObjectOutput> {
-        if self.config.dry_run {
-            let head_object_result = self
-                .client
-                .as_ref()
-                .unwrap()
-                .head_object()
-                .set_request_payer(self.request_payer.clone())
-                .bucket(&self.bucket)
-                .key(key)
-                .set_version_id(version_id)
-                .set_checksum_mode(checksum_mode)
-                .set_range(range)
-                .set_sse_customer_algorithm(sse_c)
-                .set_sse_customer_key(sse_c_key.key.clone())
-                .set_sse_customer_key_md5(sse_c_key_md5)
-                .send()
-                .await
-                .context("aws_sdk_s3::client::head_object() failed.")?;
-
-            return Ok(convert_head_to_get_object_output(head_object_result));
-        }
-
         let result = self
             .client
             .as_ref()
@@ -405,9 +365,7 @@ impl StorageTrait for S3Storage {
         mut get_object_output_first_chunk: GetObjectOutput,
         tagging: Option<String>,
         object_checksum: Option<ObjectChecksum>,
-        if_match: Option<String>,
         if_none_match: Option<String>,
-        copy_source_if_match: Option<String>,
     ) -> Result<PutObjectOutput> {
         let mut version_id = "".to_string();
         if let Some(source_version_id) = get_object_output_first_chunk.version_id().as_ref() {
@@ -422,39 +380,6 @@ impl StorageTrait for S3Storage {
         )
         .to_chrono_utc()?
         .to_rfc3339();
-
-        if self.config.dry_run {
-            self.send_stats(SyncBytes(source_size)).await;
-
-            let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-            event_data.key = Some(key.to_string());
-            // skipcq: RS-W1070
-            event_data.source_version_id = get_object_output_first_chunk
-                .version_id()
-                .as_ref()
-                .map(|v| v.to_string());
-            event_data.source_last_modified =
-                get_object_output_first_chunk.last_modified().copied();
-            // skipcq: RS-W1070
-            event_data.source_etag = get_object_output_first_chunk.e_tag().map(|e| e.to_string());
-            event_data.source_size = Some(source_size);
-            event_data.target_size = Some(source_size); // Assuming the size is the same as source
-            self.config.event_manager.trigger_event(event_data).await;
-
-            info!(
-                key = key,
-                source_version_id = version_id,
-                source_last_modified = source_last_modified,
-                target_key = target_key,
-                size = source_size.to_string(),
-                if_match = if_match.clone(),
-                if_none_match = if_none_match.clone(),
-                copy_source_if_match = copy_source_if_match.clone(),
-                "[dry-run] sync completed.",
-            );
-
-            return Ok(PutObjectOutput::builder().build());
-        }
 
         // In the case of full object checksum, we don't need to calculate checksum for each part and
         // don't need to pass it to the upload manager.
@@ -487,9 +412,13 @@ impl StorageTrait for S3Storage {
             None
         };
 
+        // Use a dummy stats sender for the body wrapper — we don't want SyncBytes
+        // sent when reading from source (reads can be instant for local files).
+        // Instead, SyncBytes are sent after each upload_part/singlepart upload completes.
+        let (dummy_stats_sender, _dummy_stats_receiver) = async_channel::unbounded();
         get_object_output_first_chunk.body = convert_to_buf_byte_stream_with_callback(
             get_object_output_first_chunk.body.into_async_read(),
-            self.get_stats_sender(),
+            dummy_stats_sender,
             self.rate_limit_bandwidth.clone(),
             checksum,
             object_checksum.clone(),
@@ -508,19 +437,14 @@ impl StorageTrait for S3Storage {
             source_key.to_string(),
             source_size,
             source_additional_checksum,
-            if_match,
             if_none_match,
-            copy_source_if_match,
             self.has_warning.clone(),
         );
-
-        self.exec_rate_limit_objects_per_sec().await;
 
         let put_object_output = upload_manager
             .upload(&self.bucket, &target_key, get_object_output_first_chunk)
             .await?;
 
-        // If preprocess_callback is registered and preprocess was cancelled, e_tag will be None.
         if put_object_output.e_tag.is_some() {
             info!(
                 key = key,
@@ -543,19 +467,6 @@ impl StorageTrait for S3Storage {
     ) -> Result<PutObjectTaggingOutput> {
         let target_key = key.to_string();
         let version_id_str = version_id.clone().unwrap_or_default();
-
-        if self.config.dry_run {
-            info!(
-                key = key,
-                target_version_id = version_id_str,
-                target_key = target_key,
-                "[dry-run] sync(tagging only) completed.",
-            );
-
-            return Ok(PutObjectTaggingOutput::builder().build());
-        }
-
-        self.exec_rate_limit_objects_per_sec().await;
 
         let result = self
             .client
@@ -585,24 +496,9 @@ impl StorageTrait for S3Storage {
         &self,
         key: &str,
         version_id: Option<String>,
-        if_match: Option<String>,
     ) -> Result<DeleteObjectOutput> {
         let target_key = key.to_string();
         let version_id_str = version_id.clone().unwrap_or_default();
-
-        if self.config.dry_run {
-            info!(
-                key = key,
-                target_version_id = version_id_str,
-                target_key = target_key,
-                if_match = if_match.clone(),
-                "[dry-run] delete completed.",
-            );
-
-            return Ok(DeleteObjectOutput::builder().build());
-        }
-
-        self.exec_rate_limit_objects_per_sec().await;
 
         let result = self
             .client
@@ -613,7 +509,6 @@ impl StorageTrait for S3Storage {
             .bucket(&self.bucket)
             .key(&target_key)
             .set_version_id(version_id.clone())
-            .set_if_match(if_match.clone())
             .send()
             .await
             .context("aws_sdk_s3::client::delete_object() failed.")?;
@@ -622,7 +517,6 @@ impl StorageTrait for S3Storage {
             key = key,
             target_version_id = version_id_str,
             target_key = target_key,
-            if_match = if_match.clone(),
             "delete completed.",
         );
 

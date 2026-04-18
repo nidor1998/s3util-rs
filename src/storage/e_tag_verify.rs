@@ -222,8 +222,8 @@ mod tests {
     use std::path::PathBuf;
     use tracing_subscriber::EnvFilter;
 
-    pub const LARGE_FILE_PATH: &str = "./playground/large_data/50MiB";
-    pub const LARGE_FILE_DIR: &str = "./playground/large_data/";
+    pub const LARGE_FILE_PATH: &str = "./tests/fixtures/large_data/50MiB";
+    pub const LARGE_FILE_DIR: &str = "./tests/fixtures/large_data/";
     pub const LARGE_FILE_SIZE: usize = 50 * 1024 * 1024;
     pub const LARGE_FILE_S3_MULTIPART_ETAG: &str = "\"73d8a713f6f80a5e82a0ea8c92f0cab1-7\"";
     pub const LARGE_FILE_S3_CHUNK_5MB_ETAG: &str = "\"264bd8c2d8d9f3350ef680af6ddc51f2-10\"";

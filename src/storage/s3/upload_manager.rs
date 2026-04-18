@@ -5,17 +5,18 @@ use aws_sdk_s3::operation::abort_multipart_upload::AbortMultipartUploadOutput;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadOutput;
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
-use aws_sdk_s3::operation::put_object::builders::PutObjectOutputBuilder;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
     ChecksumAlgorithm, ChecksumType, CompletedMultipartUpload, CompletedPart, MetadataDirective,
-    ObjectPart, RequestPayer, ServerSideEncryption, StorageClass, TaggingDirective,
+    ObjectCannedAcl, ObjectPart, RequestPayer, ServerSideEncryption, StorageClass,
+    TaggingDirective,
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use base64::{Engine as _, engine::general_purpose};
 use chrono::SecondsFormat;
 use futures::stream::{FuturesUnordered, StreamExt};
+use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::io::AsyncReadExt;
@@ -28,22 +29,33 @@ use crate::storage;
 use crate::storage::e_tag_verify::{generate_e_tag_hash, is_multipart_upload_e_tag};
 use crate::storage::{
     Storage, convert_copy_to_put_object_output, convert_copy_to_upload_part_output,
-    convert_to_buf_byte_stream_with_callback, get_range_from_content_range,
-    parse_range_header_string,
+    get_range_from_content_range, parse_range_header_string,
 };
 use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
 use crate::types::error::S3syncError;
-use crate::types::event_callback::{EventData, EventType};
-use crate::types::preprocess_callback::{UploadMetadata, is_callback_cancelled};
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{
-    S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY, SyncStatistics,
-};
+use crate::types::{S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, SyncStatistics};
 
 const MISMATCH_WARNING_WITH_HELP: &str = "mismatch. object in the target storage may be corrupted. \
  or the current multipart_threshold or multipart_chunksize may be different when uploading to the source. \
  To suppress this warning, please add --disable-multipart-verify command line option. \
  To resolve this issue, please add --auto-chunksize command line option(but extra API overheads).";
+
+#[derive(Default, Debug, Clone)]
+struct UploadMetadata {
+    pub acl: Option<ObjectCannedAcl>,
+    pub cache_control: Option<String>,
+    pub content_disposition: Option<String>,
+    pub content_encoding: Option<String>,
+    pub content_language: Option<String>,
+    pub content_type: Option<String>,
+    pub expires: Option<DateTime>,
+    pub metadata: Option<HashMap<String, String>>,
+    pub request_payer: Option<RequestPayer>,
+    pub storage_class: Option<StorageClass>,
+    pub website_redirect_location: Option<String>,
+    pub tagging: Option<String>,
+}
 
 pub struct MutipartEtags {
     pub digest: Vec<u8>,
@@ -63,9 +75,7 @@ pub struct UploadManager {
     source_key: String,
     source_total_size: u64,
     source_additional_checksum: Option<String>,
-    if_match: Option<String>,
     if_none_match: Option<String>,
-    copy_source_if_match: Option<String>,
     has_warning: Arc<AtomicBool>,
 }
 
@@ -84,9 +94,7 @@ impl UploadManager {
         source_key: String,
         source_total_size: u64,
         source_additional_checksum: Option<String>,
-        if_match: Option<String>,
         if_none_match: Option<String>,
-        copy_source_if_match: Option<String>,
         has_warning: Arc<AtomicBool>,
     ) -> Self {
         UploadManager {
@@ -103,9 +111,7 @@ impl UploadManager {
             source_key,
             source_total_size,
             source_additional_checksum,
-            if_match,
             if_none_match,
-            copy_source_if_match,
             has_warning,
         }
     }
@@ -186,10 +192,6 @@ impl UploadManager {
             get_object_output = Self::modify_last_modified_metadata(get_object_output);
         }
 
-        if self.config.enable_versioning {
-            get_object_output = Self::update_versioning_metadata(get_object_output);
-        }
-
         get_object_output
     }
 
@@ -223,40 +225,6 @@ impl UploadManager {
         get_object_output.cache_control = None;
         get_object_output.expires_string = None;
         get_object_output.website_redirect_location = None;
-
-        get_object_output
-    }
-
-    fn update_versioning_metadata(mut get_object_output: GetObjectOutput) -> GetObjectOutput {
-        if get_object_output.version_id().is_none() {
-            return get_object_output;
-        }
-
-        let source_version_id = get_object_output.version_id().unwrap();
-
-        let mut metadata = get_object_output.metadata().cloned().unwrap_or_default();
-
-        let last_modified = DateTime::from_millis(
-            get_object_output
-                .last_modified()
-                .unwrap()
-                .to_millis()
-                .unwrap(),
-        )
-        .to_chrono_utc()
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Secs, false);
-
-        metadata.insert(
-            S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY.to_string(),
-            source_version_id.to_string(),
-        );
-        metadata.insert(
-            S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
-            last_modified,
-        );
-
-        get_object_output.metadata = Some(metadata);
 
         get_object_output
     }
@@ -298,7 +266,7 @@ impl UploadManager {
             None
         };
 
-        let mut upload_metadata = UploadMetadata {
+        let upload_metadata = UploadMetadata {
             acl: self.config.canned_acl.clone(),
             cache_control: if self.config.cache_control.is_none() {
                 get_object_output_first_chunk
@@ -364,23 +332,6 @@ impl UploadManager {
             tagging: self.tagging.clone(),
         };
 
-        let callback_result = self
-            .config
-            .preprocess_manager
-            .execute_preprocessing(key, &get_object_output_first_chunk, &mut upload_metadata)
-            .await;
-        if let Err(e) = callback_result {
-            if is_callback_cancelled(&e) {
-                debug!(
-                    key = key,
-                    "PreprocessCallback execute_preprocessing() cancelled. Skipping upload."
-                );
-                return Ok(PutObjectOutputBuilder::default().build());
-            } else {
-                return Err(e.context("PreprocessCallback before_upload() failed."));
-            }
-        }
-
         let create_multipart_upload_output = self
             .client
             .create_multipart_upload()
@@ -445,10 +396,6 @@ impl UploadManager {
         let source_local_storage = source_e_tag.is_none();
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output_first_chunk.storage_class().cloned();
-        let source_version_id = get_object_output_first_chunk
-            .version_id()
-            .map(|v| v.to_string());
-        let source_last_modified = get_object_output_first_chunk.last_modified().copied();
 
         let upload_parts = if self.is_auto_chunksize_enabled() {
             self.upload_parts_with_auto_chunksize(
@@ -487,7 +434,6 @@ impl UploadManager {
             .set_sse_customer_key(self.config.target_sse_c_key.clone().key.clone())
             .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
             .set_checksum_type(checksum_type)
-            .set_if_match(self.if_match.clone())
             .set_if_none_match(self.if_none_match.clone())
             .send()
             .await
@@ -496,24 +442,8 @@ impl UploadManager {
         trace!(
             key = key,
             upload_id = upload_id,
-            if_match = self.if_match.clone(),
             "{complete_multipart_upload_output:?}"
         );
-
-        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.target_version_id = complete_multipart_upload_output
-            .version_id
-            .clone()
-            .map(|v| v.to_string());
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        event_data.source_last_modified = source_last_modified;
-        event_data.source_size = Some(self.source_total_size);
-        event_data.target_size = Some(self.source_total_size); // Assuming the size is the same as source
-        self.config.event_manager.trigger_event(event_data).await;
 
         let source_e_tag = if source_local_storage {
             Some(self.generate_e_tag_hash(self.calculate_parts_count(source_content_length as i64)))
@@ -521,7 +451,6 @@ impl UploadManager {
             source_e_tag
         };
 
-        let mut target_e_tag = None;
         if !self.config.disable_etag_verify
             && !self.express_onezone_storage
             && !self.config.disable_content_md5_header
@@ -530,7 +459,7 @@ impl UploadManager {
             let target_sse = complete_multipart_upload_output
                 .server_side_encryption()
                 .cloned();
-            target_e_tag = complete_multipart_upload_output
+            let target_e_tag = complete_multipart_upload_output
                 .e_tag()
                 .map(|e| e.to_string());
 
@@ -541,14 +470,6 @@ impl UploadManager {
                 &source_e_tag,
                 &target_sse,
                 &target_e_tag,
-                source_version_id.clone(),
-                complete_multipart_upload_output
-                    .version_id
-                    .clone()
-                    .map(|v| v.to_string()),
-                source_last_modified,
-                self.source_total_size,
-                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -564,16 +485,7 @@ impl UploadManager {
                 source_checksum,
                 target_checksum,
                 &source_e_tag,
-                &target_e_tag,
                 source_remote_storage,
-                source_version_id,
-                complete_multipart_upload_output
-                    .version_id
-                    .clone()
-                    .map(|v| v.to_string()),
-                source_last_modified,
-                self.source_total_size,
-                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -583,7 +495,6 @@ impl UploadManager {
             .build())
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn verify_e_tag(
         &mut self,
         key: &str,
@@ -592,11 +503,6 @@ impl UploadManager {
         source_e_tag: &Option<String>,
         target_sse: &Option<ServerSideEncryption>,
         target_e_tag: &Option<String>,
-        source_version_id: Option<String>,
-        target_version_id: Option<String>,
-        source_last_modified: Option<DateTime>,
-        source_content_length: u64,
-        target_content_length: u64,
     ) {
         let verify_result = storage::e_tag_verify::verify_e_tag(
             !self.config.disable_multipart_verify,
@@ -607,18 +513,6 @@ impl UploadManager {
             target_sse,
             target_e_tag,
         );
-
-        let mut event_data = EventData::new(EventType::UNDEFINED);
-        event_data.key = Some(key.to_string());
-        event_data.source_version_id = source_version_id;
-        event_data.target_version_id = target_version_id;
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        // skipcq: RS-W1070
-        event_data.target_etag = target_e_tag.clone();
-        event_data.source_last_modified = source_last_modified;
-        event_data.source_size = Some(source_content_length);
-        event_data.target_size = Some(target_content_length);
 
         if let Some(e_tag_match) = verify_result {
             if !e_tag_match {
@@ -648,9 +542,6 @@ impl UploadManager {
                     .await;
                     self.has_warning.store(true, Ordering::SeqCst);
 
-                    event_data.event_type = EventType::SYNC_ETAG_MISMATCH;
-                    self.config.event_manager.trigger_event(event_data).await;
-
                     let source_e_tag = source_e_tag.clone().unwrap();
                     let target_e_tag = target_e_tag.clone().unwrap();
 
@@ -666,9 +557,6 @@ impl UploadManager {
                     key: key.to_string(),
                 })
                 .await;
-
-                event_data.event_type = EventType::SYNC_ETAG_VERIFIED;
-                self.config.event_manager.trigger_event(event_data).await;
 
                 debug!(
                     key = &key,
@@ -695,12 +583,29 @@ impl UploadManager {
         let shared_upload_parts = Arc::new(Mutex::new(Vec::new()));
         let shared_total_upload_size = Arc::new(Mutex::new(Vec::new()));
 
-        let first_chunk_size = get_object_output_first_chunk.content_length().unwrap();
         let config_chunksize = self.config.transfer_config.multipart_chunksize as usize;
         let source_total_size = self.source_total_size as usize;
         let source_version_id = get_object_output_first_chunk
             .version_id()
             .map(|v| v.to_string());
+
+        // If content_range is None, the full body is available (e.g. stdin or pre-buffered data).
+        // In this case, read all parts sequentially from the body stream.
+        // If content_range is set, only the first chunk is in the body (first-chunk optimization),
+        // and parts 2+ must be fetched from source via get_object() with ranges.
+        let full_body_available = get_object_output_first_chunk.content_range.is_none();
+
+        // first_chunk_size represents the size of data in the body for part 1.
+        // With first-chunk optimization (content_range set): content_length = first chunk size.
+        // With full body (stdin): content_length = total size, but part 1 only reads config_chunksize.
+        let first_chunk_size = if full_body_available {
+            std::cmp::min(
+                get_object_output_first_chunk.content_length().unwrap(),
+                config_chunksize as i64,
+            )
+        } else {
+            get_object_output_first_chunk.content_length().unwrap()
+        };
 
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
@@ -719,7 +624,6 @@ impl UploadManager {
             } else {
                 "".to_string()
             };
-            let copy_source_if_match = self.copy_source_if_match.clone();
             let source_version_id = shared_source_version_id.clone();
             let source_sse_c = self.config.source_sse_c.clone();
             let source_sse_c_key = self.config.source_sse_c_key.clone();
@@ -754,7 +658,6 @@ impl UploadManager {
             let server_side_copy = self.config.server_side_copy;
 
             let stats_sender = self.stats_sender.clone();
-            let event_manager = self.config.event_manager.clone();
 
             let mut buffer = if !server_side_copy {
                 let mut buffer = Vec::<u8>::with_capacity(multipart_chunksize as usize);
@@ -764,8 +667,11 @@ impl UploadManager {
                 Vec::new() // For server-side copy, we do not need to read the body.
             };
 
-            // For the first part, we read the data from the supplied body.
-            if part_number == 1 && !server_side_copy {
+            // Read data from the body stream before spawning the upload task.
+            // - Part 1 always reads from body (it contains the first chunk).
+            // - Parts 2+ read from body only when full_body_available is true
+            //   (e.g. stdin where source is not re-readable via get_object with ranges).
+            if (part_number == 1 || full_body_available) && !server_side_copy {
                 let result = body.read_exact(buffer.as_mut_slice()).await;
                 if let Err(e) = result {
                     warn!(
@@ -797,7 +703,8 @@ impl UploadManager {
 
                 let upload_size;
                 // If the part number is greater than 1, we need to get the object from the source storage.
-                if part_number > 1 {
+                // Skip fetching from source when full_body_available — data was already read above.
+                if part_number > 1 && !full_body_available {
                     if !server_side_copy {
                         let get_object_output = source
                             .get_object(
@@ -836,14 +743,9 @@ impl UploadManager {
                             ));
                         }
 
-                        let mut body = convert_to_buf_byte_stream_with_callback(
-                            get_object_output.body.into_async_read(),
-                            source.get_stats_sender().clone(),
-                            source.get_rate_limit_bandwidth(),
-                            None,
-                            None,
-                        )
-                        .into_async_read();
+                        // Read body directly — SyncBytes are sent after upload_part completes,
+                        // not when reading from source.
+                        let mut body = get_object_output.body.into_async_read();
 
                         let result = body.read_exact(buffer.as_mut_slice()).await;
                         if let Err(e) = result {
@@ -857,8 +759,11 @@ impl UploadManager {
                     } else {
                         upload_size = chunksize as i64;
                     }
-                } else {
+                } else if part_number == 1 {
                     upload_size = first_chunk_size;
+                } else {
+                    // full_body_available: data was read from body before spawning
+                    upload_size = chunksize as i64;
                 }
 
                 let md5_digest;
@@ -912,6 +817,8 @@ impl UploadManager {
 
                     trace!(key = &target_key, "{upload_part_output:?}");
 
+                    let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(chunksize as u64));
+
                     #[allow(clippy::unnecessary_unwrap)]
                     if md5_digest.is_some() {
                         let mut locked_multipart_etags = multipart_etags.lock().unwrap();
@@ -936,14 +843,12 @@ impl UploadManager {
                         .set_sse_customer_algorithm(target_sse_c)
                         .set_sse_customer_key(target_sse_c_key)
                         .set_sse_customer_key_md5(target_sse_c_key_md5)
-                        .set_copy_source_if_match(copy_source_if_match.clone())
                         .send()
                         .await?;
 
                     debug!(
                         key = &target_key,
                         part_number = part_number,
-                        copy_source_if_match = copy_source_if_match,
                         "upload_part_copy() complete",
                     );
 
@@ -955,16 +860,6 @@ impl UploadManager {
                     upload_part_output =
                         convert_copy_to_upload_part_output(upload_part_copy_output);
                 }
-
-                let mut event_data = EventData::new(EventType::SYNC_WRITE);
-                event_data.key = Some(target_key.clone());
-                // skipcq: RS-W1070
-                event_data.source_version_id = source_version_id.clone();
-                event_data.source_size = Some(source_total_size as u64);
-                event_data.upload_id = Some(target_upload_id.clone());
-                event_data.part_number = Some(part_number as u64);
-                event_data.byte_written = Some(upload_size as u64);
-                event_manager.trigger_event(event_data).await;
 
                 let mut upload_size_vec = total_upload_size.lock().unwrap();
                 upload_size_vec.push(upload_size);
@@ -1082,14 +977,12 @@ impl UploadManager {
 
             let source = dyn_clone::clone_box(&*(self.source));
             let source_key = self.source_key.clone();
-            let source_total_size = self.source_total_size as usize;
             let copy_source = if self.config.server_side_copy {
                 self.source
                     .generate_copy_source_key(source_key.as_ref(), source_version_id.clone())
             } else {
                 "".to_string()
             };
-            let copy_source_if_match = self.copy_source_if_match.clone();
             let source_version_id = shared_source_version_id.clone();
             let source_sse_c = self.config.source_sse_c.clone();
             let source_sse_c_key = self.config.source_sse_c_key.clone();
@@ -1126,7 +1019,6 @@ impl UploadManager {
             let server_side_copy = self.config.server_side_copy;
 
             let stats_sender = self.stats_sender.clone();
-            let event_manager = self.config.event_manager.clone();
 
             let mut buffer = if !server_side_copy {
                 let mut buffer = Vec::<u8>::with_capacity(object_part_chunksize as usize);
@@ -1210,14 +1102,9 @@ impl UploadManager {
                             ));
                         }
 
-                        let mut body = convert_to_buf_byte_stream_with_callback(
-                            get_object_output.body.into_async_read(),
-                            source.get_stats_sender().clone(),
-                            source.get_rate_limit_bandwidth(),
-                            None,
-                            None,
-                        )
-                        .into_async_read();
+                        // Read body directly — SyncBytes are sent after upload_part completes,
+                        // not when reading from source.
+                        let mut body = get_object_output.body.into_async_read();
 
                         let result = body.read_exact(buffer.as_mut_slice()).await;
                         if let Err(e) = result {
@@ -1286,6 +1173,9 @@ impl UploadManager {
 
                     trace!(key = &target_key, "{upload_part_output:?}");
 
+                    let _ = stats_sender
+                        .send_blocking(SyncStatistics::SyncBytes(object_part_chunksize as u64));
+
                     if md5_digest.is_some() {
                         let mut locked_multipart_etags = multipart_etags.lock().unwrap();
                         #[allow(clippy::unnecessary_unwrap)]
@@ -1310,14 +1200,12 @@ impl UploadManager {
                         .set_sse_customer_algorithm(target_sse_c)
                         .set_sse_customer_key(target_sse_c_key)
                         .set_sse_customer_key_md5(target_sse_c_key_md5)
-                        .set_copy_source_if_match(copy_source_if_match.clone())
                         .send()
                         .await?;
 
                     debug!(
                         key = &target_key,
                         part_number = part_number,
-                        copy_source_if_match = copy_source_if_match,
                         "upload_part_copy() complete",
                     );
 
@@ -1329,16 +1217,6 @@ impl UploadManager {
                     upload_part_output =
                         convert_copy_to_upload_part_output(upload_part_copy_output);
                 }
-
-                let mut event_data = EventData::new(EventType::SYNC_WRITE);
-                event_data.key = Some(target_key.clone());
-                // skipcq: RS-W1070
-                event_data.source_version_id = source_version_id.clone();
-                event_data.source_size = Some(source_total_size as u64);
-                event_data.upload_id = Some(target_upload_id.clone());
-                event_data.part_number = Some(part_number as u64);
-                event_data.byte_written = Some(upload_size as u64);
-                event_manager.trigger_event(event_data).await;
 
                 let mut locked_upload_parts = upload_parts.lock().unwrap();
                 locked_upload_parts.push(
@@ -1438,7 +1316,6 @@ impl UploadManager {
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output.storage_class().cloned();
         let source_version_id = get_object_output.version_id().map(|v| v.to_string());
-        let source_last_modified = get_object_output.last_modified().copied();
 
         let buffer = if !self.config.server_side_copy {
             let mut body = get_object_output.body.into_async_read();
@@ -1480,7 +1357,7 @@ impl UploadManager {
             self.config.storage_class.clone()
         };
 
-        let mut upload_metadata = UploadMetadata {
+        let upload_metadata = UploadMetadata {
             acl: self.config.canned_acl.clone(),
             cache_control: if self.config.cache_control.is_none() {
                 get_object_output
@@ -1544,23 +1421,6 @@ impl UploadManager {
             tagging: self.tagging.clone(),
         };
 
-        let callback_result = self
-            .config
-            .preprocess_manager
-            .execute_preprocessing(key, &get_object_output, &mut upload_metadata)
-            .await;
-        if let Err(e) = callback_result {
-            if is_callback_cancelled(&e) {
-                debug!(
-                    key = key,
-                    "PreprocessCallback execute_preprocessing() cancelled. Skipping upload."
-                );
-                return Ok(PutObjectOutputBuilder::default().build());
-            } else {
-                return Err(e.context("PreprocessCallback before_upload() failed."));
-            }
-        }
-
         let put_object_output = if self.config.server_side_copy {
             let copy_source = self
                 .source
@@ -1594,7 +1454,6 @@ impl UploadManager {
                 .set_copy_source_sse_customer_key_md5(self.config.source_sse_c_key_md5.clone())
                 .set_acl(upload_metadata.acl)
                 .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
-                .set_copy_source_if_match(self.copy_source_if_match.clone())
                 .set_if_none_match(self.if_none_match.clone())
                 .send()
                 .await?;
@@ -1629,7 +1488,6 @@ impl UploadManager {
                 .set_sse_customer_key_md5(self.config.target_sse_c_key_md5.clone())
                 .set_acl(upload_metadata.acl)
                 .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
-                .set_if_match(self.if_match.clone())
                 .set_if_none_match(self.if_none_match.clone());
 
             if self.config.disable_payload_signing {
@@ -1649,31 +1507,14 @@ impl UploadManager {
 
         debug!(
             key = &key,
-            if_match = &self.if_match.clone(),
             if_none_match = &self.if_none_match.clone(),
-            copy_source_if_match = self.copy_source_if_match.clone(),
             "put_object() complete",
         );
 
-        let mut event_data = EventData::new(EventType::SYNC_WRITE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.source_size = Some(self.source_total_size);
-        event_data.byte_written = Some(self.source_total_size); // Assuming the size is the same as source
-        self.config.event_manager.trigger_event(event_data).await;
-
-        let mut event_data = EventData::new(EventType::SYNC_COMPLETE);
-        event_data.key = Some(key.to_string());
-        // skipcq: RS-W1070
-        event_data.source_version_id = source_version_id.clone();
-        event_data.target_version_id = put_object_output.version_id().map(|v| v.to_string());
-        // skipcq: RS-W1070
-        event_data.source_etag = source_e_tag.clone();
-        event_data.source_last_modified = get_object_output.last_modified().copied();
-        event_data.source_size = Some(self.source_total_size);
-        event_data.target_size = Some(self.source_total_size); // Assuming the size is the same as source
-        self.config.event_manager.trigger_event(event_data).await;
+        let _ = self
+            .stats_sender
+            .send(SyncStatistics::SyncBytes(self.source_total_size))
+            .await;
 
         let source_e_tag = if source_local_storage {
             Some(self.generate_e_tag_hash(0))
@@ -1681,14 +1522,13 @@ impl UploadManager {
             source_e_tag
         };
 
-        let mut target_e_tag = None;
         if !self.config.disable_etag_verify
             && !self.express_onezone_storage
             && !self.config.disable_content_md5_header
             && source_storage_class != Some(StorageClass::ExpressOnezone)
         {
             let target_sse = put_object_output.server_side_encryption().cloned();
-            target_e_tag = put_object_output.e_tag().map(|e| e.to_string());
+            let target_e_tag = put_object_output.e_tag().map(|e| e.to_string());
 
             self.verify_e_tag(
                 key,
@@ -1697,11 +1537,6 @@ impl UploadManager {
                 &source_e_tag,
                 &target_sse,
                 &target_e_tag,
-                source_version_id.clone(),
-                put_object_output.version_id().map(|v| v.to_string()),
-                source_last_modified,
-                self.source_total_size,
-                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -1717,13 +1552,7 @@ impl UploadManager {
                 source_checksum,
                 target_checksum,
                 &source_e_tag,
-                &target_e_tag,
                 source_remote_storage,
-                source_version_id,
-                put_object_output.version_id().map(|v| v.to_string()),
-                source_last_modified,
-                self.source_total_size,
-                self.source_total_size, // Assuming the size is the same as source
             )
             .await;
         }
@@ -1731,20 +1560,13 @@ impl UploadManager {
         Ok(put_object_output)
     }
 
-    #[allow(clippy::too_many_arguments)]
     async fn validate_checksum(
         &mut self,
         key: &str,
         source_checksum: Option<String>,
         target_checksum: Option<String>,
         source_e_tag: &Option<String>,
-        target_e_tag: &Option<String>,
         source_remote_storage: bool,
-        source_version_id: Option<String>,
-        target_version_id: Option<String>,
-        source_last_modified: Option<DateTime>,
-        source_content_length: u64,
-        target_content_length: u64,
     ) {
         if self.config.additional_checksum_mode.is_some() && source_checksum.is_none() {
             self.send_stats(SyncWarning {
@@ -1755,22 +1577,6 @@ impl UploadManager {
 
             let message = "additional checksum algorithm is different from the target storage. skip additional checksum verification.";
             warn!(key = &key, message);
-
-            let mut event_data = EventData::new(EventType::SYNC_WARNING);
-            event_data.key = Some(key.to_string());
-            // skipcq: RS-W1070
-            event_data.source_version_id = source_version_id.clone();
-            // skipcq: RS-W1070
-            event_data.target_version_id = target_version_id.clone();
-            event_data.source_last_modified = source_last_modified;
-            // skipcq: RS-W1070
-            event_data.source_etag = source_e_tag.clone();
-            event_data.source_size = Some(source_content_length);
-            // skipcq: RS-W1070
-            event_data.target_etag = target_e_tag.clone();
-            event_data.target_size = Some(target_content_length);
-            event_data.message = Some(message.to_string());
-            self.config.event_manager.trigger_event(event_data).await;
         }
 
         #[allow(clippy::unnecessary_unwrap)]
@@ -1784,22 +1590,6 @@ impl UploadManager {
                 .as_ref()
                 .unwrap()
                 .as_str();
-
-            let mut event_data = EventData::new(EventType::UNDEFINED);
-            event_data.key = Some(key.to_string());
-            event_data.source_version_id = source_version_id;
-            event_data.target_version_id = target_version_id;
-            event_data.source_last_modified = source_last_modified;
-            // skipcq: RS-W1070
-            event_data.source_etag = source_e_tag.clone();
-            event_data.source_size = Some(source_content_length);
-            // skipcq: RS-W1070
-            event_data.target_etag = target_e_tag.clone();
-            event_data.target_size = Some(target_content_length);
-            event_data.source_checksum = Some(source_checksum.clone());
-            event_data.target_checksum = Some(target_checksum.clone());
-            event_data.checksum_algorithm =
-                Some(self.config.additional_checksum_algorithm.clone().unwrap());
 
             if target_checksum != source_checksum {
                 if source_remote_storage
@@ -1830,9 +1620,6 @@ impl UploadManager {
                             .to_string()
                     };
 
-                    event_data.event_type = EventType::SYNC_CHECKSUM_MISMATCH;
-                    self.config.event_manager.trigger_event(event_data).await;
-
                     warn!(
                         key = &key,
                         additional_checksum_algorithm = additional_checksum_algorithm,
@@ -1846,9 +1633,6 @@ impl UploadManager {
                     key: key.to_string(),
                 })
                 .await;
-
-                event_data.event_type = EventType::SYNC_CHECKSUM_VERIFIED;
-                self.config.event_manager.trigger_event(event_data).await;
 
                 debug!(
                     key = &key,
@@ -1959,93 +1743,6 @@ mod tests {
     use super::*;
     use aws_sdk_s3::primitives::DateTime;
     use tracing_subscriber::EnvFilter;
-
-    #[test]
-    fn update_versioning_metadata_with_new() {
-        init_dummy_tracing_subscriber();
-
-        let mut get_object_output = GetObjectOutput::builder()
-            .last_modified(DateTime::from_secs(0))
-            .version_id("version1")
-            .build();
-
-        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
-        assert_eq!(
-            get_object_output
-                .metadata()
-                .as_ref()
-                .unwrap()
-                .get(S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY)
-                .unwrap(),
-            "version1"
-        );
-        assert_eq!(
-            get_object_output
-                .metadata()
-                .as_ref()
-                .unwrap()
-                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
-                .unwrap(),
-            "1970-01-01T00:00:00+00:00"
-        );
-    }
-
-    #[test]
-    fn update_versioning_metadata_with_update() {
-        init_dummy_tracing_subscriber();
-
-        let mut get_object_output = GetObjectOutput::builder()
-            .last_modified(DateTime::from_secs(0))
-            .version_id("version1")
-            .metadata("mykey", "myvalue")
-            .build();
-
-        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
-        assert_eq!(
-            get_object_output
-                .metadata()
-                .as_ref()
-                .unwrap()
-                .get("mykey")
-                .unwrap(),
-            "myvalue"
-        );
-        assert_eq!(
-            get_object_output
-                .metadata()
-                .as_ref()
-                .unwrap()
-                .get(S3SYNC_ORIGIN_VERSION_ID_METADATA_KEY)
-                .unwrap(),
-            "version1"
-        );
-        assert_eq!(
-            get_object_output
-                .metadata()
-                .as_ref()
-                .unwrap()
-                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
-                .unwrap(),
-            "1970-01-01T00:00:00+00:00"
-        );
-    }
-
-    #[test]
-    fn update_versioning_metadata_without_version_id() {
-        init_dummy_tracing_subscriber();
-
-        let mut get_object_output = GetObjectOutput::builder()
-            .last_modified(DateTime::from_secs(0))
-            .metadata("mykey", "myvalue")
-            .build();
-
-        get_object_output = UploadManager::update_versioning_metadata(get_object_output);
-        assert_eq!(get_object_output.metadata().as_ref().unwrap().len(), 1);
-        assert_eq!(
-            get_object_output.metadata().unwrap().get("mykey").unwrap(),
-            "myvalue"
-        );
-    }
 
     #[test]
     fn modify_last_modified_metadata_with_new() {

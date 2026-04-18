@@ -7,6 +7,12 @@ const OVER_MAX_VALUE: &str = "must be smaller than or equal to 5GiB";
 const MIN_VALUE: u128 = 5 * 1024 * 1024;
 const MAX_VALUE: u128 = 5 * 1024 * 1024 * 1024;
 
+const UNDER_MIN_BANDWIDTH: &str = "must be greater than or equal to 1MiB";
+const OVER_MAX_BANDWIDTH: &str = "must be smaller than or equal to 100GiB";
+
+const MIN_BANDWIDTH: u128 = 1024 * 1024;
+const MAX_BANDWIDTH: u128 = 100 * 1024 * 1024 * 1024;
+
 pub fn check_human_bytes(value: &str) -> Result<String, String> {
     let result = Byte::from_str(value).map_err(|e| e.to_string())?;
 
@@ -22,6 +28,26 @@ pub fn check_human_bytes(value: &str) -> Result<String, String> {
 
 pub fn parse_human_bytes(value: &str) -> Result<u64, String> {
     check_human_bytes(value)?;
+
+    let result = Byte::from_str(value).map_err(|e| e.to_string())?;
+    Ok(result.as_u128().try_into().unwrap())
+}
+
+pub fn check_human_bandwidth(value: &str) -> Result<String, String> {
+    let result = Byte::from_str(value).map_err(|e| e.to_string())?;
+
+    if result.as_u128() < MIN_BANDWIDTH {
+        return Err(UNDER_MIN_BANDWIDTH.to_string());
+    }
+    if result.as_u128() > MAX_BANDWIDTH {
+        return Err(OVER_MAX_BANDWIDTH.to_string());
+    }
+
+    Ok(value.to_string())
+}
+
+pub fn parse_human_bandwidth(value: &str) -> Result<u64, String> {
+    check_human_bandwidth(value)?;
 
     let result = Byte::from_str(value).map_err(|e| e.to_string())?;
     Ok(result.as_u128().try_into().unwrap())

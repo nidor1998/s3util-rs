@@ -1,10 +1,7 @@
 #[cfg(test)]
+#[allow(clippy::module_inception)]
 mod tests {
     use crate::config::args::build_config_from_args;
-
-    fn base_args() -> Vec<&'static str> {
-        vec!["s3util", "cp"]
-    }
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
         vec![
@@ -114,5 +111,34 @@ mod tests {
         let config = result.unwrap();
         assert!(!config.is_stdio_source);
         assert!(config.is_stdio_target);
+    }
+
+    #[test]
+    fn rate_limit_bandwidth_parsed_mib() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/source",
+            "s3://my-bucket/key",
+            &["--rate-limit-bandwidth", "10MiB"],
+        ));
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().rate_limit_bandwidth, Some(10 * 1024 * 1024),);
+    }
+
+    #[test]
+    fn rate_limit_bandwidth_below_min_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/source",
+            "s3://my-bucket/key",
+            &["--rate-limit-bandwidth", "512KiB"],
+        ));
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn rate_limit_defaults_none() {
+        let result = build_config_from_args(args_with("/tmp/source", "s3://my-bucket/key"));
+        assert!(result.is_ok());
+        let config = result.unwrap();
+        assert_eq!(config.rate_limit_bandwidth, None);
     }
 }

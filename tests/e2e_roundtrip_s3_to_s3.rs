@@ -524,50 +524,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn roundtrip_with_copy_source_if_match() {
-        TestHelper::init_dummy_tracing_subscriber();
-
-        let helper = TestHelper::new().await;
-        let bucket1 = TestHelper::generate_bucket_name();
-        let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
-
-        let content = b"roundtrip copy source if match";
-        helper
-            .put_object(&bucket1, "rt_ifmatch.txt", content.to_vec())
-            .await;
-
-        let source = format!("s3://{}/rt_ifmatch.txt", bucket1);
-        let target = format!("s3://{}/rt_ifmatch.txt", bucket2);
-        let stats = helper
-            .cp_test_data(vec![
-                "s3util",
-                "cp",
-                "--source-profile",
-                "s3sync-e2e-test",
-                "--target-profile",
-                "s3sync-e2e-test",
-                "--server-side-copy",
-                "--copy-source-if-match",
-                &source,
-                &target,
-            ])
-            .await;
-
-        assert_eq!(stats.sync_complete, 1);
-        assert_eq!(stats.sync_error, 0);
-
-        let downloaded = helper
-            .get_object_bytes(&bucket2, "rt_ifmatch.txt", None)
-            .await;
-        assert_eq!(downloaded, content);
-
-        helper.delete_bucket_with_cascade(&bucket1).await;
-        helper.delete_bucket_with_cascade(&bucket2).await;
-    }
-
-    #[tokio::test]
     async fn roundtrip_server_side_copy_with_metadata() {
         TestHelper::init_dummy_tracing_subscriber();
 

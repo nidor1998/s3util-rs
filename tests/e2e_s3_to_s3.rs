@@ -239,6 +239,87 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "mp_upload.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/mp_upload.bin", bucket1);
+        let target = format!("s3://{}/mp_upload.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "mp_upload.bin", None).await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper
+            .get_object_bytes(&bucket2, "mp_upload.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_disable_multipart_verify() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "mp_no_verify.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/mp_no_verify.bin", bucket1);
+        let target = format!("s3://{}/mp_no_verify.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--disable-multipart-verify",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
     async fn s3_to_s3_server_side_copy_large_object() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -586,6 +667,69 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         helper
             .verify_object_content_md5(&bucket2, "crc64_src.txt", b"crc64nvme checksum test")
+            .await;
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_additional_checksum() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Upload source with SHA256 additional checksum.
+        let tmp_dir = TestHelper::create_temp_dir();
+        TestHelper::create_test_file(
+            &tmp_dir,
+            "sha256_add_src.txt",
+            b"sha256 additional checksum test",
+        );
+        let local_source = format!("{}/sha256_add_src.txt", tmp_dir.display());
+        let s3_source = format!("s3://{}/sha256_add_src.txt", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                &local_source,
+                &s3_source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/sha256_add_src.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                &s3_source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        helper
+            .verify_object_content_md5(
+                &bucket2,
+                "sha256_add_src.txt",
+                b"sha256 additional checksum test",
+            )
             .await;
 
         std::fs::remove_dir_all(&tmp_dir).ok();
@@ -963,53 +1107,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn s3_to_s3_with_copy_source_if_match() {
-        TestHelper::init_dummy_tracing_subscriber();
-
-        let helper = TestHelper::new().await;
-        let bucket1 = TestHelper::generate_bucket_name();
-        let bucket2 = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket1, REGION).await;
-        helper.create_bucket(&bucket2, REGION).await;
-
-        helper
-            .put_object(
-                &bucket1,
-                "if_match.txt",
-                b"copy source if match test".to_vec(),
-            )
-            .await;
-
-        let source = format!("s3://{}/if_match.txt", bucket1);
-        let target = format!("s3://{}/if_match.txt", bucket2);
-        let stats = helper
-            .cp_test_data(vec![
-                "s3util",
-                "cp",
-                "--source-profile",
-                "s3sync-e2e-test",
-                "--target-profile",
-                "s3sync-e2e-test",
-                "--server-side-copy",
-                "--copy-source-if-match",
-                &source,
-                &target,
-            ])
-            .await;
-
-        assert_eq!(stats.sync_complete, 1);
-        assert_eq!(stats.sync_error, 0);
-
-        assert!(helper.is_object_exist(&bucket2, "if_match.txt", None).await);
-        helper
-            .verify_object_content_md5(&bucket2, "if_match.txt", b"copy source if match test")
-            .await;
-
-        helper.delete_bucket_with_cascade(&bucket1).await;
-        helper.delete_bucket_with_cascade(&bucket2).await;
-    }
-
-    #[tokio::test]
     async fn s3_to_s3_multipart_with_checksum_sha256() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -1101,6 +1198,54 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_dsse_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_sized_object(&bucket1, "mp_dsse_kms.bin", 9 * 1024 * 1024)
+            .await;
+
+        let source = format!("s3://{}/mp_dsse_kms.bin", bucket1);
+        let target = format!("s3://{}/mp_dsse_kms.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--sse",
+                "aws:kms:dsse",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "mp_dsse_kms.bin", None).await;
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
+        let bytes = helper
+            .get_object_bytes(&bucket2, "mp_dsse_kms.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
     async fn s3_to_s3_multipart_with_auto_chunksize() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -1149,6 +1294,126 @@ mod tests {
         let bytes = helper
             .get_object_bytes(&bucket2, "mp_auto_chunk.bin", None)
             .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_auto_chunksize_disable_payload_signing() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Upload 9MiB with 7MiB chunks to produce a multipart object in source bucket.
+        let tmp_dir = TestHelper::create_temp_dir();
+        TestHelper::create_sized_file(&tmp_dir, "mp_nosign_src.bin", 9 * 1024 * 1024);
+        let local_source = format!("{}/mp_nosign_src.bin", tmp_dir.display());
+        let s3_source = format!("s3://{}/mp_nosign.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-chunksize",
+                "7340033",
+                &local_source,
+                &s3_source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/mp_nosign.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--auto-chunksize",
+                "--disable-payload-signing",
+                &s3_source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "mp_nosign.bin", None).await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper
+            .get_object_bytes(&bucket2, "mp_nosign.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_auto_chunksize_sha1() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Upload 9MiB with 7MiB chunks + SHA1 checksum to produce a multipart
+        // object with SHA1 additional checksum in the source bucket.
+        let tmp_dir = TestHelper::create_temp_dir();
+        TestHelper::create_sized_file(&tmp_dir, "mp_sha1_src.bin", 9 * 1024 * 1024);
+        let local_source = format!("{}/mp_sha1_src.bin", tmp_dir.display());
+        let s3_source = format!("s3://{}/mp_sha1.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-chunksize",
+                "7340033",
+                "--additional-checksum-algorithm",
+                "SHA1",
+                &local_source,
+                &s3_source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/mp_sha1.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--auto-chunksize",
+                "--additional-checksum-algorithm",
+                "SHA1",
+                &s3_source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "mp_sha1.bin", None).await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper.get_object_bytes(&bucket2, "mp_sha1.bin", None).await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
         std::fs::remove_dir_all(&tmp_dir).ok();
@@ -1301,6 +1566,69 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_crc32c_full_object_checksum() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Upload 9MiB with CRC32C full-object checksum.
+        let tmp_dir = TestHelper::create_temp_dir();
+        TestHelper::create_sized_file(&tmp_dir, "mp_full_crc32c_src.bin", 9 * 1024 * 1024);
+        let local_source = format!("{}/mp_full_crc32c_src.bin", tmp_dir.display());
+        let s3_source = format!("s3://{}/mp_full_crc32c.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                "--full-object-checksum",
+                &local_source,
+                &s3_source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/mp_full_crc32c.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                "--full-object-checksum",
+                &s3_source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket2, "mp_full_crc32c.bin", None)
+            .await;
+        assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        let bytes = helper
+            .get_object_bytes(&bucket2, "mp_full_crc32c.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
     async fn s3_to_s3_if_none_match() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -1362,6 +1690,90 @@ mod tests {
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_multipart_upload_if_none_match() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "mp_if_none.bin", 9 * 1024 * 1024);
+
+        let source = format!("s3://{}/mp_if_none.bin", bucket1);
+        let target = format!("s3://{}/mp_if_none.bin", bucket2);
+
+        // Upload with explicit multipart chunking so source has a multipart ETag that
+        // matches the target ETag produced by the subsequent S3→S3 copy.
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
+        // First copy: target doesn't exist, should succeed.
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--if-none-match",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+
+        // Second copy: target already exists, should fail with precondition error.
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--if-none-match",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 0);
+        assert_eq!(stats.sync_error, 1);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
     }
 
     #[tokio::test]
@@ -1691,6 +2103,50 @@ mod tests {
             .verify_test_object_metadata(&bucket2, "ssc_mp_all_meta.bin", None)
             .await;
 
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_metadata_test_with_multipart_upload() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Upload 9MiB object with full metadata to source bucket.
+        let tmp_dir = TestHelper::create_temp_dir();
+        let seed_file = TestHelper::create_sized_file(&tmp_dir, "mp_meta_src.bin", 9 * 1024 * 1024);
+        helper
+            .put_object_with_metadata(&bucket1, "mp_meta.bin", seed_file.to_str().unwrap())
+            .await;
+
+        let source = format!("s3://{}/mp_meta.bin", bucket1);
+        let target = format!("s3://{}/mp_meta.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_test_object_metadata(&bucket2, "mp_meta.bin", None)
+            .await;
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -2159,6 +2615,153 @@ mod tests {
             .get_object_bytes(&bucket2, "ssc_mp_full_crc32c.bin", None)
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_no_sync_system_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Seed source with an object that has full system metadata.
+        let tmp_dir = TestHelper::create_temp_dir();
+        let seed_file =
+            TestHelper::create_test_file(&tmp_dir, "nssm.bin", b"no sync system metadata");
+        helper
+            .put_object_with_metadata(&bucket1, "nssm.bin", seed_file.to_str().unwrap())
+            .await;
+
+        let source = format!("s3://{}/nssm.bin", bucket1);
+        let target = format!("s3://{}/nssm.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--no-sync-system-metadata",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        // Target should NOT have the system metadata (cache_control, content_disposition,
+        // content_encoding, content_language, content_type, expires, website_redirect).
+        let head = helper.head_object(&bucket2, "nssm.bin", None).await;
+        assert!(head.cache_control().is_none());
+        assert!(head.content_disposition().is_none());
+        assert!(head.content_encoding().is_none());
+        assert!(head.content_language().is_none());
+        // Content-Type is always returned by S3; when cleared it should NOT match the seeded
+        // TEST_CONTENT_TYPE (S3 reverts to a default like application/octet-stream).
+        assert_ne!(head.content_type().unwrap(), TEST_CONTENT_TYPE);
+        assert!(head.expires_string().is_none());
+        assert!(head.website_redirect_location().is_none());
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_no_sync_user_defined_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Seed source with user-defined metadata (TEST_METADATA: key1=value1, key2=value2).
+        let tmp_dir = TestHelper::create_temp_dir();
+        let seed_file =
+            TestHelper::create_test_file(&tmp_dir, "nsud.bin", b"no sync user defined metadata");
+        helper
+            .put_object_with_metadata(&bucket1, "nsud.bin", seed_file.to_str().unwrap())
+            .await;
+
+        let source = format!("s3://{}/nsud.bin", bucket1);
+        let target = format!("s3://{}/nsud.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--no-sync-user-defined-metadata",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket2, "nsud.bin", None).await;
+        // Target should have NO user-defined metadata (either None or empty map).
+        match head.metadata() {
+            None => {}
+            Some(m) => assert!(m.is_empty(), "expected empty user metadata, got: {:?}", m),
+        }
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_request_payer() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        // Limitation: Without a Requester-Pays-enabled bucket, we can only verify
+        // that --source-request-payer / --target-request-payer are accepted by
+        // the CLI and the copy succeeds. For non-requester-pays buckets the
+        // header is ignored server-side.
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "rp.txt", b"request payer".to_vec())
+            .await;
+
+        let source = format!("s3://{}/rp.txt", bucket1);
+        let target = format!("s3://{}/rp.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--source-request-payer",
+                "--target-request-payer",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert!(helper.is_object_exist(&bucket2, "rp.txt", None).await);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;

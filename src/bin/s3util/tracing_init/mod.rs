@@ -14,6 +14,7 @@ pub fn init_tracing(config: &TracingConfig) {
     };
 
     let subscriber_builder = tracing_subscriber::fmt()
+        .with_writer(std::io::stderr)
         .compact()
         .with_target(false)
         .with_ansi(!config.disable_color_tracing)
@@ -23,13 +24,13 @@ pub fn init_tracing(config: &TracingConfig) {
     let tracing_level = config.tracing_level;
     let event_filter = if config.aws_sdk_tracing {
         format!(
-            "s3util_rs={tracing_level},aws_smithy_runtime={tracing_level},aws_config={tracing_level},aws_sigv4={tracing_level}"
+            "s3util={tracing_level},s3util_rs={tracing_level},aws_smithy_runtime={tracing_level},aws_config={tracing_level},aws_sigv4={tracing_level}"
         )
     } else if env::var(EVENT_FILTER_ENV_VAR).is_ok() {
         env::var(EVENT_FILTER_ENV_VAR).unwrap()
     } else {
         show_target = false;
-        format!("s3util_rs={tracing_level}")
+        format!("s3util={tracing_level},s3util_rs={tracing_level}")
     };
 
     let subscriber_builder = subscriber_builder
@@ -58,6 +59,7 @@ mod tests {
         };
 
         let subscriber_builder = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
             .compact()
             .with_target(false)
             .with_ansi(!config.disable_color_tracing)
@@ -67,13 +69,13 @@ mod tests {
         let tracing_level = config.tracing_level;
         let event_filter = if config.aws_sdk_tracing {
             format!(
-                "s3util_rs={tracing_level},aws_smithy_runtime={tracing_level},aws_config={tracing_level},aws_sigv4={tracing_level}"
+                "s3util={tracing_level},s3util_rs={tracing_level},aws_smithy_runtime={tracing_level},aws_config={tracing_level},aws_sigv4={tracing_level}"
             )
         } else if std::env::var(EVENT_FILTER_ENV_VAR).is_ok() {
             std::env::var(EVENT_FILTER_ENV_VAR).unwrap()
         } else {
             show_target = false;
-            format!("s3util_rs={tracing_level}")
+            format!("s3util={tracing_level},s3util_rs={tracing_level}")
         };
 
         let subscriber_builder = subscriber_builder

@@ -1,13 +1,9 @@
-#[allow(unused_imports)]
-use crate::callback::event_manager::EventManager;
-use crate::callback::preprocess_manager::PreprocessManager;
 use crate::config::args::value_parser::{
     canned_acl, checksum_algorithm, human_bytes, metadata, sse, storage_class, storage_path,
     tagging, url,
 };
 use crate::config::{
-    CLITimeoutConfig, ClientConfig, Config, ForceRetryConfig, RetryConfig, TracingConfig,
-    TransferConfig,
+    CLITimeoutConfig, ClientConfig, Config, RetryConfig, TracingConfig, TransferConfig,
 };
 use crate::types::{
     AccessKeys, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath,
@@ -35,8 +31,6 @@ mod tests;
 const EXPRESS_ONEZONE_STORAGE_SUFFIX: &str = "--x-s3";
 
 const DEFAULT_AWS_MAX_ATTEMPTS: u32 = 10;
-const DEFAULT_FORCE_RETRY_COUNT: u32 = 5;
-const DEFAULT_FORCE_RETRY_INTERVAL_MILLISECONDS: u64 = 1000;
 const DEFAULT_INITIAL_BACKOFF_MILLISECONDS: u64 = 100;
 const DEFAULT_JSON_TRACING: bool = false;
 const DEFAULT_AWS_SDK_TRACING: bool = false;
@@ -49,7 +43,6 @@ const DEFAULT_NO_SYNC_SYSTEM_METADATA: bool = false;
 const DEFAULT_NO_SYNC_USER_DEFINED_METADATA: bool = false;
 const DEFAULT_FORCE_PATH_STYLE: bool = false;
 const DEFAULT_DISABLE_TAGGING: bool = false;
-const DEFAULT_SYNC_LATEST_TAGGING: bool = false;
 const DEFAULT_NO_GUESS_MIME_TYPE: bool = false;
 const DEFAULT_SERVER_SIDE_COPY: bool = false;
 const DEFAULT_DISABLE_MULTIPART_VERIFY: bool = false;
@@ -66,9 +59,7 @@ const DEFAULT_MAX_PARALLEL_MULTIPART_UPLOADS: u16 = 16;
 const DEFAULT_ACCELERATE: bool = false;
 const DEFAULT_REQUEST_PAYER: bool = false;
 const DEFAULT_SHOW_PROGRESS: bool = false;
-const DEFAULT_IF_MATCH: bool = false;
 const DEFAULT_IF_NONE_MATCH: bool = false;
-const DEFAULT_COPY_SOURCE_IF_MATCH: bool = false;
 
 const NO_S3_STORAGE_SPECIFIED: &str = "either SOURCE or TARGET must be s3://\n";
 const BOTH_STDIO_SPECIFIED: &str = "source and target cannot both be stdin/stdout (-)\n";
@@ -263,6 +254,10 @@ But use additional checksum for upload (The hash value is stored in the target o
     #[arg(long, env, default_value_t = DEFAULT_MAX_PARALLEL_MULTIPART_UPLOADS, value_parser = clap::value_parser!(u16).range(1..), help_heading = "Performance")]
     max_parallel_uploads: u16,
 
+    /// Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB
+    #[arg(long, env, value_parser = human_bytes::check_human_bandwidth, help_heading = "Performance")]
+    rate_limit_bandwidth: Option<String>,
+
     #[arg(long, env, conflicts_with_all = ["auto_chunksize"], default_value = DEFAULT_MULTIPART_THRESHOLD, value_parser = human_bytes::check_human_bytes, help_heading = "Multipart Settings",
     long_help=r#"Object size threshold for multipart upload.
 Allow suffixes: MB, MiB, GB, GiB.
@@ -327,7 +322,7 @@ System metadata: content-disposition, content-encoding, content-language, conten
     #[arg(long, env, default_value_t = DEFAULT_NO_SYNC_USER_DEFINED_METADATA, help_heading = "Metadata/Headers")]
     no_sync_user_defined_metadata: bool,
 
-    #[arg(long, env, conflicts_with_all = ["disable_tagging", "sync_latest_tagging"], value_parser = tagging::parse_tagging, help_heading = "Tagging",
+    #[arg(long, env, conflicts_with_all = ["disable_tagging"], value_parser = tagging::parse_tagging, help_heading = "Tagging",
     long_help=r#"Tagging to set on the target object.
 Key/value must be encoded as UTF-8 then URLEncoded URL query parameters without tag name duplicates.
 
@@ -337,10 +332,6 @@ Example: key1=value1&key2=value2"#)]
     /// Do not copy tagging.
     #[arg(long, env, default_value_t = DEFAULT_DISABLE_TAGGING, help_heading = "Tagging")]
     disable_tagging: bool,
-
-    #[arg(long, env, conflicts_with_all = ["disable_tagging"], default_value_t = DEFAULT_SYNC_LATEST_TAGGING, help_heading = "Tagging",
-    long_help=r#"Copy the latest tagging from the source if necessary."#)]
-    sync_latest_tagging: bool,
 
     /// Version ID of the source object (requires S3 source)
     #[arg(long, env, help_heading = "Versioning")]
@@ -417,15 +408,6 @@ Example: key1=value1&key2=value2"#)]
 "#)]
     initial_backoff_milliseconds: u64,
 
-    /// Maximum force retry attempts
-    #[arg(long, env, default_value_t = DEFAULT_FORCE_RETRY_COUNT, help_heading = "Retry Options")]
-    force_retry_count: u32,
-
-    #[arg(long, env, default_value_t = DEFAULT_FORCE_RETRY_INTERVAL_MILLISECONDS, value_name = "force_retry_interval", help_heading = "Retry Options",
-    long_help=r#"Sleep interval (milliseconds) between force retries on error.
-"#)]
-    force_retry_interval_milliseconds: u64,
-
     #[arg(
         long,
         env,
@@ -499,15 +481,7 @@ Valid choices: bash, fish, zsh, powershell, elvish."#)]
  "#)]
     disable_express_one_zone_additional_checksum: bool,
 
-    #[arg(long, env, default_value_t = DEFAULT_IF_MATCH, help_heading = "Advanced", long_help=r#"Add an If-Match header for PutObject/CompleteMultipartUpload requests.
-This is for like an optimistic lock."#)]
-    if_match: bool,
-
-    #[arg(long, env, requires = "server_side_copy", default_value_t = DEFAULT_COPY_SOURCE_IF_MATCH, help_heading = "Advanced", long_help=r#"Add an x-amz-copy-source-if-match header for CopyObject/UploadPartCopy requests.
-This is for like an optimistic lock."#)]
-    copy_source_if_match: bool,
-
-    #[arg(long, env, conflicts_with_all = ["if_match"], default_value_t = DEFAULT_IF_NONE_MATCH, help_heading = "Advanced", long_help=r#"Uploads the object only if the object key name does not already exist in the specified bucket.
+    #[arg(long, env, default_value_t = DEFAULT_IF_NONE_MATCH, help_heading = "Advanced", long_help=r#"Uploads the object only if the object key name does not already exist in the specified bucket.
 This is for like an optimistic lock."#)]
     if_none_match: bool,
 }
@@ -532,6 +506,10 @@ where
 }
 
 impl CpArgs {
+    pub fn auto_complete_shell(&self) -> Option<clap_complete::shells::Shell> {
+        self.auto_complete_shell
+    }
+
     fn source_str(&self) -> &str {
         self.source.as_deref().unwrap_or("")
     }
@@ -1027,6 +1005,11 @@ impl TryFrom<CpArgs> for Config {
         let is_stdio_source = original_cloned_value.is_source_stdio();
         let is_stdio_target = original_cloned_value.is_target_stdio();
 
+        let rate_limit_bandwidth = value
+            .rate_limit_bandwidth
+            .as_ref()
+            .map(|bandwidth| human_bytes::parse_human_bandwidth(bandwidth).unwrap());
+
         Ok(Config {
             source: storage_path::parse_storage_path(
                 original_cloned_value.source.as_deref().unwrap_or(""),
@@ -1042,11 +1025,6 @@ impl TryFrom<CpArgs> for Config {
 
             tracing_config,
 
-            force_retry_config: ForceRetryConfig {
-                force_retry_count: value.force_retry_count,
-                force_retry_interval_milliseconds: value.force_retry_interval_milliseconds,
-            },
-
             transfer_config: TransferConfig {
                 multipart_threshold: human_bytes::parse_human_bytes(&value.multipart_threshold)?,
                 multipart_chunksize: human_bytes::parse_human_bytes(&value.multipart_chunksize)?,
@@ -1054,7 +1032,6 @@ impl TryFrom<CpArgs> for Config {
             },
 
             disable_tagging: value.disable_tagging,
-            sync_latest_tagging: value.sync_latest_tagging,
             server_side_copy: value.server_side_copy,
             no_guess_mime_type: value.no_guess_mime_type,
             disable_multipart_verify: value.disable_multipart_verify,
@@ -1090,7 +1067,6 @@ impl TryFrom<CpArgs> for Config {
             no_sync_user_defined_metadata: value.no_sync_user_defined_metadata,
             tagging,
             put_last_modified_metadata: value.put_last_modified_metadata,
-            auto_complete_shell: value.auto_complete_shell,
             disable_payload_signing: value.disable_payload_signing,
             disable_content_md5_header: value.disable_content_md5_header,
             full_object_checksum,
@@ -1098,25 +1074,15 @@ impl TryFrom<CpArgs> for Config {
             target_accelerate: value.target_accelerate,
             source_request_payer: value.source_request_payer,
             target_request_payer: value.target_request_payer,
-            if_match: value.if_match,
             if_none_match: value.if_none_match,
-            copy_source_if_match: value.copy_source_if_match,
             disable_stalled_stream_protection: value.disable_stalled_stream_protection,
             disable_express_one_zone_additional_checksum: value
                 .disable_express_one_zone_additional_checksum,
             max_parallel_uploads: value.max_parallel_uploads,
+            rate_limit_bandwidth,
             version_id: value.version_id,
             is_stdio_source,
             is_stdio_target,
-            dry_run: false,
-            enable_versioning: false,
-            point_in_time: None,
-            follow_symlinks: false,
-            event_manager: EventManager::default(),
-            preprocess_manager: PreprocessManager::default(),
-            max_parallel_listings: 1,
-            max_parallel_listing_max_depth: 0,
-            allow_parallel_listings_in_express_one_zone: false,
         })
     }
 }

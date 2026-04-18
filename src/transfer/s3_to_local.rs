@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::Config;
 use crate::storage::Storage;
+use crate::transfer::first_chunk;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{ObjectChecksum, SyncStatistics, get_additional_checksum};
+use crate::types::{SyncStatistics, detect_additional_checksum, get_additional_checksum};
 
 /// Transfer an S3 object to the local filesystem.
 ///
@@ -39,7 +40,7 @@ pub async fn transfer(
             config.source_sse_c_key_md5.clone(),
         )
         .await
-        .context("s3_to_local: source.get_object() failed.")?;
+        .context(format!("failed to download source object: {source_key}"))?;
 
     if cancellation_token.is_cancelled() {
         return Ok(());
@@ -47,22 +48,39 @@ pub async fn transfer(
 
     let source_size = get_object_output.content_length().unwrap_or(0) as u64;
 
-    let source_additional_checksum = get_additional_checksum(
+    // Detect checksum algorithm: use explicit config, or auto-detect from source response
+    let (detected_algorithm, source_additional_checksum) =
+        if let Some(algorithm) = config.additional_checksum_algorithm.clone() {
+            let checksum = get_additional_checksum(&get_object_output, Some(algorithm.clone()));
+            (Some(algorithm), checksum)
+        } else if config.additional_checksum_mode.is_some() {
+            if let Some((algorithm, checksum)) = detect_additional_checksum(&get_object_output) {
+                (Some(algorithm), Some(checksum))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+    // Build object checksum. Uses build_object_checksum so that object_parts is populated
+    // from the source's multipart manifest, which is required for composite multipart
+    // checksum verification (SHA256/SHA1/CRC32/CRC32C). Ported from s3sync.
+    // NOTE: pass `source_key` (the S3 key) not `target_key` (the local path) — the helper
+    // fetches object parts from S3 via GetObjectAttributes on this key.
+    let checksum_algorithms: Option<Vec<_>> = detected_algorithm.as_ref().map(|a| vec![a.clone()]);
+    let object_checksum = first_chunk::build_object_checksum(
+        &*source,
+        &*target,
+        config,
+        source_key,
         &get_object_output,
-        config.additional_checksum_algorithm.clone(),
-    );
+        checksum_algorithms.as_deref(),
+        source_additional_checksum.clone(),
+    )
+    .await?;
 
-    // Build object checksum
-    let object_checksum = ObjectChecksum {
-        key: target_key.to_string(),
-        version_id: config.version_id.clone(),
-        checksum_algorithm: config.additional_checksum_algorithm.clone(),
-        checksum_type: None,
-        object_parts: None,
-        final_checksum: source_additional_checksum.clone(),
-    };
-
-    let put_object_output = target
+    let _put_object_output = target
         .put_object(
             target_key,
             source_clone,
@@ -71,28 +89,18 @@ pub async fn transfer(
             source_additional_checksum,
             get_object_output,
             None, // Local storage ignores tagging
-            Some(object_checksum),
-            None,
-            None,
+            object_checksum,
             None,
         )
         .await
-        .context("s3_to_local: target.put_object() failed.")?;
+        .context(format!("failed to write to target file: {target_key}"))?;
 
-    if put_object_output.e_tag.is_some() {
-        info!(
-            source_key = source_key,
-            target_key = target_key,
-            size = source_size,
-            "transfer completed."
-        );
-    } else {
-        warn!(
-            source_key = source_key,
-            target_key = target_key,
-            "transfer completed but no ETag returned."
-        );
-    }
+    info!(
+        source_key = source_key,
+        target_key = target_key,
+        size = source_size,
+        "transfer completed."
+    );
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {

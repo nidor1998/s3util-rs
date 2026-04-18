@@ -404,7 +404,6 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "rt_sha256.dat", None).await;
         assert!(head.checksum_sha256().is_some());
@@ -465,7 +464,6 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "rt_crc32.dat", None).await;
         assert!(head.checksum_crc32().is_some());

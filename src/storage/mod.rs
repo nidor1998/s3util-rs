@@ -55,7 +55,6 @@ pub trait StorageFactory {
         stats_sender: Sender<SyncStatistics>,
         client_config: Option<ClientConfig>,
         request_payer: Option<RequestPayer>,
-        rate_limit_objects_per_sec: Option<Arc<RateLimiter>>,
         rate_limit_bandwidth: Option<Arc<RateLimiter>>,
         has_warning: Arc<AtomicBool>,
         object_to_list: Option<String>,
@@ -131,9 +130,7 @@ pub trait StorageTrait: DynClone {
         get_object_output_first_chunk: GetObjectOutput,
         tagging: Option<String>,
         object_checksum: Option<ObjectChecksum>,
-        if_match: Option<String>,
         if_none_match: Option<String>,
-        copy_source_if_match: Option<String>,
     ) -> Result<PutObjectOutput>;
     async fn put_object_tagging(
         &self,
@@ -145,7 +142,6 @@ pub trait StorageTrait: DynClone {
         &self,
         key: &str,
         version_id: Option<String>,
-        if_match: Option<String>,
     ) -> Result<DeleteObjectOutput>;
     fn get_client(&self) -> Option<Arc<Client>>;
     fn get_stats_sender(&self) -> Sender<SyncStatistics>;

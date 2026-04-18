@@ -302,6 +302,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_to_s3_with_additional_checksum_disable_verify() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(
+            &local_dir,
+            "sha256_no_verify.txt",
+            b"sha256 disable verify test",
+        );
+
+        let target = format!("s3://{}/sha256_no_verify.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                "--disable-additional-checksum-verify",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
+
+        let head = helper
+            .head_object(&bucket, "sha256_no_verify.txt", None)
+            .await;
+        assert!(head.checksum_sha256().is_some());
+
+        helper
+            .verify_uploaded_object_etag(
+                &bucket,
+                "sha256_no_verify.txt",
+                b"sha256 disable verify test",
+            )
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
     async fn local_to_s3_with_checksum_crc32() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -1735,59 +1787,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn local_to_s3_if_match() {
-        TestHelper::init_dummy_tracing_subscriber();
-
-        let helper = TestHelper::new().await;
-        let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
-
-        let local_dir = TestHelper::create_temp_dir();
-        let test_file =
-            TestHelper::create_test_file(&local_dir, "if_match.txt", b"if-match test data");
-
-        let target = format!("s3://{}/if_match.txt", bucket);
-
-        // First upload without --if-match: should succeed (creates object)
-        let stats = helper
-            .cp_test_data(vec![
-                "s3util",
-                "cp",
-                "--target-profile",
-                "s3sync-e2e-test",
-                test_file.to_str().unwrap(),
-                &target,
-            ])
-            .await;
-
-        assert_eq!(stats.sync_complete, 1);
-        assert_eq!(stats.sync_error, 0);
-
-        // Second upload with --if-match: object exists, should succeed
-        let stats = helper
-            .cp_test_data(vec![
-                "s3util",
-                "cp",
-                "--target-profile",
-                "s3sync-e2e-test",
-                "--if-match",
-                test_file.to_str().unwrap(),
-                &target,
-            ])
-            .await;
-
-        assert_eq!(stats.sync_complete, 1);
-        assert_eq!(stats.sync_error, 0);
-
-        helper
-            .verify_uploaded_object_etag(&bucket, "if_match.txt", b"if-match test data")
-            .await;
-
-        helper.delete_bucket_with_cascade(&bucket).await;
-        let _ = std::fs::remove_dir_all(&local_dir);
-    }
-
-    #[tokio::test]
     async fn local_to_s3_if_none_match_multipart() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -1842,6 +1841,123 @@ mod tests {
         helper
             .verify_uploaded_object_etag_value(&bucket, "if_none_mp.bin", ETAG_9M_ZEROS_8M_CHUNK)
             .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_put_last_modified_metadata() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "plm.txt", b"put last modified test");
+
+        let target = format!("s3://{}/plm.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--put-last-modified-metadata",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket, "plm.txt", None).await;
+        let metadata = head.metadata().unwrap();
+        assert!(metadata.contains_key("s3sync_origin_last_modified"));
+        // Verify the stored value is a parseable RFC3339 timestamp.
+        let stored = metadata.get("s3sync_origin_last_modified").unwrap();
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(stored).is_ok(),
+            "expected parseable RFC3339 timestamp, got: {}",
+            stored
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_disable_tagging() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "dtag.txt", b"disable tagging test");
+
+        let target = format!("s3://{}/dtag.txt", bucket);
+        // --disable-tagging conflicts with --tagging in the CLI, so just upload
+        // with --disable-tagging and verify no tag is attached.
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--disable-tagging",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let tagging = helper.get_object_tagging(&bucket, "dtag.txt", None).await;
+        assert!(tagging.tag_set().is_empty());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_target_request_payer() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        // Limitation: Without a Requester-Pays bucket, we can only verify the
+        // CLI accepts --target-request-payer and the upload succeeds. For a
+        // non-requester-pays bucket the header is ignored server-side.
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "trp.txt", b"target request payer");
+
+        let target = format!("s3://{}/trp.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--target-request-payer",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert!(helper.is_object_exist(&bucket, "trp.txt", None).await);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

@@ -257,8 +257,8 @@ mod tests {
 
     const TEST_SHA256_BASE64_DIGEST: &str = "WZRHGrsBESr8wYFZ9sx0tPURuZgG2lmzyvWpwXPKz8U=";
 
-    pub const LARGE_FILE_PATH: &str = "./playground/large_data/9MiB";
-    pub const LARGE_FILE_DIR: &str = "./playground/large_data/";
+    pub const LARGE_FILE_PATH: &str = "./tests/fixtures/large_data/9MiB";
+    pub const LARGE_FILE_DIR: &str = "./tests/fixtures/large_data/";
     pub const LARGE_FILE_SIZE: usize = 9 * 1024 * 1024;
 
     const LARGE_FILE_SHA256_BASE64_FINAL_DIGEST: &str =

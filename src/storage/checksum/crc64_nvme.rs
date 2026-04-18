@@ -43,8 +43,8 @@ mod tests {
 
     use super::*;
 
-    const LARGE_FILE_PATH: &str = "./playground/large_data/50MiB";
-    const LARGE_FILE_DIR: &str = "./playground/large_data/";
+    const LARGE_FILE_PATH: &str = "./tests/fixtures/large_data/50MiB";
+    const LARGE_FILE_DIR: &str = "./tests/fixtures/large_data/";
     const LARGE_FILE_SIZE: usize = 50 * 1024 * 1024;
 
     const CHECKSUM_TOTAL: &str = "ZfX5vT9m/o8=";

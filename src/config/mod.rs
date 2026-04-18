@@ -1,5 +1,3 @@
-use crate::callback::event_manager::EventManager;
-use crate::callback::preprocess_manager::PreprocessManager;
 use crate::types::{ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath};
 use aws_sdk_s3::types::{
     ChecksumAlgorithm, ChecksumMode, ObjectCannedAcl, RequestPayer, ServerSideEncryption,
@@ -20,11 +18,9 @@ pub struct Config {
     pub show_progress: bool,
     pub source_client_config: Option<ClientConfig>,
     pub target_client_config: Option<ClientConfig>,
-    pub force_retry_config: ForceRetryConfig,
     pub tracing_config: Option<TracingConfig>,
     pub transfer_config: TransferConfig,
     pub disable_tagging: bool,
-    pub sync_latest_tagging: bool,
     pub server_side_copy: bool,
     pub no_guess_mime_type: bool,
     pub disable_multipart_verify: bool,
@@ -54,7 +50,6 @@ pub struct Config {
     pub website_redirect: Option<String>,
     pub tagging: Option<String>,
     pub put_last_modified_metadata: bool,
-    pub auto_complete_shell: Option<clap_complete::shells::Shell>,
     pub disable_payload_signing: bool,
     pub disable_content_md5_header: bool,
     pub full_object_checksum: bool,
@@ -62,25 +57,14 @@ pub struct Config {
     pub target_accelerate: bool,
     pub source_request_payer: bool,
     pub target_request_payer: bool,
-    pub if_match: bool,
     pub if_none_match: bool,
-    pub copy_source_if_match: bool,
     pub disable_stalled_stream_protection: bool,
     pub disable_express_one_zone_additional_checksum: bool,
     pub max_parallel_uploads: u16,
+    pub rate_limit_bandwidth: Option<u64>,
     pub version_id: Option<String>,
     pub is_stdio_source: bool,
     pub is_stdio_target: bool,
-    /// Always false for cp. Kept for s3sync storage layer compatibility.
-    pub dry_run: bool,
-    pub enable_versioning: bool,
-    pub point_in_time: Option<DateTime<Utc>>,
-    pub follow_symlinks: bool,
-    pub event_manager: EventManager,
-    pub preprocess_manager: PreprocessManager,
-    pub max_parallel_listings: u16,
-    pub max_parallel_listing_max_depth: u16,
-    pub allow_parallel_listings_in_express_one_zone: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -120,12 +104,6 @@ pub struct TracingConfig {
     pub aws_sdk_tracing: bool,
     pub span_events_tracing: bool,
     pub disable_color_tracing: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-pub struct ForceRetryConfig {
-    pub force_retry_count: u32,
-    pub force_retry_interval_milliseconds: u64,
 }
 
 #[derive(Debug, Clone, Copy)]

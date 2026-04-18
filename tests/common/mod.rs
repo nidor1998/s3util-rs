@@ -105,21 +105,10 @@ pub const SHA256_EMPTY: &str = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934c
 // All constants below are pre-computed from that seed, matching s3sync exactly.
 // Constant names follow s3sync's naming convention for human readability.
 
-// 5M file with 5M chunk (same names as s3sync)
-pub const ETAG_5M_FILE_5M_CHUNK: &str = "\"41c54a21b664d10684a24bb15b86b81b-1\"";
-pub const ETAG_5M_PLUS_1_FILE_5M_CHUNK: &str = "\"c9f6c942564f9ebead5cb09e63b70dd7-2\"";
-pub const ETAG_5M_MINUS_1_FILE_5M_CHUNK: &str = "\"74222dcf8ba716d84efe0dc716360087\"";
-pub const SHA256_5M_FILE_WHOLE: &str =
-    "27d49a61d9a504bf66761f4d3143702d97876ddf5864d4ba22467cd04cdc67f0";
-
-// 8M file with 8M chunk (same names as s3sync)
-pub const ETAG_8M_FILE_NO_CHUNK: &str = "\"e9d3e2caa0ac28fd50b183dac706ee29\"";
-pub const ETAG_8M_FILE_5M_CHUNK: &str = "\"ebff86fc334a63cefaad7a0b621a0109-2\"";
+// 8M file ETags — kept because referenced by e2e_roundtrip_multipart_etag.rs
 pub const ETAG_8M_FILE_8M_CHUNK: &str = "\"13698b45ee34dbf0611fe527f76abfc7-1\"";
 pub const ETAG_8M_PLUS_1_FILE_8M_CHUNK: &str = "\"61b0524a157f9391c45c09ae2b48dde4-2\"";
 pub const ETAG_8M_MINUS_1_FILE_8M_CHUNK: &str = "\"c9c7b65a175f43ff8147d8027403e177\"";
-pub const SHA256_8M_FILE_WHOLE: &str =
-    "cd5f57c6ffe3f685104aba6ec7268baab8790603034bdec830228b572d84c5a4";
 
 // 9M file (used in e2e_integrity_check and edge cases)
 pub const ETAG_9M_FILE_NO_CHUNK: &str = "\"f4420c17234bf1af66cb4de063b28a87\"";
@@ -129,33 +118,6 @@ pub const ETAG_9M_FILE_8M_CHUNK: &str = "\"62a3a89ec6809979873b115670cc4c32-2\""
 pub const ETAG_9M_FILE_9M_CHUNK: &str = "\"83789ae97e315329fe7642d5ac6c444b-1\"";
 pub const SHA256_9M_FILE_WHOLE: &str =
     "497dfda0dfdb3b0ec8506a3b0afdc15c7612398eeb9ade7ef75fa386f2f70bc4";
-
-// 10M file with 5M chunk (same names as s3sync)
-pub const ETAG_10M_FILE_5M_CHUNK: &str = "\"fd863860e4b73868097377d43bd65a58-2\"";
-pub const ETAG_10M_PLUS_1_FILE_5M_CHUNK: &str = "\"527cc728f7dd89f1ef3256e2ff5c808c-3\"";
-pub const ETAG_10M_MINUS_1_FILE_5M_CHUNK: &str = "\"6e11660e4457458f925f9a92227be331-2\"";
-pub const SHA256_10M_FILE_WHOLE: &str =
-    "d5fc3f080e832d82161f9461291f87989b81a9e6281c33589d9563adefb46055";
-
-// 16M file with 5M chunk (same names as s3sync)
-pub const ETAG_16M_FILE_5M_CHUNK: &str = "\"db5daa6fb02e1c6b2063c5469b99e096-4\"";
-pub const ETAG_16M_PLUS_1_FILE_5M_CHUNK: &str = "\"5e7e959b1416576b46fe9a7b3dea4c5e-4\"";
-pub const ETAG_16M_MINUS_1_FILE_5M_CHUNK: &str = "\"cd769ef00f81a6d450848efda5e8870d-4\"";
-pub const SHA256_16M_FILE_WHOLE: &str =
-    "23bf32cdfd60784647663a160aee7c46ca7941173d48ad37db52713fda4562e1";
-
-// 16M file with 8M chunk (same names as s3sync)
-pub const ETAG_16M_FILE_8M_CHUNK: &str = "\"93724d91845349c1695f224995fa68ea-2\"";
-pub const ETAG_16M_PLUS_1_FILE_8M_CHUNK: &str = "\"4c72ed54398639c8fdbf38f9455353c9-3\"";
-pub const ETAG_16M_MINUS_1_FILE_8M_CHUNK: &str = "\"a34a18fab3e8715b3b1edc3cb9a52647-2\"";
-
-// 30M file with 8M chunk (same names as s3sync)
-pub const ETAG_30M_FILE_NO_CHUNK: &str = "\"94189ebb786dbc25aaf22d3d96e88aeb\"";
-pub const ETAG_30M_FILE_8M_CHUNK: &str = "\"a81230a7666d413e511f9c2c2523947a-4\"";
-pub const ETAG_30M_PLUS_1_FILE_8M_CHUNK: &str = "\"e10f60edd59877a2d1cd80b837460b80-4\"";
-pub const ETAG_30M_MINUS_1_FILE_8M_CHUNK: &str = "\"4f36b633babe3a74e08884d6056ab6df-4\"";
-pub const SHA256_30M_FILE_WHOLE_HEX: &str =
-    "05c1c771d4886e4cefdf0a4c0b907913fe2f829dd767418c94ea278b0b8bc3f9";
 
 pub static TEST_METADATA: Lazy<HashMap<String, String>> = Lazy::new(|| {
     HashMap::from([
@@ -288,11 +250,14 @@ impl TestHelper {
             .sse_algorithm(ServerSideEncryption::Aes256)
             .build()
             .unwrap();
-        // Omit blocked_encryption_types to unblock SSE-C
-        // (new buckets block SSE-C by default since April 2026;
-        // calling PutBucketEncryption without blocked_encryption_types removes the block)
+        // Explicitly set blocked_encryption_types with EncryptionType::None
+        // to unblock SSE-C (new buckets block SSE-C by default since April 2026).
+        let blocked = aws_sdk_s3::types::BlockedEncryptionTypes::builder()
+            .encryption_type(aws_sdk_s3::types::EncryptionType::None)
+            .build();
         let rule = ServerSideEncryptionRule::builder()
             .apply_server_side_encryption_by_default(default_encryption)
+            .blocked_encryption_types(blocked)
             .build();
         let config = ServerSideEncryptionConfiguration::builder()
             .rules(rule)
@@ -761,6 +726,26 @@ impl TestHelper {
         Ok(output_path)
     }
 
+    /// Generate an in-memory byte buffer of `size` bytes using the same seed
+    /// file as `create_random_data_file`. Deterministic across runs so
+    /// checksum/ETag assertions remain stable.
+    pub fn generate_random_bytes(size: usize) -> Result<Vec<u8>> {
+        let mut seed_file = File::open(RANDOM_DATA_SEED_FILE)?;
+        let mut seed_data = vec![0u8; 1024];
+        seed_file.read_exact(&mut seed_data)?;
+
+        let mut data = Vec::with_capacity(size);
+        while data.len() + seed_data.len() <= size {
+            data.extend_from_slice(&seed_data);
+        }
+        let remaining = size - data.len();
+        if remaining > 0 {
+            data.extend_from_slice(&seed_data[..remaining]);
+        }
+
+        Ok(data)
+    }
+
     pub fn get_sha256_from_file(file_path: &str) -> String {
         let mut file = File::open(file_path).unwrap();
         let mut hasher = Sha256::new();
@@ -816,7 +801,7 @@ impl TestHelper {
         for chunk in data.chunks(chunk_size) {
             part_md5s.extend_from_slice(&md5::compute(chunk).0);
         }
-        let num_parts = (data.len() + chunk_size - 1) / chunk_size;
+        let num_parts = data.len().div_ceil(chunk_size);
         format!("\"{}-{}\"", Self::compute_md5_hex(&part_md5s), num_parts)
     }
 
@@ -916,15 +901,85 @@ impl TestHelper {
     }
 
     // ---------------------------------------------------------------
+    // Last-modified helpers
+    // ---------------------------------------------------------------
+
+    /// Get the S3 object's last-modified timestamp (seconds since epoch).
+    pub async fn get_object_last_modified(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+    ) -> i64 {
+        let head = self.head_object(bucket, key, version_id).await;
+        head.last_modified().unwrap().secs()
+    }
+
+    /// Get a local file's last-modified timestamp (seconds since epoch).
+    pub fn get_file_last_modified(path: &str) -> i64 {
+        let metadata = std::fs::metadata(path).unwrap();
+        metadata
+            .modified()
+            .unwrap()
+            .duration_since(std::time::SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    // ---------------------------------------------------------------
+    // Multipart-upload helpers (used by cancel/abort tests)
+    // ---------------------------------------------------------------
+
+    /// List in-progress multipart uploads for a bucket.
+    /// Returns the number of uploads currently pending; used to verify
+    /// that cancel/abort flows do not leak orphan MPUs.
+    pub async fn count_multipart_uploads(&self, bucket: &str) -> usize {
+        let output = self
+            .client
+            .list_multipart_uploads()
+            .bucket(bucket)
+            .send()
+            .await
+            .unwrap();
+        output.uploads().len()
+    }
+
+    /// Abort any pending multipart uploads on `bucket` — used as a
+    /// teardown helper when a test cannot guarantee the program
+    /// cleaned up after itself.
+    pub async fn abort_all_multipart_uploads(&self, bucket: &str) {
+        let uploads = self
+            .client
+            .list_multipart_uploads()
+            .bucket(bucket)
+            .send()
+            .await
+            .ok();
+
+        if let Some(list) = uploads {
+            for upload in list.uploads() {
+                if let (Some(key), Some(upload_id)) = (upload.key(), upload.upload_id()) {
+                    let _ = self
+                        .client
+                        .abort_multipart_upload()
+                        .bucket(bucket)
+                        .key(key)
+                        .upload_id(upload_id)
+                        .send()
+                        .await;
+                }
+            }
+        }
+    }
+
+    // ---------------------------------------------------------------
     // CP helpers — run the cp transfer programmatically
     // ---------------------------------------------------------------
 
     /// Run a cp operation and collect stats.
     pub async fn cp_test_data(&self, args: Vec<&str>) -> StatsCount {
         let cli = parse_from_args(args).unwrap();
-        let cp_args = match cli.command {
-            Commands::Cp(cp_args) => cp_args,
-        };
+        let Commands::Cp(cp_args) = cli.command;
         let config = Config::try_from(cp_args).unwrap();
 
         let cancellation_token = create_pipeline_cancellation_token();
@@ -974,7 +1029,6 @@ impl TestHelper {
                     None,
                     None,
                     None,
-                    None,
                     has_warning.clone(),
                     None,
                 )
@@ -994,7 +1048,6 @@ impl TestHelper {
                     stats_sender.clone(),
                     config.target_client_config.clone(),
                     target_request_payer,
-                    None,
                     None,
                     has_warning.clone(),
                     None,
@@ -1034,7 +1087,6 @@ impl TestHelper {
                     config.source_client_config.clone(),
                     source_request_payer,
                     None,
-                    None,
                     has_warning.clone(),
                     None,
                 )
@@ -1045,7 +1097,6 @@ impl TestHelper {
                     StoragePath::Local(".".into()),
                     cancellation_token.clone(),
                     stats_sender.clone(),
-                    None,
                     None,
                     None,
                     None,
@@ -1092,7 +1143,6 @@ impl TestHelper {
                     config.source_client_config.clone(),
                     source_request_payer,
                     None,
-                    None,
                     has_warning.clone(),
                     None,
                 )
@@ -1112,7 +1162,6 @@ impl TestHelper {
                     stats_sender.clone(),
                     config.target_client_config.clone(),
                     target_request_payer,
-                    None,
                     None,
                     has_warning.clone(),
                     None,
@@ -1131,78 +1180,10 @@ impl TestHelper {
                 .await
             }
             TransferDirection::StdioToS3 => {
-                let target_request_payer = if config.target_request_payer {
-                    Some(RequestPayer::Requester)
-                } else {
-                    None
-                };
-
-                let empty_target = match &config.target {
-                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
-                        bucket: bucket.clone(),
-                        prefix: String::new(),
-                    },
-                    other => other.clone(),
-                };
-                let target = S3StorageFactory::create(
-                    config.clone(),
-                    empty_target,
-                    cancellation_token.clone(),
-                    stats_sender.clone(),
-                    config.target_client_config.clone(),
-                    target_request_payer,
-                    None,
-                    None,
-                    has_warning.clone(),
-                    None,
-                )
-                .await;
-
-                s3util_rs::transfer::stdio_to_s3::transfer(
-                    &config,
-                    target,
-                    &target_key,
-                    cancellation_token.clone(),
-                    stats_sender.clone(),
-                )
-                .await
+                panic!("use cp_test_data_stdin_to_s3 for stdin→S3 transfers in tests");
             }
             TransferDirection::S3ToStdio => {
-                let source_request_payer = if config.source_request_payer {
-                    Some(RequestPayer::Requester)
-                } else {
-                    None
-                };
-
-                let empty_source = match &config.source {
-                    StoragePath::S3 { bucket, .. } => StoragePath::S3 {
-                        bucket: bucket.clone(),
-                        prefix: String::new(),
-                    },
-                    other => other.clone(),
-                };
-                let source = S3StorageFactory::create(
-                    config.clone(),
-                    empty_source,
-                    cancellation_token.clone(),
-                    stats_sender.clone(),
-                    config.source_client_config.clone(),
-                    source_request_payer,
-                    None,
-                    None,
-                    has_warning.clone(),
-                    None,
-                )
-                .await;
-
-                s3util_rs::transfer::s3_to_stdio::transfer(
-                    &config,
-                    source,
-                    &source_key,
-                    cancellation_token.clone(),
-                    stats_sender.clone(),
-                )
-                .await
+                panic!("use cp_test_data_s3_to_stdout for S3→stdout transfers in tests");
             }
         };
 
@@ -1233,6 +1214,156 @@ impl TestHelper {
     pub async fn cp(&self, args: Vec<&str>) -> (bool, bool) {
         let stats = self.cp_test_data(args).await;
         (stats.sync_error > 0, stats.sync_warning > 0)
+    }
+
+    /// Run a stdin→S3 transfer with the given stdin bytes. Returns collected stats.
+    ///
+    /// Use this instead of `cp_test_data` when the source is `-` (stdin).
+    pub async fn cp_test_data_stdin_to_s3(
+        &self,
+        args: Vec<&str>,
+        stdin_bytes: Vec<u8>,
+    ) -> StatsCount {
+        let cli = parse_from_args(args).unwrap();
+        let Commands::Cp(cp_args) = cli.command;
+        let config = Config::try_from(cp_args).unwrap();
+
+        let cancellation_token = create_pipeline_cancellation_token();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+
+        let target_request_payer = if config.target_request_payer {
+            Some(RequestPayer::Requester)
+        } else {
+            None
+        };
+
+        let (_source_key, target_key) =
+            Self::extract_keys_for_test(&config, &TransferDirection::StdioToS3);
+        let has_warning = Arc::new(AtomicBool::new(false));
+
+        let empty_target = match &config.target {
+            StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                bucket: bucket.clone(),
+                prefix: String::new(),
+            },
+            other => other.clone(),
+        };
+        let target = S3StorageFactory::create(
+            config.clone(),
+            empty_target,
+            cancellation_token.clone(),
+            stats_sender.clone(),
+            config.target_client_config.clone(),
+            target_request_payer,
+            None,
+            has_warning.clone(),
+            None,
+        )
+        .await;
+
+        let reader = std::io::Cursor::new(stdin_bytes);
+        let result = s3util_rs::transfer::stdio_to_s3::transfer(
+            &config,
+            target,
+            &target_key,
+            reader,
+            cancellation_token.clone(),
+            stats_sender.clone(),
+        )
+        .await;
+
+        stats_sender.close();
+
+        let mut stats = StatsCount::default();
+        while let Ok(sync_stats) = stats_receiver.try_recv() {
+            match sync_stats {
+                SyncStatistics::SyncComplete { .. } => stats.sync_complete += 1,
+                SyncStatistics::SyncError { .. } => stats.sync_error += 1,
+                SyncStatistics::SyncWarning { .. } => stats.sync_warning += 1,
+                SyncStatistics::ETagVerified { .. } => stats.e_tag_verified += 1,
+                SyncStatistics::ChecksumVerified { .. } => stats.checksum_verified += 1,
+                _ => {}
+            }
+        }
+
+        if result.is_err() {
+            stats.sync_error += 1;
+        }
+
+        stats
+    }
+
+    /// Run an S3→stdout transfer. Returns (stats, captured_stdout_bytes).
+    ///
+    /// Use this instead of `cp_test_data` when the target is `-` (stdout).
+    pub async fn cp_test_data_s3_to_stdout(&self, args: Vec<&str>) -> (StatsCount, Vec<u8>) {
+        let cli = parse_from_args(args).unwrap();
+        let Commands::Cp(cp_args) = cli.command;
+        let config = Config::try_from(cp_args).unwrap();
+
+        let cancellation_token = create_pipeline_cancellation_token();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+
+        let source_request_payer = if config.source_request_payer {
+            Some(RequestPayer::Requester)
+        } else {
+            None
+        };
+
+        let (source_key, _target_key) =
+            Self::extract_keys_for_test(&config, &TransferDirection::S3ToStdio);
+        let has_warning = Arc::new(AtomicBool::new(false));
+
+        let empty_source = match &config.source {
+            StoragePath::S3 { bucket, .. } => StoragePath::S3 {
+                bucket: bucket.clone(),
+                prefix: String::new(),
+            },
+            other => other.clone(),
+        };
+        let source = S3StorageFactory::create(
+            config.clone(),
+            empty_source,
+            cancellation_token.clone(),
+            stats_sender.clone(),
+            config.source_client_config.clone(),
+            source_request_payer,
+            None,
+            has_warning.clone(),
+            None,
+        )
+        .await;
+
+        let mut writer = Vec::<u8>::new();
+        let result = s3util_rs::transfer::s3_to_stdio::transfer(
+            &config,
+            source,
+            &source_key,
+            &mut writer,
+            cancellation_token.clone(),
+            stats_sender.clone(),
+        )
+        .await;
+
+        stats_sender.close();
+
+        let mut stats = StatsCount::default();
+        while let Ok(sync_stats) = stats_receiver.try_recv() {
+            match sync_stats {
+                SyncStatistics::SyncComplete { .. } => stats.sync_complete += 1,
+                SyncStatistics::SyncError { .. } => stats.sync_error += 1,
+                SyncStatistics::SyncWarning { .. } => stats.sync_warning += 1,
+                SyncStatistics::ETagVerified { .. } => stats.e_tag_verified += 1,
+                SyncStatistics::ChecksumVerified { .. } => stats.checksum_verified += 1,
+                _ => {}
+            }
+        }
+
+        if result.is_err() {
+            stats.sync_error += 1;
+        }
+
+        (stats, writer)
     }
 
     /// Extract (source_key, target_key) matching the CLI's extract_keys logic.

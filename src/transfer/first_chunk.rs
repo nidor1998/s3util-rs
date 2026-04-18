@@ -167,7 +167,11 @@ pub async fn get_object_parts_if_necessary(
                 return Err(anyhow!("failed to get object attributes information."));
             }
 
+            // Only assert that the first part matches first_chunk_content_length when a range
+            // is active — for non-ranged fetches (e.g., s3-to-local full download), content_length
+            // is the whole object size and won't match the first part size.
             if config.transfer_config.auto_chunksize
+                && range.is_some()
                 && object_parts[0].size.unwrap() != first_chunk_content_length
             {
                 error!(
@@ -219,7 +223,8 @@ pub async fn get_object_parts_if_necessary(
             return Ok(Some(object_parts));
         }
 
-        if object_parts[0].size.unwrap() != first_chunk_content_length {
+        // Same reasoning as above: only check first-chunk/first-part size parity for ranged fetches.
+        if range.is_some() && object_parts[0].size.unwrap() != first_chunk_content_length {
             error!(
                 key = key,
                 "object parts size does not match content length. \

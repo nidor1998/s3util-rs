@@ -14,17 +14,20 @@ async fn main() -> Result<()> {
 
     match cli_args.command {
         Commands::Cp(cp_args) => {
+            // Short-circuit before Config::try_from — source/target aren't required
+            // for shell-completion generation, and try_from would otherwise reject
+            // the missing paths.
+            if let Some(shell) = cp_args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
             let config = match Config::try_from(cp_args) {
                 Ok(config) => config,
                 Err(error_message) => {
                     clap::Error::raw(clap::error::ErrorKind::ValueValidation, error_message).exit();
                 }
             };
-
-            if let Some(shell) = config.auto_complete_shell {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return Ok(());
-            }
 
             start_tracing_if_necessary(&config);
             tracing::trace!("config = {:?}", config);

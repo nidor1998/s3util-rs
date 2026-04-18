@@ -41,7 +41,9 @@ pub async fn transfer(
             None,
         )
         .await
-        .context("local_to_s3: source.head_object() failed.")?;
+        .context(format!(
+            "source file not found or not accessible: {source_key}"
+        ))?;
 
     let source_size = head_object_output.content_length().unwrap_or(0);
 
@@ -69,7 +71,7 @@ pub async fn transfer(
             None,
         )
         .await
-        .context("local_to_s3: source.get_object() failed.")?;
+        .context(format!("failed to read source file: {source_key}"))?;
 
     if cancellation_token.is_cancelled() {
         return Ok(());
@@ -92,6 +94,13 @@ pub async fn transfer(
         config.tagging.clone()
     };
 
+    // Build checksum algorithm slice matching s3sync's object.checksum_algorithm() format
+    let checksum_algorithms: Option<Vec<_>> = config
+        .additional_checksum_algorithm
+        .as_ref()
+        .map(|a| vec![a.clone()]);
+    let checksum_algorithm_slice = checksum_algorithms.as_deref();
+
     // Build object checksum using the s3sync-ported helper
     let final_checksum = first_chunk::get_final_checksum(
         &*source,
@@ -101,7 +110,7 @@ pub async fn transfer(
         range.as_deref(),
         source_key,
         None,
-        None,
+        checksum_algorithm_slice,
     )
     .await;
 
@@ -111,10 +120,16 @@ pub async fn transfer(
         config,
         target_key,
         &get_object_output,
-        None,
+        checksum_algorithm_slice,
         final_checksum,
     )
     .await?;
+
+    let if_none_match = if config.if_none_match {
+        Some("*".to_string())
+    } else {
+        None
+    };
 
     let put_object_output = target
         .put_object(
@@ -126,12 +141,10 @@ pub async fn transfer(
             get_object_output,
             tagging,
             object_checksum,
-            None,
-            None,
-            None,
+            if_none_match,
         )
         .await
-        .context("local_to_s3: target.put_object() failed.")?;
+        .context(format!("failed to upload to target: {target_key}"))?;
 
     if put_object_output.e_tag.is_some() {
         info!(
