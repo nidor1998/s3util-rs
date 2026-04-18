@@ -6,7 +6,7 @@ use crate::Config;
 use crate::storage::Storage;
 use crate::transfer::first_chunk;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{SyncStatistics, detect_additional_checksum, get_additional_checksum};
+use crate::types::{SyncStatistics, detect_additional_checksum};
 
 /// Transfer an S3 object to the local filesystem.
 ///
@@ -48,17 +48,13 @@ pub async fn transfer(
 
     let source_size = get_object_output.content_length().unwrap_or(0) as u64;
 
-    // Detect checksum algorithm: use explicit config, or auto-detect from source response
+    // Auto-detect checksum algorithm from source response. `additional_checksum_algorithm`
+    // is rejected at CLI validation when the target is local, so only the mode path applies.
     let (detected_algorithm, source_additional_checksum) =
-        if let Some(algorithm) = config.additional_checksum_algorithm.clone() {
-            let checksum = get_additional_checksum(&get_object_output, Some(algorithm.clone()));
-            (Some(algorithm), checksum)
-        } else if config.additional_checksum_mode.is_some() {
-            if let Some((algorithm, checksum)) = detect_additional_checksum(&get_object_output) {
-                (Some(algorithm), Some(checksum))
-            } else {
-                (None, None)
-            }
+        if config.additional_checksum_mode.is_some() {
+            detect_additional_checksum(&get_object_output)
+                .map(|(a, c)| (Some(a), Some(c)))
+                .unwrap_or((None, None))
         } else {
             (None, None)
         };
