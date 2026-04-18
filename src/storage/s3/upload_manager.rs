@@ -978,7 +978,6 @@ impl UploadManager {
         Ok(parts)
     }
 
-    #[allow(dead_code)] // temporary: caller added in Task 8 (S3Storage::put_object_stream)
     pub async fn upload_stream(
         &mut self,
         bucket: &str,

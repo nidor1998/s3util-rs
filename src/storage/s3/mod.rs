@@ -459,6 +459,38 @@ impl StorageTrait for S3Storage {
         Ok(put_object_output)
     }
 
+    async fn put_object_stream(
+        &self,
+        key: &str,
+        reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+        tagging: Option<String>,
+        object_checksum: Option<ObjectChecksum>,
+        if_none_match: Option<String>,
+    ) -> Result<PutObjectOutput> {
+        let mut upload_manager = UploadManager::new(
+            self.client.clone().unwrap(),
+            self.config.clone(),
+            self.request_payer.clone(),
+            self.cancellation_token.clone(),
+            self.get_stats_sender(),
+            tagging,
+            object_checksum
+                .as_ref()
+                .and_then(|c| c.object_parts.clone()),
+            self.is_express_onezone_storage(),
+            Box::new(self.clone()),
+            key.to_string(),
+            None,
+            None,
+            if_none_match,
+            self.has_warning.clone(),
+        );
+
+        upload_manager
+            .upload_stream(&self.bucket, key, reader)
+            .await
+    }
+
     async fn put_object_tagging(
         &self,
         key: &str,
