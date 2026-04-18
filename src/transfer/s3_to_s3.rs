@@ -3,7 +3,7 @@ use async_channel::Sender;
 use tracing::{debug, info, warn};
 
 use crate::Config;
-use crate::storage::{Storage, convert_head_to_get_object_output};
+use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
 use crate::transfer::first_chunk;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, get_additional_checksum};
@@ -71,26 +71,20 @@ pub async fn transfer(
     );
 
     let get_object_output = if config.server_side_copy {
-        // Server-side copy: use head_object with range to get metadata
-        if range.is_some() {
-            let ranged_head = source
-                .head_object(
-                    source_key,
-                    config.version_id.clone(),
-                    config.additional_checksum_mode.clone(),
-                    range.clone(),
-                    config.source_sse_c.clone(),
-                    config.source_sse_c_key.clone(),
-                    config.source_sse_c_key_md5.clone(),
-                )
-                .await
-                .context(format!(
-                    "failed to get source object first chunk: {source_key}"
-                ))?;
-            convert_head_to_get_object_output(ranged_head)
+        // Server-side copy: the first HEAD above already returned every metadata
+        // field we need. When a first-chunk range is active, downstream code
+        // (validate_content_range, upload_manager first-part sizing) expects
+        // content_length and content_range in the ranged-GET shape — synthesize
+        // them from the range string and the full source size instead of paying
+        // for a second ranged HEAD round-trip.
+        let range_override = if let Some(range_str) = range.as_deref() {
+            let (start, end) = parse_range_header_string(range_str)
+                .context("failed to parse first-chunk range header")?;
+            Some((start, end, source_size as u64))
         } else {
-            convert_head_to_get_object_output(head_object_output)
-        }
+            None
+        };
+        convert_head_to_get_object_output(head_object_output, range_override)
     } else {
         // Download + upload: download from source with range
         source

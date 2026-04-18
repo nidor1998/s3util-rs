@@ -208,7 +208,29 @@ pub fn get_range_from_content_range(get_object_output: &GetObjectOutput) -> Opti
     None
 }
 
-pub fn convert_head_to_get_object_output(head_object_output: HeadObjectOutput) -> GetObjectOutput {
+/// Build a synthetic `GetObjectOutput` from a `HeadObjectOutput`.
+///
+/// When `range_override` is `Some((start, end, total_size))`, the returned
+/// `content_length` and `content_range` fields are synthesized to match what
+/// a ranged GET would have returned — so callers can avoid a second ranged
+/// HEAD round-trip when the range was computed locally. The total size is
+/// passed explicitly rather than read from the head output because a
+/// non-ranged HEAD's `content_length` *is* the total size, but we prefer an
+/// explicit parameter to make the contract obvious at the call site.
+pub fn convert_head_to_get_object_output(
+    head_object_output: HeadObjectOutput,
+    range_override: Option<(u64, u64, u64)>,
+) -> GetObjectOutput {
+    let (content_length, content_range) = match range_override {
+        Some((start, end, total_size)) => (
+            Some((end - start + 1) as i64),
+            Some(format!("bytes {start}-{end}/{total_size}")),
+        ),
+        None => (
+            head_object_output.content_length(),
+            head_object_output.content_range().map(|s| s.to_string()),
+        ),
+    };
     GetObjectOutput::builder()
         .set_accept_ranges(head_object_output.accept_ranges().map(|s| s.to_string()))
         .set_body(Some(ByteStream::from(vec![])))
@@ -231,8 +253,8 @@ pub fn convert_head_to_get_object_output(head_object_output: HeadObjectOutput) -
         )
         .set_content_encoding(head_object_output.content_encoding().map(|s| s.to_string()))
         .set_content_language(head_object_output.content_language().map(|s| s.to_string()))
-        .set_content_length(head_object_output.content_length())
-        .set_content_range(head_object_output.content_range().map(|s| s.to_string()))
+        .set_content_length(content_length)
+        .set_content_range(content_range)
         .set_content_type(head_object_output.content_type().map(|s| s.to_string()))
         .set_delete_marker(head_object_output.delete_marker())
         .set_e_tag(head_object_output.e_tag().map(|s| s.to_string()))
