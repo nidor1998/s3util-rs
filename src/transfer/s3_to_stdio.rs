@@ -9,9 +9,7 @@ use crate::storage::additional_checksum_verify::is_multipart_upload_checksum;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::storage::e_tag_verify::{generate_e_tag_hash, normalize_e_tag, verify_e_tag};
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{
-    SyncStatistics, detect_additional_checksum, get_additional_checksum, is_full_object_checksum,
-};
+use crate::types::{SyncStatistics, detect_additional_checksum, is_full_object_checksum};
 
 /// Transfer an S3 object to stdout with inline ETag and checksum verification.
 ///
@@ -50,22 +48,16 @@ pub async fn transfer(
     let source_size = get_object_output.content_length().unwrap_or(0) as u64;
     let source_e_tag = get_object_output.e_tag().map(|e| e.to_string());
     let source_sse = get_object_output.server_side_encryption().cloned();
-    // Detect the checksum algorithm: use explicit config, or auto-detect from source response
-    let (detected_algorithm, source_final_checksum) =
-        if let Some(algorithm) = config.additional_checksum_algorithm.clone() {
-            let checksum = get_additional_checksum(&get_object_output, Some(algorithm.clone()));
-            (Some(algorithm), checksum)
-        } else if config.additional_checksum_mode.is_some() {
-            // Auto-detect from source response when --enable-additional-checksum is used
-            // without --additional-checksum-algorithm
-            if let Some((algorithm, checksum)) = detect_additional_checksum(&get_object_output) {
-                (Some(algorithm), Some(checksum))
-            } else {
-                (None, None)
-            }
-        } else {
-            (None, None)
-        };
+    // Auto-detect checksum algorithm from source response when --enable-additional-checksum
+    // is used. `additional_checksum_algorithm` is rejected at CLI validation when the target
+    // isn't S3, so only the mode path applies here.
+    let (detected_algorithm, source_final_checksum) = if config.additional_checksum_mode.is_some() {
+        detect_additional_checksum(&get_object_output)
+            .map(|(a, c)| (Some(a), Some(c)))
+            .unwrap_or((None, None))
+    } else {
+        (None, None)
+    };
 
     let multipart_chunksize = config.transfer_config.multipart_chunksize as usize;
     let multipart_threshold = config.transfer_config.multipart_threshold as usize;
