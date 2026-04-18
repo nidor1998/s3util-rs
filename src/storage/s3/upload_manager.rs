@@ -85,7 +85,6 @@ pub struct UploadManager {
 /// `AsyncReadExt::read_exact` can't distinguish "EOF at a clean boundary" from
 /// "EOF mid-read"; this helper treats any short read that terminates with
 /// `read() -> Ok(0)` as a clean EOF and returns the accumulated count.
-#[allow(dead_code)] // temporary: caller added in Task 6 (upload_parts_stream)
 async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
     buf: &mut [u8],
@@ -187,14 +186,10 @@ impl UploadManager {
             return Ok(put_object_output);
         }
 
-        let put_object_output = if self
-            .config
-            .transfer_config
-            .is_multipart_upload_required(
-                self.source_total_size
-                    .expect("source_total_size is Some in non-streaming upload path"),
-            )
-        {
+        let put_object_output = if self.config.transfer_config.is_multipart_upload_required(
+            self.source_total_size
+                .expect("source_total_size is Some in non-streaming upload path"),
+        ) {
             self.multipart_upload(bucket, key, get_object_output_first_chunk)
                 .await?
         } else {
@@ -981,6 +976,252 @@ impl UploadManager {
         let mut parts = shared_upload_parts.lock().unwrap().clone();
         parts.sort_by_key(|part| part.part_number.unwrap());
         Ok(parts)
+    }
+
+    // skipcq: RS-R1000
+    async fn upload_parts_stream(
+        &mut self,
+        bucket: &str,
+        key: &str,
+        upload_id: &str,
+        mut reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
+    ) -> Result<(Vec<CompletedPart>, u64, Option<String>)> {
+        use crate::storage::checksum::AdditionalChecksum;
+
+        let shared_multipart_etags = Arc::new(Mutex::new(Vec::<MutipartEtags>::new()));
+        let shared_upload_parts = Arc::new(Mutex::new(Vec::<CompletedPart>::new()));
+
+        let config_chunksize = self.config.transfer_config.multipart_chunksize as usize;
+        let mut total_uploaded_size: u64 = 0;
+        let mut part_number: i32 = 1;
+
+        let mut additional_checksum = self
+            .config
+            .additional_checksum_algorithm
+            .clone()
+            .map(|algo| AdditionalChecksum::new(algo, self.config.full_object_checksum));
+
+        let mut upload_parts_join_handles = FuturesUnordered::new();
+
+        loop {
+            if self.cancellation_token.is_cancelled() {
+                return Err(anyhow!(S3syncError::Cancelled));
+            }
+
+            // Read up to config_chunksize bytes for this part.
+            let mut buffer = vec![0u8; config_chunksize];
+            let n = read_exact_or_eof(&mut reader, &mut buffer).await?;
+            if n == 0 {
+                // Clean EOF on a chunk boundary.
+                break;
+            }
+            buffer.truncate(n);
+            let is_last_chunk = n < config_chunksize;
+
+            // Incremental additional checksum — synchronous, in part order.
+            if let Some(c) = additional_checksum.as_mut() {
+                c.update(&buffer);
+                let _ = c.finalize();
+            }
+
+            total_uploaded_size += n as u64;
+
+            // Capture per-task locals.
+            let upload_parts = Arc::clone(&shared_upload_parts);
+            let multipart_etags = Arc::clone(&shared_multipart_etags);
+            let client = Arc::clone(&self.client);
+            let target_bucket = bucket.to_string();
+            let target_key = key.to_string();
+            let target_upload_id = upload_id.to_string();
+            let target_sse_c = self.config.target_sse_c.clone();
+            let target_sse_c_key = self.config.target_sse_c_key.clone().key.clone();
+            let target_sse_c_key_md5 = self.config.target_sse_c_key_md5.clone();
+            let additional_checksum_algorithm = self.config.additional_checksum_algorithm.clone();
+            let disable_payload_signing = self.config.disable_payload_signing;
+            let disable_content_md5_header = self.config.disable_content_md5_header;
+            let express_onezone_storage = self.express_onezone_storage;
+            let request_payer = self.request_payer.clone();
+            let stats_sender = self.stats_sender.clone();
+            let current_part_number = part_number;
+            let part_size = n as i64;
+
+            let permit = self
+                .config
+                .clone()
+                .target_client_config
+                .unwrap()
+                .parallel_upload_semaphore
+                .acquire_owned()
+                .await?;
+
+            let task: JoinHandle<Result<()>> = task::spawn(async move {
+                let _permit = permit;
+
+                let md5_digest;
+                let md5_digest_base64 = if !express_onezone_storage && !disable_content_md5_header {
+                    let md5_digest_raw = md5::compute(&buffer);
+                    md5_digest = Some(md5_digest_raw);
+                    Some(general_purpose::STANDARD.encode(md5_digest_raw.as_slice()))
+                } else {
+                    md5_digest = None;
+                    None
+                };
+
+                // Compute per-part additional checksum for the upload_part call itself.
+                let part_additional_checksum = additional_checksum_algorithm.as_ref().map(|algo| {
+                    let mut c = AdditionalChecksum::new(algo.clone(), false);
+                    c.update(&buffer);
+                    c.finalize()
+                });
+
+                let body = ByteStream::from(buffer);
+
+                debug!(
+                    key = &target_key,
+                    part_number = current_part_number,
+                    size = part_size,
+                    is_last = is_last_chunk,
+                    "upload_part() start (streaming)"
+                );
+
+                let mut upload_part_builder = client
+                    .upload_part()
+                    .set_request_payer(request_payer.clone())
+                    .bucket(&target_bucket)
+                    .key(&target_key)
+                    .upload_id(&target_upload_id)
+                    .part_number(current_part_number)
+                    .body(body)
+                    .set_content_md5(md5_digest_base64)
+                    .set_sse_customer_algorithm(target_sse_c.clone())
+                    .set_sse_customer_key(target_sse_c_key.clone())
+                    .set_sse_customer_key_md5(target_sse_c_key_md5.clone());
+
+                if let Some(algo) = additional_checksum_algorithm.as_ref() {
+                    upload_part_builder =
+                        upload_part_builder.set_checksum_algorithm(Some(algo.clone()));
+                    match algo {
+                        ChecksumAlgorithm::Sha256 => {
+                            upload_part_builder = upload_part_builder
+                                .set_checksum_sha256(part_additional_checksum.clone());
+                        }
+                        ChecksumAlgorithm::Sha1 => {
+                            upload_part_builder = upload_part_builder
+                                .set_checksum_sha1(part_additional_checksum.clone());
+                        }
+                        ChecksumAlgorithm::Crc32 => {
+                            upload_part_builder = upload_part_builder
+                                .set_checksum_crc32(part_additional_checksum.clone());
+                        }
+                        ChecksumAlgorithm::Crc32C => {
+                            upload_part_builder = upload_part_builder
+                                .set_checksum_crc32_c(part_additional_checksum.clone());
+                        }
+                        ChecksumAlgorithm::Crc64Nvme => {
+                            upload_part_builder = upload_part_builder
+                                .set_checksum_crc64_nvme(part_additional_checksum.clone());
+                        }
+                        _ => {}
+                    }
+                }
+
+                let upload_part_output = if disable_payload_signing {
+                    upload_part_builder
+                        .customize()
+                        .disable_payload_signing()
+                        .send()
+                        .await
+                        .context("aws_sdk_s3::client::Client upload_part() failed.")?
+                } else {
+                    upload_part_builder
+                        .send()
+                        .await
+                        .context("aws_sdk_s3::client::Client upload_part() failed.")?
+                };
+
+                debug!(
+                    key = &target_key,
+                    part_number = current_part_number,
+                    "upload_part() complete (streaming)"
+                );
+                trace!(key = &target_key, "{upload_part_output:?}");
+
+                if md5_digest.is_some() {
+                    let mut locked_etags = multipart_etags.lock().unwrap();
+                    locked_etags.push(MutipartEtags {
+                        digest: md5_digest.as_ref().unwrap().as_slice().to_vec(),
+                        part_number: current_part_number,
+                    });
+                }
+
+                {
+                    let mut locked_upload_parts = upload_parts.lock().unwrap();
+                    locked_upload_parts.push(
+                        CompletedPart::builder()
+                            .e_tag(upload_part_output.e_tag().unwrap())
+                            .set_checksum_sha256(
+                                upload_part_output.checksum_sha256().map(|s| s.to_string()),
+                            )
+                            .set_checksum_sha1(
+                                upload_part_output.checksum_sha1().map(|s| s.to_string()),
+                            )
+                            .set_checksum_crc32(
+                                upload_part_output.checksum_crc32().map(|s| s.to_string()),
+                            )
+                            .set_checksum_crc32_c(
+                                upload_part_output.checksum_crc32_c().map(|s| s.to_string()),
+                            )
+                            .set_checksum_crc64_nvme(
+                                upload_part_output
+                                    .checksum_crc64_nvme()
+                                    .map(|s| s.to_string()),
+                            )
+                            .part_number(current_part_number)
+                            .build(),
+                    );
+                } // drop locked_upload_parts before await
+
+                let _ = stats_sender
+                    .send(SyncStatistics::SyncBytes(part_size as u64))
+                    .await;
+
+                Ok(())
+            });
+
+            upload_parts_join_handles.push(task);
+            part_number += 1;
+
+            if is_last_chunk {
+                break;
+            }
+        }
+
+        while let Some(result) = upload_parts_join_handles.next().await {
+            result
+                .context("upload_parts_stream join failed")?
+                .context("upload_parts_stream task failed")?;
+        }
+
+        // Sort parts by part_number since tasks finished in arbitrary order.
+        let mut parts = shared_upload_parts.lock().unwrap().clone();
+        parts.sort_by_key(|p| p.part_number.unwrap_or(0));
+
+        // Collect per-part MD5s (in part order) for composite ETag computation later.
+        {
+            let mut etags = shared_multipart_etags.lock().unwrap();
+            etags.sort_by_key(|e| e.part_number);
+            for etag in etags.iter() {
+                self.concatnated_md5_hash.extend_from_slice(&etag.digest);
+            }
+        }
+
+        let source_additional_checksum_string = additional_checksum.map(|mut c| c.finalize_all());
+
+        Ok((
+            parts,
+            total_uploaded_size,
+            source_additional_checksum_string,
+        ))
     }
 
     // skipcq: RS-R1000
