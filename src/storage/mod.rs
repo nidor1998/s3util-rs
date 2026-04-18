@@ -138,6 +138,18 @@ pub trait StorageTrait: DynClone {
         version_id: Option<String>,
         tagging: Tagging,
     ) -> Result<PutObjectTaggingOutput>;
+    async fn put_object_stream(
+        &self,
+        _key: &str,
+        _reader: Box<dyn AsyncRead + Send + Unpin>,
+        _tagging: Option<String>,
+        _object_checksum: Option<ObjectChecksum>,
+        _if_none_match: Option<String>,
+    ) -> Result<PutObjectOutput> {
+        Err(anyhow!(
+            "put_object_stream is not supported on this storage"
+        ))
+    }
     async fn delete_object(
         &self,
         key: &str,
