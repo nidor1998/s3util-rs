@@ -17,7 +17,6 @@ use crate::types::{ObjectChecksum, SyncStatistics};
 /// If the returned Vec's length is `< limit`, the reader reached EOF.
 /// If `== limit`, the limit was reached and the reader may have more data.
 /// `limit` must be > 0; with `limit = 0` the EOF vs limit-reached distinction collapses.
-#[allow(dead_code)] // temporary: caller added in Task 10 (transfer dispatch)
 async fn probe_up_to<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
     limit: usize,
@@ -33,15 +32,15 @@ async fn probe_up_to<R: tokio::io::AsyncRead + Unpin + ?Sized>(
 
 /// Transfer data from an async reader (typically stdin) to an S3 object.
 ///
-/// The reader is drained to memory so the total size is known before dispatch
-/// to the upload manager — which decides single-part vs multipart based on
-/// `multipart_threshold`. Tests inject `Cursor<Vec<u8>>`; the CLI binary
-/// injects `tokio::io::stdin()`.
+/// Probes up to `multipart_threshold` bytes. If the reader hits EOF before the
+/// threshold the data stays fully in memory (`transfer_buffered`). If the
+/// threshold is reached the remaining stream is chained and uploaded via
+/// `transfer_streaming` → `put_object_stream`.
 pub async fn transfer(
     config: &Config,
     target: Storage,
     target_key: &str,
-    mut reader: impl tokio::io::AsyncRead + Unpin + Send,
+    mut reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -49,21 +48,80 @@ pub async fn transfer(
         return Ok(());
     }
 
-    let mut buffer = Vec::new();
-    reader
-        .read_to_end(&mut buffer)
-        .await
-        .context("failed to read from stdin")?;
+    let threshold = config.transfer_config.multipart_threshold as usize;
+    let initial = probe_up_to(&mut reader, threshold).await?;
 
-    transfer_buffered(
+    if initial.len() < threshold {
+        // Reader hit EOF before the threshold — stays in the in-memory path.
+        return transfer_buffered(
+            config,
+            target,
+            target_key,
+            initial,
+            cancellation_token,
+            stats_sender,
+        )
+        .await;
+    }
+
+    // Threshold reached — stream the rest.
+    transfer_streaming(
         config,
         target,
         target_key,
-        buffer,
+        initial,
+        reader,
         cancellation_token,
         stats_sender,
     )
     .await
+}
+
+async fn transfer_streaming(
+    config: &Config,
+    target: Storage,
+    target_key: &str,
+    initial: Vec<u8>,
+    reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
+    _cancellation_token: PipelineCancellationToken,
+    stats_sender: Sender<SyncStatistics>,
+) -> Result<()> {
+    // Chain the already-buffered bytes with the remaining reader.
+    let chained: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
+        Box::new(std::io::Cursor::new(initial).chain(reader));
+
+    let tagging = if config.disable_tagging {
+        None
+    } else {
+        config.tagging.clone()
+    };
+
+    let object_checksum = ObjectChecksum {
+        key: target_key.to_string(),
+        version_id: None,
+        checksum_algorithm: config.additional_checksum_algorithm.clone(),
+        checksum_type: None,
+        object_parts: None,
+        final_checksum: None,
+    };
+
+    let _put_object_output = target
+        .put_object_stream(target_key, chained, tagging, Some(object_checksum), None)
+        .await
+        .context(format!("failed to stream to target: {target_key}"))?;
+
+    info!(
+        target_key = target_key,
+        "stdin streaming transfer completed."
+    );
+
+    let _ = stats_sender
+        .send(SyncStatistics::SyncComplete {
+            key: target_key.to_string(),
+        })
+        .await;
+
+    Ok(())
 }
 
 async fn transfer_buffered(
