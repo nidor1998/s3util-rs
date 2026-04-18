@@ -85,6 +85,7 @@ pub struct UploadManager {
 /// `AsyncReadExt::read_exact` can't distinguish "EOF at a clean boundary" from
 /// "EOF mid-read"; this helper treats any short read that terminates with
 /// `read() -> Ok(0)` as a clean EOF and returns the accumulated count.
+#[allow(dead_code)] // temporary: caller is upload_parts_stream, which is dead until Task 7
 async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
     reader: &mut R,
     buf: &mut [u8],
@@ -978,6 +979,7 @@ impl UploadManager {
         Ok(parts)
     }
 
+    #[allow(dead_code)] // temporary: caller added in Task 7 (upload_stream)
     // skipcq: RS-R1000
     async fn upload_parts_stream(
         &mut self,
