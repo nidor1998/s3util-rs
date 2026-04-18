@@ -435,7 +435,7 @@ impl StorageTrait for S3Storage {
             self.is_express_onezone_storage(),
             source,
             source_key.to_string(),
-            source_size,
+            Some(source_size),
             source_additional_checksum,
             if_none_match,
             self.has_warning.clone(),

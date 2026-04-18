@@ -73,7 +73,7 @@ pub struct UploadManager {
     express_onezone_storage: bool,
     source: Storage,
     source_key: String,
-    source_total_size: u64,
+    source_total_size: Option<u64>,
     source_additional_checksum: Option<String>,
     if_none_match: Option<String>,
     has_warning: Arc<AtomicBool>,
@@ -92,7 +92,7 @@ impl UploadManager {
         express_onezone_storage: bool,
         source: Storage,
         source_key: String,
-        source_total_size: u64,
+        source_total_size: Option<u64>,
         source_additional_checksum: Option<String>,
         if_none_match: Option<String>,
         has_warning: Arc<AtomicBool>,
@@ -143,11 +143,14 @@ impl UploadManager {
                 .unwrap()
                 .size()
                 .unwrap();
-            if self.source_total_size != first_chunk_size as u64 {
+            let source_total_size = self
+                .source_total_size
+                .expect("source_total_size is Some in non-streaming upload path");
+            if source_total_size != first_chunk_size as u64 {
                 return Err(anyhow!(format!(
                     "source_total_size does not match the first object part size: \
                      source_total_size = {}, first object part size = {}",
-                    self.source_total_size, first_chunk_size
+                    source_total_size, first_chunk_size
                 )));
             }
 
@@ -162,7 +165,10 @@ impl UploadManager {
         let put_object_output = if self
             .config
             .transfer_config
-            .is_multipart_upload_required(self.source_total_size)
+            .is_multipart_upload_required(
+                self.source_total_size
+                    .expect("source_total_size is Some in non-streaming upload path"),
+            )
         {
             self.multipart_upload(bucket, key, get_object_output_first_chunk)
                 .await?
@@ -389,7 +395,9 @@ impl UploadManager {
             .server_side_encryption()
             .cloned();
         let source_remote_storage = get_object_output_first_chunk.e_tag().is_some();
-        let source_content_length = self.source_total_size;
+        let source_content_length = self
+            .source_total_size
+            .expect("source_total_size is Some in non-streaming upload path");
         let source_e_tag = get_object_output_first_chunk
             .e_tag()
             .map(|e_tag| e_tag.to_string());
@@ -584,7 +592,10 @@ impl UploadManager {
         let shared_total_upload_size = Arc::new(Mutex::new(Vec::new()));
 
         let config_chunksize = self.config.transfer_config.multipart_chunksize as usize;
-        let source_total_size = self.source_total_size as usize;
+        let source_total_size = self
+            .source_total_size
+            .expect("source_total_size is Some in non-streaming upload path")
+            as usize;
         let source_version_id = get_object_output_first_chunk
             .version_id()
             .map(|v| v.to_string());
@@ -611,7 +622,7 @@ impl UploadManager {
 
         let mut upload_parts_join_handles = FuturesUnordered::new();
         let mut part_number = 1;
-        for offset in (0..self.source_total_size as usize).step_by(config_chunksize) {
+        for offset in (0..source_total_size).step_by(config_chunksize) {
             if self.cancellation_token.is_cancelled() {
                 return Err(anyhow!(S3syncError::Cancelled));
             }
@@ -919,7 +930,10 @@ impl UploadManager {
         }
 
         let total_upload_size: i64 = shared_total_upload_size.lock().unwrap().iter().sum();
-        if total_upload_size == self.source_total_size as i64 {
+        let source_total_size = self
+            .source_total_size
+            .expect("source_total_size is Some in non-streaming upload path");
+        if total_upload_size == source_total_size as i64 {
             debug!(
                 key,
                 total_upload_size, "multipart upload completed successfully."
@@ -927,7 +941,7 @@ impl UploadManager {
         } else {
             return Err(anyhow!(format!(
                 "multipart upload size mismatch: key={key}, expected = {0}, actual {total_upload_size}",
-                self.source_total_size
+                source_total_size
             )));
         }
 
@@ -1277,7 +1291,10 @@ impl UploadManager {
         }
 
         let total_upload_size: i64 = shared_total_upload_size.lock().unwrap().iter().sum();
-        if total_upload_size == self.source_total_size as i64 {
+        let source_total_size = self
+            .source_total_size
+            .expect("source_total_size is Some in non-streaming upload path");
+        if total_upload_size == source_total_size as i64 {
             debug!(
                 key,
                 total_upload_size, "multipart upload(auto-chunksize) completed successfully."
@@ -1285,7 +1302,7 @@ impl UploadManager {
         } else {
             return Err(anyhow!(format!(
                 "multipart upload(auto-chunksize) size mismatch: key={key}, expected = {0}, actual {total_upload_size}",
-                self.source_total_size
+                source_total_size
             )));
         }
 
@@ -1321,8 +1338,12 @@ impl UploadManager {
             let mut body = get_object_output.body.into_async_read();
             get_object_output.body = ByteStream::from_static(b"");
 
-            let mut buffer = Vec::<u8>::with_capacity(self.source_total_size as usize);
-            buffer.resize_with(self.source_total_size as usize, Default::default);
+            let source_total_size = self
+                .source_total_size
+                .expect("source_total_size is Some in non-streaming upload path")
+                as usize;
+            let mut buffer = Vec::<u8>::with_capacity(source_total_size);
+            buffer.resize_with(source_total_size, Default::default);
 
             let result = body.read_exact(buffer.as_mut_slice()).await;
             if let Err(e) = result {
@@ -1421,6 +1442,9 @@ impl UploadManager {
             tagging: self.tagging.clone(),
         };
 
+        let source_total_size = self
+            .source_total_size
+            .expect("source_total_size is Some in non-streaming upload path");
         let put_object_output = if self.config.server_side_copy {
             let copy_source = self
                 .source
@@ -1459,8 +1483,8 @@ impl UploadManager {
                 .await?;
             let _ = self
                 .stats_sender
-                .send_blocking(SyncStatistics::SyncBytes(self.source_total_size));
-            convert_copy_to_put_object_output(copy_object_output, self.source_total_size as i64)
+                .send_blocking(SyncStatistics::SyncBytes(source_total_size));
+            convert_copy_to_put_object_output(copy_object_output, source_total_size as i64)
         } else {
             let builder = self
                 .client
@@ -1469,7 +1493,7 @@ impl UploadManager {
                 .set_storage_class(upload_metadata.storage_class)
                 .bucket(bucket)
                 .key(key)
-                .content_length(self.source_total_size as i64)
+                .content_length(source_total_size as i64)
                 .body(buffer_stream)
                 .set_metadata(upload_metadata.metadata)
                 .set_tagging(upload_metadata.tagging)
@@ -1513,7 +1537,7 @@ impl UploadManager {
 
         let _ = self
             .stats_sender
-            .send(SyncStatistics::SyncBytes(self.source_total_size))
+            .send(SyncStatistics::SyncBytes(source_total_size))
             .await;
 
         let source_e_tag = if source_local_storage {
