@@ -49,13 +49,32 @@ pub async fn transfer(
         return Ok(());
     }
 
-    let target_clone = dyn_clone::clone_box(&*target);
-
     let mut buffer = Vec::new();
     reader
         .read_to_end(&mut buffer)
         .await
         .context("failed to read from stdin")?;
+
+    transfer_buffered(
+        config,
+        target,
+        target_key,
+        buffer,
+        cancellation_token,
+        stats_sender,
+    )
+    .await
+}
+
+async fn transfer_buffered(
+    config: &Config,
+    target: Storage,
+    target_key: &str,
+    buffer: Vec<u8>,
+    _cancellation_token: PipelineCancellationToken,
+    stats_sender: Sender<SyncStatistics>,
+) -> Result<()> {
+    let target_clone = dyn_clone::clone_box(&*target);
 
     let source_size = buffer.len() as u64;
 
