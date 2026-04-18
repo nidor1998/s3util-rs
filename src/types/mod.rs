@@ -191,6 +191,34 @@ pub fn detect_additional_checksum(
     None
 }
 
+/// Detect which checksum algorithm the source object uses by inspecting the HeadObjectOutput fields.
+/// Returns the algorithm and its value if found.
+///
+/// Priority favors explicitly user-chosen algorithms (SHA256/SHA1/CRC32/CRC32C) over CRC64NVME,
+/// which S3 often auto-adds to objects uploaded with a different explicit algorithm. This ensures
+/// a multipart object uploaded with `--additional-checksum-algorithm SHA256` is verified with
+/// SHA256, not with the auto-added full-object CRC64NVME.
+pub fn detect_additional_checksum_with_head_object(
+    head_object_output: &HeadObjectOutput,
+) -> Option<(ChecksumAlgorithm, String)> {
+    if let Some(v) = head_object_output.checksum_sha256() {
+        return Some((ChecksumAlgorithm::Sha256, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_sha1() {
+        return Some((ChecksumAlgorithm::Sha1, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_crc32_c() {
+        return Some((ChecksumAlgorithm::Crc32C, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_crc32() {
+        return Some((ChecksumAlgorithm::Crc32, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_crc64_nvme() {
+        return Some((ChecksumAlgorithm::Crc64Nvme, v.to_string()));
+    }
+    None
+}
+
 pub fn get_additional_checksum(
     get_object_output: &GetObjectOutput,
     checksum_algorithm: Option<ChecksumAlgorithm>,
@@ -487,6 +515,45 @@ mod tests {
             .checksum_crc64_nvme("crc64-value")
             .build();
         let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc64Nvme));
+        assert_eq!(value, "crc64-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_none_when_no_checksum_present() {
+        let head = HeadObjectOutput::builder().build();
+        assert!(detect_additional_checksum_with_head_object(&head).is_none());
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_sha256_when_present() {
+        let head = HeadObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha256));
+        assert_eq!(value, "sha256-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_prefers_explicit_over_auto_added_crc64nvme() {
+        // S3 may auto-add CRC64NVME alongside an explicitly chosen algorithm.
+        // Per the function's documented contract, the explicit choice wins.
+        let head = HeadObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha256));
+        assert_eq!(value, "sha256-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_crc64nvme_when_only_one_present() {
+        let head = HeadObjectOutput::builder()
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
         assert!(matches!(algo, ChecksumAlgorithm::Crc64Nvme));
         assert_eq!(value, "crc64-value");
     }
