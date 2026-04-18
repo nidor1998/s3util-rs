@@ -79,6 +79,33 @@ pub struct UploadManager {
     has_warning: Arc<AtomicBool>,
 }
 
+/// Read bytes into `buf` until it is completely full or the reader signals EOF.
+/// Returns the number of bytes actually read (0 <= n <= buf.len()).
+///
+/// `AsyncReadExt::read_exact` can't distinguish "EOF at a clean boundary" from
+/// "EOF mid-read"; this helper treats any short read that terminates with
+/// `read() -> Ok(0)` as a clean EOF and returns the accumulated count.
+#[allow(dead_code)]
+async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    reader: &mut R,
+    buf: &mut [u8],
+) -> Result<usize> {
+    use tokio::io::AsyncReadExt;
+
+    let mut total = 0;
+    while total < buf.len() {
+        let n = reader
+            .read(&mut buf[total..])
+            .await
+            .context("read_exact_or_eof: reader returned an error")?;
+        if n == 0 {
+            break;
+        }
+        total += n;
+    }
+    Ok(total)
+}
+
 impl UploadManager {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -1844,5 +1871,47 @@ mod tests {
                     .unwrap(),
             )
             .try_init();
+    }
+}
+
+#[cfg(test)]
+mod read_exact_or_eof_tests {
+    use super::read_exact_or_eof;
+    use std::io::Cursor;
+
+    #[tokio::test]
+    async fn reads_full_buffer_when_reader_has_more() {
+        let mut reader = Cursor::new(vec![1u8; 100]);
+        let mut buf = vec![0u8; 50];
+        let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 50);
+        assert_eq!(buf, vec![1u8; 50]);
+    }
+
+    #[tokio::test]
+    async fn reads_partial_when_reader_has_less() {
+        let mut reader = Cursor::new(vec![7u8; 30]);
+        let mut buf = vec![0u8; 50];
+        let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 30);
+        assert_eq!(&buf[..30], &vec![7u8; 30][..]);
+        assert_eq!(&buf[30..], &vec![0u8; 20][..]);
+    }
+
+    #[tokio::test]
+    async fn reads_zero_when_reader_is_empty() {
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let mut buf = vec![0u8; 10];
+        let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 0);
+    }
+
+    #[tokio::test]
+    async fn reads_exact_amount_when_reader_matches_buffer() {
+        let mut reader = Cursor::new(vec![9u8; 64]);
+        let mut buf = vec![0u8; 64];
+        let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
+        assert_eq!(n, 64);
+        assert_eq!(buf, vec![9u8; 64]);
     }
 }
