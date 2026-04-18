@@ -657,6 +657,271 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
+    // stdin → S3 — streaming-MPU path (post-threshold) coverage
+    //
+    // These pin the streaming dispatch added in commits 6376443/e9272c1/17360f2/22af3ae:
+    // probe_up_to reads up to multipart_threshold; if the reader hits EOF first the
+    // buffered path is used, otherwise the chained reader is streamed via
+    // put_object_stream → upload_parts_stream. Existing tests above mostly verify the
+    // S3 side ETag/checksum exists; these additionally verify byte-level content
+    // equivalence and exercise the boundary/edge cases of the dispatch logic.
+    // ---------------------------------------------------------------
+
+    /// Streaming MPU path roundtrip: pipe known random bytes (>threshold), then
+    /// download via SDK and compare SHA256 of the raw bytes. Pins the actual
+    /// content equivalence end-to-end, not just "checksum field is set".
+    #[tokio::test]
+    async fn stdin_to_s3_streaming_roundtrip_sha256_verifies_content() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 12 MiB > default 8 MiB threshold → exercises transfer_streaming.
+        let stdin_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let expected_sha256 = TestHelper::get_sha256_from_bytes(&stdin_bytes);
+        let target = format!("s3://{}/streamed.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let downloaded = helper.get_object_bytes(&bucket, "streamed.dat", None).await;
+        assert_eq!(downloaded.len(), 12 * 1024 * 1024);
+        assert_eq!(
+            TestHelper::get_sha256_from_bytes(&downloaded),
+            expected_sha256,
+            "streaming MPU roundtrip must reproduce source bytes exactly"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Streaming MPU with > 2 parts and roundtrip verification. Catches part-ordering
+    /// or buffer-flush bugs in upload_parts_stream that 2-part tests would miss.
+    #[tokio::test]
+    async fn stdin_to_s3_streaming_roundtrip_four_parts_verifies_content() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 32 MiB / 8 MiB chunks = 4 parts (default threshold/chunksize).
+        let stdin_bytes = TestHelper::generate_random_bytes(32 * 1024 * 1024).unwrap();
+        let expected_sha256 = TestHelper::get_sha256_from_bytes(&stdin_bytes);
+        let target = format!("s3://{}/streamed.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let head = helper.head_object(&bucket, "streamed.dat", None).await;
+        let etag = head.e_tag().unwrap();
+        assert!(
+            etag.contains("-4"),
+            "32 MiB / 8 MiB → 4 parts expected, got: {etag}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "streamed.dat", None).await;
+        assert_eq!(downloaded.len(), 32 * 1024 * 1024);
+        assert_eq!(
+            TestHelper::get_sha256_from_bytes(&downloaded),
+            expected_sha256,
+            "4-part streaming roundtrip must reproduce source bytes exactly"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Boundary: stdin length == multipart_threshold. The dispatch uses a strict `<`
+    /// check, so length-equal-threshold takes the streaming path. Pin this so a future
+    /// switch to `<=` wouldn't go undetected.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_exact_takes_streaming_path() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Exactly 5 MiB with --multipart-threshold=5MiB → streaming path expected.
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let expected_sha256 = TestHelper::get_sha256_from_bytes(&stdin_bytes);
+        let target = format!("s3://{}/threshold_exact.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let head = helper
+            .head_object(&bucket, "threshold_exact.dat", None)
+            .await;
+        let etag = head.e_tag().unwrap();
+        assert!(
+            etag.contains("-1"),
+            "exactly-at-threshold should take streaming/multipart path with 1 part, got: {etag}"
+        );
+
+        let downloaded = helper
+            .get_object_bytes(&bucket, "threshold_exact.dat", None)
+            .await;
+        assert_eq!(
+            TestHelper::get_sha256_from_bytes(&downloaded),
+            expected_sha256
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Empty stdin: 0 bytes piped in. Falls through the buffered path
+    /// (probe_up_to returns empty < threshold) and must produce a zero-byte object.
+    #[tokio::test]
+    async fn stdin_to_s3_empty_input_creates_zero_byte_object() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/empty.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "-",
+                    &target,
+                ],
+                Vec::new(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let head = helper.head_object(&bucket, "empty.dat", None).await;
+        assert_eq!(head.content_length().unwrap(), 0);
+        let etag = head.e_tag().unwrap();
+        assert!(
+            !etag.contains('-'),
+            "0-byte stdin should produce single-part ETag, got: {etag}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "empty.dat", None).await;
+        assert!(downloaded.is_empty());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Streaming MPU + --full-object-checksum: exercises the full-object CRC64NVME
+    /// path through upload_parts_stream and verifies content equivalence. CRC64NVME
+    /// is always full-object regardless of the flag, but combining it with streaming
+    /// + content verification covers the streaming checksum-finalize path.
+    #[tokio::test]
+    async fn stdin_to_s3_streaming_full_object_crc64nvme_verifies_content() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 16 MiB at default 8 MiB threshold/chunksize → 2-part streaming MPU.
+        let stdin_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let expected_sha256 = TestHelper::get_sha256_from_bytes(&stdin_bytes);
+        let target = format!("s3://{}/streamed_crc64.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "CRC64NVME",
+                    "--full-object-checksum",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let head = helper
+            .head_object(&bucket, "streamed_crc64.dat", None)
+            .await;
+        assert!(head.checksum_crc64_nvme().is_some());
+
+        let downloaded = helper
+            .get_object_bytes(&bucket, "streamed_crc64.dat", None)
+            .await;
+        assert_eq!(downloaded.len(), 16 * 1024 * 1024);
+        assert_eq!(
+            TestHelper::get_sha256_from_bytes(&downloaded),
+            expected_sha256,
+            "streaming MPU + full-object CRC64NVME must reproduce source bytes"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    // ---------------------------------------------------------------
     // S3 → stdout — additional-checksum tests (5 algorithms × single/multipart source)
     // ---------------------------------------------------------------
 

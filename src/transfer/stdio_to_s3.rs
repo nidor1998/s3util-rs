@@ -376,4 +376,93 @@ mod checksum_invariant_tests {
             assert_eq!(batched, streamed, "algorithm {:?}", algo);
         }
     }
+
+    #[test]
+    fn sub_threshold_matches_single_update_finalize() {
+        // With buffer.len() < multipart_threshold, compute_source_checksum should
+        // emit a single-part checksum equal to one update+finalize call.
+        let chunksize = 1024usize;
+        let threshold = 4096usize;
+        let buffer = vec![0xC3u8; 1500];
+
+        for algo in all_algorithms() {
+            let actual =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let mut expected = AdditionalChecksum::new(algo.clone(), false);
+            expected.update(&buffer);
+            assert_eq!(
+                actual,
+                expected.finalize(),
+                "algorithm {:?}: sub-threshold path should match single update+finalize",
+                algo
+            );
+        }
+    }
+
+    #[test]
+    fn empty_buffer_produces_well_defined_checksum() {
+        // Empty buffer hits the sub-threshold branch (0 < threshold) and returns a
+        // single-part checksum over zero bytes — must be stable and equal to a fresh
+        // AdditionalChecksum that was never updated.
+        let chunksize = 1024usize;
+        let threshold = 1024usize;
+        let buffer: Vec<u8> = Vec::new();
+
+        for algo in all_algorithms() {
+            let actual =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let mut expected = AdditionalChecksum::new(algo.clone(), false);
+            assert_eq!(actual, expected.finalize(), "algorithm {:?}", algo);
+        }
+    }
+
+    #[test]
+    fn threshold_boundary_uses_multipart_path() {
+        // buffer.len() == multipart_threshold takes the multipart branch (the < check
+        // is strict). Pin that boundary so a future change to >= or > would be caught.
+        let chunksize = 1024usize;
+        let threshold = 1024usize;
+        let buffer = vec![0x11u8; threshold];
+
+        for algo in all_algorithms() {
+            let multipart =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let mut single = AdditionalChecksum::new(algo.clone(), false);
+            single.update(&buffer);
+            let single_part = single.finalize();
+            // For algorithms where the composite differs from a single-part checksum
+            // (SHA256/SHA1/CRC32/CRC32C with composite enabled), the boundary must
+            // produce the multipart form, not the single-part one. Crc64Nvme is
+            // always full-object and will match — that's expected.
+            if !matches!(algo, ChecksumAlgorithm::Crc64Nvme) {
+                assert_ne!(
+                    multipart, single_part,
+                    "algorithm {:?}: threshold boundary should take multipart path",
+                    algo
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_object_checksum_flag_is_threaded_through() {
+        // For CRC algorithms, full_object_checksum=true should produce a checksum
+        // distinct from full_object_checksum=false on the same multipart input.
+        // (Crc64Nvme ignores the flag — only CRC32/CRC32C honor it.)
+        let chunksize = 1024usize;
+        let threshold = 1024usize;
+        let buffer = vec![0x77u8; chunksize * 2 + 5];
+
+        for algo in [ChecksumAlgorithm::Crc32, ChecksumAlgorithm::Crc32C] {
+            let composite =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let full_object =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, true);
+            assert_ne!(
+                composite, full_object,
+                "algorithm {:?}: full_object_checksum flag should change result",
+                algo
+            );
+        }
+    }
 }

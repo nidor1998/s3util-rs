@@ -27,3 +27,33 @@ pub fn parse_sse_c(sse: &str) -> Result<String, String> {
 
     Ok(sse.to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_sse_accepts_known_values() {
+        for sse in ["AES256", "aws:kms", "aws:kms:dsse"] {
+            assert_eq!(parse_sse(sse).unwrap(), sse);
+        }
+    }
+
+    #[test]
+    fn parse_sse_rejects_unknown() {
+        let err = parse_sse("rot13").unwrap_err();
+        assert!(err.contains("invalid sse value"));
+    }
+
+    #[test]
+    fn parse_sse_c_accepts_only_aes256() {
+        assert_eq!(parse_sse_c("AES256").unwrap(), "AES256");
+    }
+
+    #[test]
+    fn parse_sse_c_rejects_kms_variants() {
+        // SSE-C is AES256 with a customer-supplied key only — KMS variants are not allowed.
+        assert!(parse_sse_c("aws:kms").is_err());
+        assert!(parse_sse_c("aws:kms:dsse").is_err());
+    }
+}

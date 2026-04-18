@@ -35,6 +35,12 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
+                // Throttle to keep the upload running long enough for
+                // SIGINT to land. Without this, fast networks finish a
+                // 30 MiB upload during the 500ms sleep and the test sees
+                // exit 0 instead of the expected cancellation.
+                "--rate-limit-bandwidth",
+                "2MiB",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -118,6 +124,13 @@ mod tests {
                 "5MiB",
                 "--multipart-chunksize",
                 "5MiB",
+                // Throttle so SIGINT reliably lands mid-stream regardless
+                // of network speed: 2 MiB/s on a 30 MiB file gives ~15s of
+                // upload window, well beyond the 1500ms sleep below.
+                // Without this, fast networks finish the upload before
+                // the SIGINT arrives and the test sees exit 0.
+                "--rate-limit-bandwidth",
+                "2MiB",
                 test_file.to_str().unwrap(),
                 &target,
             ])

@@ -234,4 +234,64 @@ mod tests {
             },
         ));
     }
+
+    #[test]
+    fn is_both_storage_s3_false_for_mixed() {
+        let s3 = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: String::new(),
+        };
+        let local = StoragePath::Local("/x".into());
+        assert!(!is_both_storage_s3(&s3, &local));
+        assert!(!is_both_storage_s3(&local, &s3));
+        assert!(!is_both_storage_s3(&local, &local));
+    }
+
+    #[test]
+    fn is_both_storage_local_false_for_mixed() {
+        let s3 = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: String::new(),
+        };
+        let local = StoragePath::Local("/x".into());
+        assert!(!is_both_storage_local(&s3, &local));
+        assert!(!is_both_storage_local(&local, &s3));
+        assert!(!is_both_storage_local(&s3, &s3));
+    }
+
+    #[test]
+    fn extract_prefix_returns_segment_after_fourth_slash() {
+        // extract_prefix is only called from the multi-region-ARN branch of
+        // parse_storage_path. The function takes the 4th '/' (nth(3)) and
+        // returns everything after it. For ARN-style input
+        // `s3://arn:.../accesspoint/<ap-name>/<key>`, that lands on the key.
+        let path = "s3://arn:aws:s3::123456789012:accesspoint/my-ap/some/key";
+        assert_eq!(extract_prefix(path), "some/key");
+    }
+
+    #[test]
+    fn extract_prefix_returns_empty_when_fewer_than_four_slashes() {
+        // No 4th slash → empty prefix.
+        assert_eq!(extract_prefix("s3://bucket"), "");
+        assert_eq!(extract_prefix("s3://bucket/"), "");
+        assert_eq!(extract_prefix("s3://arn:aws:s3::123:accesspoint/ap"), "");
+    }
+
+    #[test]
+    fn extract_multi_region_arn_strips_path_after_arn() {
+        // Returns the ARN portion only, without trailing key/path.
+        let path = "s3://arn:aws:s3::123456789012:accesspoint/my-ap/some/key";
+        let arn = extract_multi_region_arn(path);
+        // Trailing key is dropped; the ARN itself is preserved minus the s3:// scheme.
+        assert!(!arn.contains("/some"));
+        assert!(!arn.contains("/key"));
+        assert!(arn.starts_with("arn:aws:s3"));
+    }
+
+    #[test]
+    fn extract_multi_region_arn_no_path_returns_full_minus_scheme() {
+        // No slash after s3://… → returns input minus s3:// prefix.
+        let path = "s3://bucket-only";
+        assert_eq!(extract_multi_region_arn(path), "bucket-only");
+    }
 }

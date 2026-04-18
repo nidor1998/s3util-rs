@@ -2225,6 +2225,122 @@ mod tests {
         );
     }
 
+    #[test]
+    fn calculate_parts_count_threshold_smaller_than_chunksize() {
+        // threshold gates whether we go multipart at all; chunksize controls part size.
+        // If a 6 MiB upload qualifies (threshold=5 MiB) but its size < chunksize=8 MiB,
+        // we get a single part — not zero.
+        let result = calculate_parts_count(5 * 1024 * 1024, 8 * 1024 * 1024, 6 * 1024 * 1024);
+        assert_eq!(result, 1);
+    }
+
+    #[test]
+    fn calculate_parts_count_zero_content_length() {
+        // 0-byte object is below any positive threshold → no multipart parts.
+        assert_eq!(
+            calculate_parts_count(8 * 1024 * 1024, 8 * 1024 * 1024, 0),
+            0
+        );
+    }
+
+    #[test]
+    fn calculate_parts_count_exactly_at_threshold() {
+        // content_length == threshold qualifies (the < is strict): one part.
+        assert_eq!(
+            calculate_parts_count(5 * 1024 * 1024, 5 * 1024 * 1024, 5 * 1024 * 1024),
+            1
+        );
+    }
+
+    #[test]
+    fn get_additional_checksum_from_put_result_returns_none_when_algorithm_none() {
+        let put = PutObjectOutput::builder().build();
+        assert!(get_additional_checksum_from_put_object_result(&put, None).is_none());
+    }
+
+    #[test]
+    fn get_additional_checksum_from_put_result_extracts_each_algorithm() {
+        let put = PutObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .checksum_sha1("sha1-value")
+            .checksum_crc32("crc32-value")
+            .checksum_crc32_c("crc32c-value")
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        assert_eq!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Sha256))
+                .unwrap(),
+            "sha256-value"
+        );
+        assert_eq!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Sha1))
+                .unwrap(),
+            "sha1-value"
+        );
+        assert_eq!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Crc32))
+                .unwrap(),
+            "crc32-value"
+        );
+        assert_eq!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Crc32C))
+                .unwrap(),
+            "crc32c-value"
+        );
+        assert_eq!(
+            get_additional_checksum_from_put_object_result(
+                &put,
+                Some(ChecksumAlgorithm::Crc64Nvme)
+            )
+            .unwrap(),
+            "crc64-value"
+        );
+    }
+
+    #[test]
+    fn get_additional_checksum_from_put_result_returns_none_when_field_missing() {
+        // When the requested algorithm's field is empty, return None even though the
+        // algorithm was specified — callers rely on this to skip verification.
+        let put = PutObjectOutput::builder().build();
+        assert!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Sha256))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn get_additional_checksum_from_multipart_result_returns_none_when_algorithm_none() {
+        let mp = CompleteMultipartUploadOutput::builder().build();
+        assert!(get_additional_checksum_from_multipart_upload_result(&mp, None).is_none());
+    }
+
+    #[test]
+    fn get_additional_checksum_from_multipart_result_extracts_each_algorithm() {
+        let mp = CompleteMultipartUploadOutput::builder()
+            .checksum_sha256("mp-sha256")
+            .checksum_sha1("mp-sha1")
+            .checksum_crc32("mp-crc32")
+            .checksum_crc32_c("mp-crc32c")
+            .checksum_crc64_nvme("mp-crc64")
+            .build();
+        assert_eq!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Sha256)
+            )
+            .unwrap(),
+            "mp-sha256"
+        );
+        assert_eq!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Crc64Nvme)
+            )
+            .unwrap(),
+            "mp-crc64"
+        );
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

@@ -427,3 +427,155 @@ fn empty_s3_storage_path(original: &StoragePath) -> StoragePath {
         _ => unreachable!("expected S3 storage path"),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use s3util_rs::config::args::{Commands, parse_from_args};
+    use std::path::PathBuf;
+
+    fn build_config(args: Vec<&str>) -> Config {
+        let cli = parse_from_args(args).unwrap();
+        let Commands::Cp(cp_args) = cli.command;
+        Config::try_from(cp_args).unwrap()
+    }
+
+    #[test]
+    fn exit_status_codes() {
+        assert_eq!(ExitStatus::Success.code(), EXIT_CODE_SUCCESS);
+        assert_eq!(ExitStatus::Warning.code(), EXIT_CODE_WARNING);
+        assert_eq!(EXIT_CODE_SUCCESS, 0);
+        assert_eq!(EXIT_CODE_ERROR, 1);
+        assert_eq!(EXIT_CODE_WARNING, 3);
+    }
+
+    #[test]
+    fn get_path_strings_formats_each_storage_kind() {
+        let s3_with_prefix = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "k/v".to_string(),
+        };
+        let s3_no_prefix = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: String::new(),
+        };
+        let local = StoragePath::Local(PathBuf::from("/tmp/x"));
+        let stdio = StoragePath::Stdio;
+
+        let (src, tgt) = get_path_strings(&s3_with_prefix, &local);
+        assert_eq!(src, "s3://b/k/v");
+        assert_eq!(tgt, "/tmp/x");
+
+        let (src, tgt) = get_path_strings(&s3_no_prefix, &stdio);
+        assert_eq!(src, "s3://b");
+        assert_eq!(tgt, "-");
+
+        let (src, tgt) = get_path_strings(&stdio, &s3_with_prefix);
+        assert_eq!(src, "-");
+        assert_eq!(tgt, "s3://b/k/v");
+    }
+
+    #[test]
+    fn format_target_path_for_each_storage_kind() {
+        let s3 = StoragePath::S3 {
+            bucket: "mybucket".to_string(),
+            prefix: String::new(),
+        };
+        assert_eq!(format_target_path(&s3, "k/v.dat"), "s3://mybucket/k/v.dat");
+
+        let local = StoragePath::Local(PathBuf::from("/x"));
+        assert_eq!(format_target_path(&local, "ignored"), "ignored");
+
+        assert_eq!(format_target_path(&StoragePath::Stdio, "ignored"), "-");
+    }
+
+    #[test]
+    fn empty_local_storage_path_is_dot() {
+        match empty_local_storage_path() {
+            StoragePath::Local(p) => assert_eq!(p, PathBuf::from(".")),
+            _ => panic!("expected Local"),
+        }
+    }
+
+    #[test]
+    fn empty_s3_storage_path_clears_prefix_keeps_bucket() {
+        let original = StoragePath::S3 {
+            bucket: "mybucket".to_string(),
+            prefix: "some/key".to_string(),
+        };
+        match empty_s3_storage_path(&original) {
+            StoragePath::S3 { bucket, prefix } => {
+                assert_eq!(bucket, "mybucket");
+                assert_eq!(prefix, "");
+            }
+            _ => panic!("expected S3"),
+        }
+    }
+
+    #[test]
+    fn build_rate_limiter_returns_none_when_unset() {
+        let config = build_config(vec!["s3util", "cp", "/tmp/a", "s3://b/k"]);
+        assert!(config.rate_limit_bandwidth.is_none());
+        assert!(build_rate_limiter(&config).is_none());
+    }
+
+    #[test]
+    fn build_rate_limiter_returns_some_when_set() {
+        let config = build_config(vec![
+            "s3util",
+            "cp",
+            "--rate-limit-bandwidth",
+            "10MiB",
+            "/tmp/a",
+            "s3://b/k",
+        ]);
+        assert!(config.rate_limit_bandwidth.is_some());
+        assert!(build_rate_limiter(&config).is_some());
+    }
+
+    #[test]
+    fn extract_keys_local_to_s3_object_target() {
+        let config = build_config(vec!["s3util", "cp", "/tmp/source.dat", "s3://b/key.dat"]);
+        let (src, tgt) = extract_keys(&config).unwrap();
+        assert_eq!(src, "/tmp/source.dat");
+        assert_eq!(tgt, "key.dat");
+    }
+
+    #[test]
+    fn extract_keys_local_to_s3_bucket_only_uses_basename() {
+        // s3://b with no key → tgt becomes basename of source.
+        let config = build_config(vec!["s3util", "cp", "/tmp/source.dat", "s3://b"]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        assert_eq!(tgt, "source.dat");
+    }
+
+    #[test]
+    fn extract_keys_local_to_s3_prefix_with_slash_appends_basename() {
+        let config = build_config(vec!["s3util", "cp", "/tmp/source.dat", "s3://b/dir/"]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        assert_eq!(tgt, "dir/source.dat");
+    }
+
+    #[test]
+    fn extract_keys_s3_to_local_with_no_source_key_errors() {
+        let config = build_config(vec!["s3util", "cp", "s3://b", "/tmp/dst"]);
+        let err = extract_keys(&config).unwrap_err();
+        assert!(err.to_string().contains("source S3 key is required"));
+    }
+
+    #[test]
+    fn extract_keys_stdio_target_yields_empty_target_key() {
+        let config = build_config(vec!["s3util", "cp", "s3://b/key", "-"]);
+        let (src, tgt) = extract_keys(&config).unwrap();
+        assert_eq!(src, "key");
+        assert_eq!(tgt, "");
+    }
+
+    #[test]
+    fn extract_keys_stdio_source_yields_empty_source_key() {
+        let config = build_config(vec!["s3util", "cp", "-", "s3://b/key"]);
+        let (src, tgt) = extract_keys(&config).unwrap();
+        assert_eq!(src, "");
+        assert_eq!(tgt, "key");
+    }
+}

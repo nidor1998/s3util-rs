@@ -1238,4 +1238,25 @@ mod tests {
             )
             .try_init();
     }
+
+    #[test]
+    fn convert_windows_directory_char_to_slash_replaces_backslashes() {
+        assert_eq!(convert_windows_directory_char_to_slash("a\\b\\c"), "a/b/c");
+        assert_eq!(convert_windows_directory_char_to_slash("a/b"), "a/b");
+        assert_eq!(convert_windows_directory_char_to_slash(""), "");
+    }
+
+    #[test]
+    fn build_not_found_response_returns_404_not_found() {
+        let (err, response) = build_not_found_response();
+        assert!(matches!(err, HeadObjectError::NotFound(_)));
+        assert_eq!(response.status().as_u16(), 404);
+    }
+
+    #[test]
+    fn build_no_such_key_response_returns_404_no_such_key() {
+        let (err, response) = build_no_such_key_response();
+        assert!(matches!(err, GetObjectError::NoSuchKey(_)));
+        assert_eq!(response.status().as_u16(), 404);
+    }
 }

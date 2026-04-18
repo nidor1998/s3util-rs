@@ -48,3 +48,32 @@ fn start_tracing_if_necessary(config: &Config) -> bool {
     tracing_init::init_tracing(config.tracing_config.as_ref().unwrap());
     true
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use s3util_rs::config::args::parse_from_args;
+
+    fn build_config(args: Vec<&str>) -> Config {
+        let cli = parse_from_args(args).unwrap();
+        let Commands::Cp(cp_args) = cli.command;
+        Config::try_from(cp_args).unwrap()
+    }
+
+    #[test]
+    fn start_tracing_returns_false_when_silenced() {
+        // -qqq drives clap-verbosity-flag below Error → log_level() = None →
+        // tracing_config = None → start_tracing_if_necessary returns false
+        // without touching the global subscriber.
+        let config = build_config(vec!["s3util", "cp", "-qqq", "/tmp/a", "s3://b/k"]);
+        assert!(config.tracing_config.is_none());
+        assert!(!start_tracing_if_necessary(&config));
+    }
+
+    // The Some-branch of start_tracing_if_necessary calls init_tracing which
+    // installs a *global* subscriber via .init() (not .try_init()). That makes
+    // it impossible to assert the call's effect from multiple tests in the same
+    // process without leaking state into other tests. The branching logic is
+    // covered by the test above; the install-side effect is exercised end-to-end
+    // by the binary path in tests/e2e_*.rs (cp uses default WarnLevel verbosity).
+}

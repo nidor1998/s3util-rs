@@ -435,4 +435,193 @@ mod tests {
             .with_env_filter("dummy=trace")
             .try_init();
     }
+
+    #[test]
+    fn is_full_object_checksum_none() {
+        assert!(!is_full_object_checksum(&None));
+    }
+
+    #[test]
+    fn is_full_object_checksum_no_dash_means_full_object() {
+        assert!(is_full_object_checksum(&Some("abc123==".to_string())));
+    }
+
+    #[test]
+    fn is_full_object_checksum_dash_means_composite() {
+        // Multipart composite checksums have the form "<base64>-<partcount>".
+        assert!(!is_full_object_checksum(&Some("abc123==-4".to_string())));
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_none_when_no_checksum_present() {
+        let get = GetObjectOutput::builder().build();
+        assert!(detect_additional_checksum(&get).is_none());
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_sha256_when_present() {
+        let get = GetObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha256));
+        assert_eq!(value, "sha256-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_prefers_explicit_over_auto_added_crc64nvme() {
+        // S3 may auto-add CRC64NVME alongside an explicitly chosen algorithm.
+        // Per the function's documented contract, the explicit choice wins.
+        let get = GetObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha256));
+        assert_eq!(value, "sha256-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_crc64nvme_when_only_one_present() {
+        let get = GetObjectOutput::builder()
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc64Nvme));
+        assert_eq!(value, "crc64-value");
+    }
+
+    #[test]
+    fn get_additional_checksum_returns_none_when_algorithm_none() {
+        let get = GetObjectOutput::builder()
+            .checksum_sha256("ignored")
+            .build();
+        assert!(get_additional_checksum(&get, None).is_none());
+    }
+
+    #[test]
+    fn get_additional_checksum_extracts_requested_algorithm() {
+        let get = GetObjectOutput::builder()
+            .checksum_sha256("sha256-value")
+            .checksum_sha1("sha1-value")
+            .checksum_crc32("crc32-value")
+            .checksum_crc32_c("crc32c-value")
+            .checksum_crc64_nvme("crc64-value")
+            .build();
+        assert_eq!(
+            get_additional_checksum(&get, Some(ChecksumAlgorithm::Sha256)).unwrap(),
+            "sha256-value"
+        );
+        assert_eq!(
+            get_additional_checksum(&get, Some(ChecksumAlgorithm::Sha1)).unwrap(),
+            "sha1-value"
+        );
+        assert_eq!(
+            get_additional_checksum(&get, Some(ChecksumAlgorithm::Crc32)).unwrap(),
+            "crc32-value"
+        );
+        assert_eq!(
+            get_additional_checksum(&get, Some(ChecksumAlgorithm::Crc32C)).unwrap(),
+            "crc32c-value"
+        );
+        assert_eq!(
+            get_additional_checksum(&get, Some(ChecksumAlgorithm::Crc64Nvme)).unwrap(),
+            "crc64-value"
+        );
+        // Requested but absent on an empty output → None.
+        let empty = GetObjectOutput::builder().build();
+        assert!(get_additional_checksum(&empty, Some(ChecksumAlgorithm::Sha1)).is_none());
+    }
+
+    #[test]
+    fn get_additional_checksum_with_head_object_extracts_correct_field() {
+        use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+        let head = HeadObjectOutput::builder()
+            .checksum_sha256("head-sha256")
+            .checksum_sha1("head-sha1")
+            .checksum_crc32("head-crc32")
+            .checksum_crc32_c("head-crc32c")
+            .checksum_crc64_nvme("head-crc64")
+            .build();
+        assert!(get_additional_checksum_with_head_object(&head, None).is_none());
+        assert_eq!(
+            get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Sha256))
+                .unwrap(),
+            "head-sha256"
+        );
+        assert_eq!(
+            get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Sha1)).unwrap(),
+            "head-sha1"
+        );
+        assert_eq!(
+            get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Crc32))
+                .unwrap(),
+            "head-crc32"
+        );
+        assert_eq!(
+            get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Crc32C))
+                .unwrap(),
+            "head-crc32c"
+        );
+        assert_eq!(
+            get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Crc64Nvme))
+                .unwrap(),
+            "head-crc64"
+        );
+        let empty = HeadObjectOutput::builder().build();
+        assert!(
+            get_additional_checksum_with_head_object(&empty, Some(ChecksumAlgorithm::Sha256))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn sha1_digest_from_key_is_deterministic_and_correct() {
+        let key = "some-object-key.dat";
+        let a = sha1_digest_from_key(key);
+        let b = sha1_digest_from_key(key);
+        assert_eq!(a, b);
+        // Length is enforced by the type (Sha1Digest = [u8; 20]); also verify
+        // a different key yields a different digest.
+        assert_ne!(sha1_digest_from_key("different-key"), a);
+    }
+
+    #[test]
+    fn sync_stats_report_increments_advance_each_field() {
+        let mut r = SyncStatsReport::default();
+        r.increment_number_of_objects();
+        r.increment_not_found();
+        r.increment_etag_matches();
+        r.increment_etag_mismatch();
+        r.increment_etag_unknown();
+        r.increment_checksum_matches();
+        r.increment_checksum_mismatch();
+        r.increment_checksum_unknown();
+        r.increment_metadata_matches();
+        r.increment_metadata_mismatch();
+        r.increment_tagging_matches();
+        r.increment_tagging_mismatch();
+
+        assert_eq!(r.number_of_objects, 1);
+        assert_eq!(r.not_found, 1);
+        assert_eq!(r.etag_matches, 1);
+        assert_eq!(r.etag_mismatch, 1);
+        assert_eq!(r.etag_unknown, 1);
+        assert_eq!(r.checksum_matches, 1);
+        assert_eq!(r.checksum_mismatch, 1);
+        assert_eq!(r.checksum_unknown, 1);
+        assert_eq!(r.metadata_matches, 1);
+        assert_eq!(r.metadata_mismatch, 1);
+        assert_eq!(r.tagging_matches, 1);
+        assert_eq!(r.tagging_mismatch, 1);
+    }
+
+    #[test]
+    fn sync_stats_report_increments_accumulate() {
+        let mut r = SyncStatsReport::default();
+        for _ in 0..5 {
+            r.increment_etag_matches();
+        }
+        assert_eq!(r.etag_matches, 5);
+    }
 }
