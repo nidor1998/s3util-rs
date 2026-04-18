@@ -1047,6 +1047,14 @@ impl UploadManager {
             let current_part_number = part_number;
             let part_size = n as i64;
 
+            debug!(
+                key = key,
+                part_number = current_part_number,
+                size = part_size,
+                is_last = is_last_chunk,
+                "upload_part() start (streaming)"
+            );
+
             let permit = self
                 .config
                 .clone()
@@ -1078,14 +1086,6 @@ impl UploadManager {
 
                 let body = ByteStream::from(buffer);
 
-                debug!(
-                    key = &target_key,
-                    part_number = current_part_number,
-                    size = part_size,
-                    is_last = is_last_chunk,
-                    "upload_part() start (streaming)"
-                );
-
                 let mut upload_part_builder = client
                     .upload_part()
                     .set_request_payer(request_payer.clone())
@@ -1093,6 +1093,7 @@ impl UploadManager {
                     .key(&target_key)
                     .upload_id(&target_upload_id)
                     .part_number(current_part_number)
+                    .content_length(part_size)
                     .body(body)
                     .set_content_md5(md5_digest_base64)
                     .set_sse_customer_algorithm(target_sse_c.clone())
@@ -1156,36 +1157,34 @@ impl UploadManager {
                     });
                 }
 
-                {
-                    let mut locked_upload_parts = upload_parts.lock().unwrap();
-                    locked_upload_parts.push(
-                        CompletedPart::builder()
-                            .e_tag(upload_part_output.e_tag().unwrap())
-                            .set_checksum_sha256(
-                                upload_part_output.checksum_sha256().map(|s| s.to_string()),
-                            )
-                            .set_checksum_sha1(
-                                upload_part_output.checksum_sha1().map(|s| s.to_string()),
-                            )
-                            .set_checksum_crc32(
-                                upload_part_output.checksum_crc32().map(|s| s.to_string()),
-                            )
-                            .set_checksum_crc32_c(
-                                upload_part_output.checksum_crc32_c().map(|s| s.to_string()),
-                            )
-                            .set_checksum_crc64_nvme(
-                                upload_part_output
-                                    .checksum_crc64_nvme()
-                                    .map(|s| s.to_string()),
-                            )
-                            .part_number(current_part_number)
-                            .build(),
-                    );
-                } // drop locked_upload_parts before await
+                let mut locked_upload_parts = upload_parts.lock().unwrap();
+                locked_upload_parts.push(
+                    CompletedPart::builder()
+                        .e_tag(upload_part_output.e_tag().unwrap())
+                        .set_checksum_sha256(
+                            upload_part_output.checksum_sha256().map(|s| s.to_string()),
+                        )
+                        .set_checksum_sha1(
+                            upload_part_output.checksum_sha1().map(|s| s.to_string()),
+                        )
+                        .set_checksum_crc32(
+                            upload_part_output.checksum_crc32().map(|s| s.to_string()),
+                        )
+                        .set_checksum_crc32_c(
+                            upload_part_output.checksum_crc32_c().map(|s| s.to_string()),
+                        )
+                        .set_checksum_crc64_nvme(
+                            upload_part_output
+                                .checksum_crc64_nvme()
+                                .map(|s| s.to_string()),
+                        )
+                        .part_number(current_part_number)
+                        .build(),
+                );
+                drop(locked_upload_parts);
 
                 let _ = stats_sender
-                    .send(SyncStatistics::SyncBytes(part_size as u64))
-                    .await;
+                    .send_blocking(SyncStatistics::SyncBytes(part_size as u64));
 
                 Ok(())
             });
