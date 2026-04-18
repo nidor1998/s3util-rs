@@ -232,3 +232,71 @@ mod probe_tests {
         assert_eq!(rest.len(), 30);
     }
 }
+
+#[cfg(test)]
+mod checksum_invariant_tests {
+    use super::compute_source_checksum;
+    use crate::storage::checksum::AdditionalChecksum;
+    use aws_sdk_s3::types::ChecksumAlgorithm;
+
+    fn all_algorithms() -> Vec<ChecksumAlgorithm> {
+        vec![
+            ChecksumAlgorithm::Sha256,
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32C,
+            ChecksumAlgorithm::Crc64Nvme,
+        ]
+    }
+
+    // Simulates what upload_parts_stream will do: chunked update/finalize,
+    // then one finalize_all at EOF.
+    fn streaming_checksum(
+        buffer: &[u8],
+        algorithm: ChecksumAlgorithm,
+        multipart_chunksize: usize,
+        full_object_checksum: bool,
+    ) -> String {
+        let mut c = AdditionalChecksum::new(algorithm, full_object_checksum);
+        let mut offset = 0;
+        while offset < buffer.len() {
+            let end = std::cmp::min(offset + multipart_chunksize, buffer.len());
+            c.update(&buffer[offset..end]);
+            let _ = c.finalize();
+            offset = end;
+        }
+        c.finalize_all()
+    }
+
+    #[test]
+    fn streaming_matches_buffered_for_multipart_sizes() {
+        let chunksize = 1024usize;
+        let threshold = 1024usize;
+        let buffer = vec![0xABu8; chunksize * 4 + 17]; // 4 full chunks + partial
+
+        for algo in all_algorithms() {
+            let batched =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let streamed = streaming_checksum(&buffer, algo.clone(), chunksize, false);
+            assert_eq!(
+                batched, streamed,
+                "algorithm {:?}: batched vs streamed checksum mismatch",
+                algo
+            );
+        }
+    }
+
+    #[test]
+    fn streaming_matches_buffered_for_exact_chunksize_multiples() {
+        let chunksize = 1024usize;
+        let threshold = 1024usize;
+        let buffer = vec![0x5Au8; chunksize * 3];
+
+        for algo in all_algorithms() {
+            let batched =
+                compute_source_checksum(&buffer, algo.clone(), chunksize, threshold, false);
+            let streamed = streaming_checksum(&buffer, algo.clone(), chunksize, false);
+            assert_eq!(batched, streamed, "algorithm {:?}", algo);
+        }
+    }
+}
