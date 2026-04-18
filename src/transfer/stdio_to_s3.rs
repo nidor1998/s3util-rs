@@ -13,6 +13,23 @@ use crate::storage::checksum::AdditionalChecksum;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{ObjectChecksum, SyncStatistics};
 
+/// Read up to `limit` bytes from `reader` into a fresh `Vec<u8>`.
+/// If the returned Vec's length is `< limit`, the reader reached EOF.
+/// If `== limit`, the limit was reached and the reader may have more data.
+#[allow(dead_code)] // temporary: caller added in Task 10 (transfer dispatch)
+async fn probe_up_to<R: tokio::io::AsyncRead + Unpin + ?Sized>(
+    reader: &mut R,
+    limit: usize,
+) -> Result<Vec<u8>> {
+    let mut buf = Vec::with_capacity(limit);
+    (&mut *reader)
+        .take(limit as u64)
+        .read_to_end(&mut buf)
+        .await
+        .context("probe_up_to: failed to read from reader")?;
+    Ok(buf)
+}
+
 /// Transfer data from an async reader (typically stdin) to an S3 object.
 ///
 /// The reader is drained to memory so the total size is known before dispatch
@@ -162,4 +179,54 @@ fn compute_source_checksum(
     }
 
     checksum.finalize_all()
+}
+
+#[cfg(test)]
+mod probe_tests {
+    use super::probe_up_to;
+    use std::io::Cursor;
+
+    #[tokio::test]
+    async fn returns_all_bytes_when_reader_smaller_than_limit() {
+        let mut reader = Cursor::new(vec![1u8; 30]);
+        let buf = probe_up_to(&mut reader, 100).await.unwrap();
+        assert_eq!(buf.len(), 30);
+        assert_eq!(buf, vec![1u8; 30]);
+    }
+
+    #[tokio::test]
+    async fn returns_exactly_limit_bytes_when_reader_larger() {
+        let mut reader = Cursor::new(vec![2u8; 200]);
+        let buf = probe_up_to(&mut reader, 100).await.unwrap();
+        assert_eq!(buf.len(), 100);
+        assert_eq!(buf, vec![2u8; 100]);
+    }
+
+    #[tokio::test]
+    async fn returns_limit_bytes_when_reader_exactly_limit() {
+        let mut reader = Cursor::new(vec![3u8; 100]);
+        let buf = probe_up_to(&mut reader, 100).await.unwrap();
+        assert_eq!(buf.len(), 100);
+        assert_eq!(buf, vec![3u8; 100]);
+    }
+
+    #[tokio::test]
+    async fn returns_empty_for_empty_reader() {
+        let mut reader = Cursor::new(Vec::<u8>::new());
+        let buf = probe_up_to(&mut reader, 100).await.unwrap();
+        assert!(buf.is_empty());
+    }
+
+    #[tokio::test]
+    async fn leaves_remaining_bytes_in_reader() {
+        let data = vec![5u8; 50];
+        let mut reader = Cursor::new(data);
+        let _probed = probe_up_to(&mut reader, 20).await.unwrap();
+        // Read the rest — should be 30 bytes left
+        let mut rest = Vec::new();
+        tokio::io::AsyncReadExt::read_to_end(&mut reader, &mut rest)
+            .await
+            .unwrap();
+        assert_eq!(rest.len(), 30);
+    }
 }
