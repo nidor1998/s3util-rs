@@ -4,7 +4,7 @@ use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
-use crate::transfer::first_chunk;
+use crate::transfer::{first_chunk, translate_source_head_object_error};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, get_additional_checksum};
 
@@ -46,9 +46,7 @@ pub async fn transfer(
             config.source_sse_c_key_md5.clone(),
         )
         .await
-        .context(format!(
-            "failed to get source object metadata: {source_key}"
-        ))?;
+        .map_err(|e| translate_source_head_object_error(e, source_key))?;
 
     let source_size = head_object_output.content_length().unwrap_or(0);
     let source_tag_count = head_object_output.tag_count();
