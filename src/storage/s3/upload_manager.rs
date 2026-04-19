@@ -620,23 +620,9 @@ impl UploadManager {
             .version_id()
             .map(|v| v.to_string());
 
-        // If content_range is None, the full body is available (e.g. stdin or pre-buffered data).
-        // In this case, read all parts sequentially from the body stream.
-        // If content_range is set, only the first chunk is in the body (first-chunk optimization),
-        // and parts 2+ must be fetched from source via get_object() with ranges.
-        let full_body_available = get_object_output_first_chunk.content_range.is_none();
-
-        // first_chunk_size represents the size of data in the body for part 1.
-        // With first-chunk optimization (content_range set): content_length = first chunk size.
-        // With full body (stdin): content_length = total size, but part 1 only reads config_chunksize.
-        let first_chunk_size = if full_body_available {
-            std::cmp::min(
-                get_object_output_first_chunk.content_length().unwrap(),
-                config_chunksize as i64,
-            )
-        } else {
-            get_object_output_first_chunk.content_length().unwrap()
-        };
+        // First-chunk optimization: only the first chunk is in the body; parts 2+
+        // are fetched from source via get_object() with ranges.
+        let first_chunk_size = get_object_output_first_chunk.content_length().unwrap();
 
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
@@ -698,11 +684,8 @@ impl UploadManager {
                 Vec::new() // For server-side copy, we do not need to read the body.
             };
 
-            // Read data from the body stream before spawning the upload task.
-            // - Part 1 always reads from body (it contains the first chunk).
-            // - Parts 2+ read from body only when full_body_available is true
-            //   (e.g. stdin where source is not re-readable via get_object with ranges).
-            if (part_number == 1 || full_body_available) && !server_side_copy {
+            // Part 1 reads from the body stream (which contains the first chunk).
+            if part_number == 1 && !server_side_copy {
                 let result = body.read_exact(buffer.as_mut_slice()).await;
                 if let Err(e) = result {
                     warn!(
@@ -733,9 +716,7 @@ impl UploadManager {
                 );
 
                 let upload_size;
-                // If the part number is greater than 1, we need to get the object from the source storage.
-                // Skip fetching from source when full_body_available — data was already read above.
-                if part_number > 1 && !full_body_available {
+                if part_number > 1 {
                     if !server_side_copy {
                         let get_object_output = source
                             .get_object(
@@ -790,11 +771,8 @@ impl UploadManager {
                     } else {
                         upload_size = chunksize as i64;
                     }
-                } else if part_number == 1 {
-                    upload_size = first_chunk_size;
                 } else {
-                    // full_body_available: data was read from body before spawning
-                    upload_size = chunksize as i64;
+                    upload_size = first_chunk_size;
                 }
 
                 let md5_digest;

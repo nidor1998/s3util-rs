@@ -630,4 +630,59 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
+
+    /// Streaming multipart with --disable-payload-signing.
+    ///
+    /// Pipes a > multipart_threshold payload on stdin so the transfer routes
+    /// through `stdio_to_s3::transfer_streaming` → `put_object_stream` →
+    /// `upload_stream` → `upload_parts_stream`, where the
+    /// `customize().disable_payload_signing()` branch sits on each upload_part
+    /// call. The file-based `local_to_s3_disable_payload_signing_multipart`
+    /// test exercises the same flag in `upload_parts`; this test covers the
+    /// streaming sibling in `upload_parts_stream`.
+    #[tokio::test]
+    async fn stdio_to_s3_disable_payload_signing_multipart_process_level() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "stdio_disable_payload_signing_multipart.bin";
+        let target = format!("s3://{}/{}", bucket, key);
+
+        // 6 MiB > 5 MiB multipart_threshold — forces the streaming multipart path.
+        let body = vec![0u8; 6 * 1024 * 1024];
+
+        let output = run_s3util_with_stdin(
+            &[
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--disable-payload-signing",
+                "-",
+                &target,
+            ],
+            &body,
+        );
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "stdio_to_s3_disable_payload_signing_multipart_process_level must exit 0; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        assert!(helper.is_object_exist(&bucket, key, None).await);
+        let fetched = helper.get_object_bytes(&bucket, key, None).await;
+        assert_eq!(fetched.len(), body.len());
+        assert_eq!(fetched, body);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
 }
