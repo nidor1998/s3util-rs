@@ -305,6 +305,7 @@ impl TestHelper {
         }
 
         self.delete_all_objects(bucket).await;
+        self.delete_all_object_versions(bucket).await;
 
         let result = self.client.delete_bucket().bucket(bucket).send().await;
         if let Err(e) = result {
@@ -544,6 +545,42 @@ impl TestHelper {
         for object in list_objects_output_result.unwrap().contents() {
             self.delete_object(bucket, object.key().unwrap(), None)
                 .await;
+        }
+    }
+
+    /// Delete every non-current object version and delete-marker in `bucket`.
+    /// Used by `delete_bucket_with_cascade` to empty versioned buckets so the
+    /// subsequent `delete_bucket` call does not fail with `BucketNotEmpty`.
+    /// No-op on directory buckets: `list_object_versions` is unsupported there
+    /// and the error path returns early.
+    pub async fn delete_all_object_versions(&self, bucket: &str) {
+        let list_result = self
+            .client
+            .list_object_versions()
+            .bucket(bucket)
+            .send()
+            .await;
+
+        let output = match list_result {
+            Ok(o) => o,
+            Err(_) => return,
+        };
+
+        for version in output.versions() {
+            self.delete_object(
+                bucket,
+                version.key().unwrap(),
+                version.version_id().map(str::to_string),
+            )
+            .await;
+        }
+        for marker in output.delete_markers() {
+            self.delete_object(
+                bucket,
+                marker.key().unwrap(),
+                marker.version_id().map(str::to_string),
+            )
+            .await;
         }
     }
 
