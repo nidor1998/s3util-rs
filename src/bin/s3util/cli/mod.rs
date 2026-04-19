@@ -12,6 +12,7 @@ use s3util_rs::storage::local::LocalStorageFactory;
 use s3util_rs::storage::s3::S3StorageFactory;
 use s3util_rs::transfer::{TransferDirection, detect_direction};
 use s3util_rs::types::StoragePath;
+use s3util_rs::types::error::is_cancelled_error;
 use s3util_rs::types::token::create_pipeline_cancellation_token;
 
 pub mod ctrl_c_handler;
@@ -328,6 +329,12 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let _ = indicator_handle.await;
 
     if let Err(e) = &result {
+        if is_cancelled_error(e) {
+            // ctrl-c-handler already warned about shutdown; match s3sync
+            // convention and exit 0 on user cancellation rather than logging
+            // a misleading "copy failed." with the inner upload context.
+            return Ok(ExitStatus::Success);
+        }
         error!(error = %e, "copy failed.");
         return Err(result.unwrap_err());
     }
