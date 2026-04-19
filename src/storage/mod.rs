@@ -167,7 +167,7 @@ pub trait StorageTrait: DynClone {
 #[rustfmt::skip] // For coverage tool incorrectness
 pub fn convert_to_buf_byte_stream_with_callback<R>(
     byte_stream: R,
-    stats_sender: Sender<SyncStatistics>,
+    stats_sender: Option<Sender<SyncStatistics>>,
     rate_limit_bandwidth: Option<Arc<RateLimiter>>,
     additional_checksum: Option<Arc<AdditionalChecksum>>,
     object_checksum: Option<ObjectChecksum>,

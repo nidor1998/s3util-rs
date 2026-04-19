@@ -17,7 +17,7 @@ use crate::types::{ObjectChecksum, SyncStatistics};
 pub struct AsyncReadWithCallback<R: AsyncRead + Send + Sync> {
     #[pin]
     inner: R,
-    stats_sender: Sender<SyncStatistics>,
+    stats_sender: Option<Sender<SyncStatistics>>,
     bandwidth_limiter: Option<Arc<RateLimiter>>,
     additional_checksum: Option<Arc<AdditionalChecksum>>,
     object_checksum: Option<ObjectChecksum>,
@@ -26,7 +26,7 @@ pub struct AsyncReadWithCallback<R: AsyncRead + Send + Sync> {
 impl<R: AsyncRead + Send + Sync> AsyncReadWithCallback<R> {
     pub fn new(
         inner: R,
-        stats_sender: Sender<SyncStatistics>,
+        stats_sender: Option<Sender<SyncStatistics>>,
         bandwidth_limiter: Option<Arc<RateLimiter>>,
         additional_checksum: Option<Arc<AdditionalChecksum>>,
         object_checksum: Option<ObjectChecksum>,
@@ -71,10 +71,10 @@ impl<R: AsyncRead + Send + Sync> AsyncRead for AsyncReadWithCallback<R> {
             }
         }
 
-        if 0 < sync_bytes {
-            let _ = this
-                .stats_sender
-                .send_blocking(SyncStatistics::SyncBytes(sync_bytes as u64));
+        if 0 < sync_bytes
+            && let Some(stats_sender) = this.stats_sender.as_ref()
+        {
+            let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(sync_bytes as u64));
         }
 
         result
@@ -98,7 +98,7 @@ mod tests {
         let file = File::open("test_data/5byte.dat").await.unwrap();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
         let mut file_with_callback =
-            AsyncReadWithCallback::new(file, stats_sender, None, None, None);
+            AsyncReadWithCallback::new(file, Some(stats_sender), None, None, None);
 
         let mut buffer = Vec::new();
         file_with_callback.read_to_end(&mut buffer).await.unwrap();
@@ -121,13 +121,30 @@ mod tests {
                 .build(),
         );
         let mut file_with_callback =
-            AsyncReadWithCallback::new(file, stats_sender, Some(limiter), None, None);
+            AsyncReadWithCallback::new(file, Some(stats_sender), Some(limiter), None, None);
 
         let mut buffer = Vec::new();
         file_with_callback.read_to_end(&mut buffer).await.unwrap();
 
         assert!(!stats_receiver.is_empty());
         assert_eq!(buffer.len(), TEST_DATA_SIZE);
+    }
+
+    #[tokio::test]
+    async fn callback_test_none_sender_is_silent() {
+        init_dummy_tracing_subscriber();
+
+        let file = File::open("test_data/5byte.dat").await.unwrap();
+        // Hold a stats channel but do NOT wire it to the wrapper. The wrapper
+        // is constructed with None and must not emit any SyncBytes.
+        let (_stats_sender, stats_receiver) = async_channel::unbounded::<SyncStatistics>();
+        let mut file_with_callback = AsyncReadWithCallback::new(file, None, None, None, None);
+
+        let mut buffer = Vec::new();
+        file_with_callback.read_to_end(&mut buffer).await.unwrap();
+
+        assert_eq!(buffer.len(), TEST_DATA_SIZE);
+        assert!(stats_receiver.is_empty());
     }
 
     fn init_dummy_tracing_subscriber() {

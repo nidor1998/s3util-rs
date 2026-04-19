@@ -418,7 +418,7 @@ impl StorageTrait for S3Storage {
         let (dummy_stats_sender, _dummy_stats_receiver) = async_channel::unbounded();
         get_object_output_first_chunk.body = convert_to_buf_byte_stream_with_callback(
             get_object_output_first_chunk.body.into_async_read(),
-            dummy_stats_sender,
+            Some(dummy_stats_sender),
             self.rate_limit_bandwidth.clone(),
             checksum,
             object_checksum.clone(),

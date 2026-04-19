@@ -394,7 +394,7 @@ impl LocalStorage {
 
         let byte_stream = convert_to_buf_byte_stream_with_callback(
             get_object_output.body.into_async_read(),
-            self.get_stats_sender(),
+            Some(self.get_stats_sender()),
             source.get_rate_limit_bandwidth(),
             None,
             None,
@@ -530,7 +530,7 @@ impl LocalStorage {
 
         let byte_stream = convert_to_buf_byte_stream_with_callback(
             get_object_output_first_chunk.body.into_async_read(),
-            self.get_stats_sender(),
+            Some(self.get_stats_sender()),
             source.get_rate_limit_bandwidth(),
             None,
             None,
@@ -660,7 +660,7 @@ impl LocalStorage {
                             .context("get_object() failed.")?
                             .body
                             .into_async_read(),
-                        cloned_source.get_stats_sender().clone(),
+                        Some(cloned_source.get_stats_sender().clone()),
                         cloned_source.get_rate_limit_bandwidth(),
                         None,
                         None,
