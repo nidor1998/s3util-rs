@@ -534,7 +534,7 @@ impl LocalStorage {
 
         let byte_stream = convert_to_buf_byte_stream_with_callback(
             get_object_output_first_chunk.body.into_async_read(),
-            Some(self.get_stats_sender()),
+            None,
             source.get_rate_limit_bandwidth(),
             None,
             None,
@@ -583,6 +583,7 @@ impl LocalStorage {
         let mut offset = 0;
         let mut part_number = 1;
         let mut upload_parts_join_handles = FuturesUnordered::new();
+        let target_stats_sender = self.get_stats_sender();
         loop {
             let chunksize = if part_number == 1 {
                 first_chunk_content_length
@@ -606,6 +607,7 @@ impl LocalStorage {
             let total_upload_size = Arc::clone(&shared_total_upload_size);
 
             let cancellation_token = self.cancellation_token.clone();
+            let target_stats_sender = target_stats_sender.clone();
             let mut chunk_whole_data = Vec::<u8>::with_capacity(chunksize);
             chunk_whole_data.resize_with(chunksize, Default::default);
 
@@ -664,7 +666,7 @@ impl LocalStorage {
                             .context("get_object() failed.")?
                             .body
                             .into_async_read(),
-                        Some(cloned_source.get_stats_sender().clone()),
+                        None,
                         cloned_source.get_rate_limit_bandwidth(),
                         None,
                         None,
@@ -726,6 +728,10 @@ impl LocalStorage {
                 cloned_file.seek(io::SeekFrom::Start(offset)).await?;
                 cloned_file.write_all(&chunk_whole_data).await?;
                 cloned_file.flush().await?;
+
+                let _ = target_stats_sender
+                    .send(SyncStatistics::SyncBytes(chunk_whole_data_size as u64))
+                    .await;
 
                 let mut upload_size_vec = total_upload_size.lock().unwrap();
                 upload_size_vec.push(chunk_whole_data_size as u64);
