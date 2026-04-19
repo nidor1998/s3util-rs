@@ -30,4 +30,9 @@ mod tests {
             S3syncError::DirectoryTraversalError
         )));
     }
+
+    #[test]
+    fn is_cancelled_error_false_for_non_s3sync_error() {
+        assert!(!is_cancelled_error(&anyhow!("unrelated error")));
+    }
 }

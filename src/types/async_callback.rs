@@ -107,6 +107,29 @@ mod tests {
         assert_eq!(buffer.len(), TEST_DATA_SIZE);
     }
 
+    #[tokio::test(flavor = "multi_thread")]
+    async fn callback_test_with_bandwidth_limiter() {
+        init_dummy_tracing_subscriber();
+
+        let file = File::open("test_data/5byte.dat").await.unwrap();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let limiter = Arc::new(
+            RateLimiter::builder()
+                .max(TEST_DATA_SIZE)
+                .initial(TEST_DATA_SIZE)
+                .refill(TEST_DATA_SIZE)
+                .build(),
+        );
+        let mut file_with_callback =
+            AsyncReadWithCallback::new(file, stats_sender, Some(limiter), None, None);
+
+        let mut buffer = Vec::new();
+        file_with_callback.read_to_end(&mut buffer).await.unwrap();
+
+        assert!(!stats_receiver.is_empty());
+        assert_eq!(buffer.len(), TEST_DATA_SIZE);
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

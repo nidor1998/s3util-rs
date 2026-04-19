@@ -2,6 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::config::args::build_config_from_args;
+    use crate::types::S3Credentials;
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
         vec![
@@ -140,5 +141,418 @@ mod tests {
         assert!(result.is_ok());
         let config = result.unwrap();
         assert_eq!(config.rate_limit_bandwidth, None);
+    }
+
+    #[test]
+    fn storage_class_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--storage-class", "STANDARD"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--storage-class, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn storage_credentials_rejected_on_local_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--source-profile", "p"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("no source credential required")
+        );
+    }
+
+    #[test]
+    fn storage_credentials_rejected_on_local_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--target-profile", "p"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("no target credential required")
+        );
+    }
+
+    #[test]
+    fn sse_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--sse", "AES256"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--sse/--sse-kms-key-id, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn sse_kms_key_id_requires_aws_kms_sse() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--sse", "AES256", "--sse-kms-key-id", "alias/my-key"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--sse-kms-key-id must be used with --sse aws:kms")
+        );
+    }
+
+    #[test]
+    fn sse_c_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+                "--source-sse-c-key-md5",
+                "zZ5FnqcIqUjVwvWmyog4zw==",
+            ],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--source-sse-c/--target-sse-c, remote storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn sse_c_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &[
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=",
+                "--target-sse-c-key-md5",
+                "zZ5FnqcIqUjVwvWmyog4zw==",
+            ],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--source-sse-c/--target-sse-c, remote storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn acl_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--acl", "private"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--acl, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn additional_checksum_algorithm_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--additional-checksum-algorithm", "SHA1"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--additional-checksum-algorithm, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn enable_additional_checksum_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--enable-additional-checksum"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--enable-additional-checksum, source storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn auto_chunksize_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--auto-chunksize"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--auto-chunksize, source storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn metadata_option_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--cache-control", "no-cache"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("metadata related option, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn source_endpoint_url_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--source-endpoint-url", "http://localhost:9000"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--source-endpoint-url, source storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn target_endpoint_url_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--target-endpoint-url", "http://localhost:9000"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--target-endpoint-url, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn disable_payload_signing_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--disable-payload-signing"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--disable-payload-signing, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn disable_content_md5_header_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--disable-content-md5-header"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--disable-content-md5-header, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn full_object_checksum_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--full-object-checksum"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--full-object-checksum, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn full_object_checksum_rejects_sha1() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "SHA1",
+            ],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Only CRC32/CRC32C/CRC64NVME supports full object checksum")
+        );
+    }
+
+    #[test]
+    fn full_object_checksum_rejects_sha256() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "SHA256",
+            ],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("Only CRC32/CRC32C/CRC64NVME supports full object checksum")
+        );
+    }
+
+    #[test]
+    fn source_accelerate_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--source-accelerate"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--source-accelerate, source storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn target_accelerate_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--target-accelerate"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--target-accelerate, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn source_request_payer_requires_s3_source() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--source-request-payer"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--source-request-payer, source storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn target_request_payer_requires_s3_target() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/dst",
+            &["--target-request-payer"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("--target-request-payer, target storage must be s3://")
+        );
+    }
+
+    #[test]
+    fn source_access_key_builds_credentials_variant() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "/tmp/dst",
+            &[
+                "--source-access-key",
+                "AKIATEST",
+                "--source-secret-access-key",
+                "SECRET",
+            ],
+        ));
+        let config = result.unwrap();
+        match config.source_client_config.unwrap().credential {
+            S3Credentials::Credentials { access_keys } => {
+                assert_eq!(access_keys.access_key, "AKIATEST");
+                assert_eq!(access_keys.secret_access_key, "SECRET");
+                assert!(access_keys.session_token.is_none());
+            }
+            other => panic!("expected Credentials variant, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn target_access_key_builds_credentials_variant() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://tgt/k",
+            &[
+                "--target-access-key",
+                "AKIATGT",
+                "--target-secret-access-key",
+                "SECRET2",
+            ],
+        ));
+        let config = result.unwrap();
+        match config.target_client_config.unwrap().credential {
+            S3Credentials::Credentials { access_keys } => {
+                assert_eq!(access_keys.access_key, "AKIATGT");
+                assert_eq!(access_keys.secret_access_key, "SECRET2");
+                assert!(access_keys.session_token.is_none());
+            }
+            other => panic!("expected Credentials variant, got {:?}", other),
+        }
     }
 }
