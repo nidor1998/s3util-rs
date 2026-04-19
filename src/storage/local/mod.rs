@@ -377,7 +377,7 @@ impl LocalStorage {
         }
 
         if fs_util::is_key_a_directory(key) {
-            fs_util::create_parent_directory(key).await?;
+            fs_util::require_parent_directory(key).await?;
 
             return Ok(PutObjectOutput::builder().build());
         }
@@ -520,7 +520,7 @@ impl LocalStorage {
         }
 
         if fs_util::is_key_a_directory(key) {
-            fs_util::create_parent_directory(key).await?;
+            fs_util::require_parent_directory(key).await?;
 
             return Ok(PutObjectOutput::builder().build());
         }

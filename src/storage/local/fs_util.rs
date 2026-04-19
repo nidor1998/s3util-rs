@@ -47,7 +47,7 @@ pub fn is_key_a_directory(key: &str) -> bool {
 }
 
 pub async fn create_temp_file_from_key(path: &Path, key: &str) -> Result<NamedTempFile> {
-    create_directory_if_necessary(path, key).await?;
+    require_directory_for_key(path.to_path_buf(), key).await?;
 
     let temp_directory_path = key_to_directory_without_filename(path.to_path_buf(), key);
     let file =
@@ -56,7 +56,7 @@ pub async fn create_temp_file_from_key(path: &Path, key: &str) -> Result<NamedTe
 }
 
 pub async fn create_temp_file_for_key(key: &str) -> Result<NamedTempFile> {
-    create_parent_directory(key).await?;
+    require_parent_directory(key).await?;
 
     let path = PathBuf::from(key);
     let parent = path.parent().unwrap_or(Path::new("."));
@@ -64,7 +64,7 @@ pub async fn create_temp_file_for_key(key: &str) -> Result<NamedTempFile> {
     Ok(file)
 }
 
-pub async fn create_parent_directory(key: &str) -> Result<()> {
+pub async fn require_parent_directory(key: &str) -> Result<()> {
     let path = PathBuf::from(key);
     let parent = path.parent().unwrap_or(Path::new("."));
 
@@ -79,7 +79,7 @@ pub async fn create_parent_directory(key: &str) -> Result<()> {
     ))
 }
 
-pub async fn create_directory_hierarchy_from_key(path: PathBuf, key: &str) -> Result<()> {
+pub async fn require_directory_for_key(path: PathBuf, key: &str) -> Result<()> {
     let directory_path = key_to_directory_without_filename(path, key);
 
     if directory_path.try_exists().unwrap_or(false) {
@@ -103,10 +103,6 @@ pub fn key_to_file_path(path: PathBuf, key: &str) -> PathBuf {
     let lossy_path = path.to_string_lossy();
 
     format!("{lossy_path}{file}").into()
-}
-
-async fn create_directory_if_necessary(path: &Path, key: &str) -> Result<()> {
-    create_directory_hierarchy_from_key(path.to_path_buf(), key).await
 }
 
 fn key_to_directory_without_filename(path: PathBuf, key: &str) -> PathBuf {
@@ -233,7 +229,7 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_family = "unix")]
-    async fn create_directory_hierarchy_from_key_unix() {
+    async fn require_directory_for_key_unix() {
         init_dummy_tracing_subscriber();
 
         let temp = tempfile::tempdir().unwrap();
@@ -241,7 +237,7 @@ mod tests {
 
         // Missing directory → error.
         assert!(
-            create_directory_hierarchy_from_key(base.clone(), "missing_dir/filename")
+            require_directory_for_key(base.clone(), "missing_dir/filename")
                 .await
                 .is_err()
         );
@@ -250,24 +246,24 @@ mod tests {
         tokio::fs::create_dir_all(base.join("existing_dir"))
             .await
             .unwrap();
-        create_directory_hierarchy_from_key(base.clone(), "existing_dir/filename")
+        require_directory_for_key(base.clone(), "existing_dir/filename")
             .await
             .unwrap();
-        create_directory_hierarchy_from_key(base, "existing_dir/")
+        require_directory_for_key(base, "existing_dir/")
             .await
             .unwrap();
     }
 
     #[tokio::test]
     #[cfg(target_family = "windows")]
-    async fn create_directory_hierarchy_from_key_windows() {
+    async fn require_directory_for_key_windows() {
         init_dummy_tracing_subscriber();
 
         let temp = tempfile::tempdir().unwrap();
         let base: PathBuf = format!("{}\\", temp.path().display()).into();
 
         assert!(
-            create_directory_hierarchy_from_key(base.clone(), "missing_dir/filename")
+            require_directory_for_key(base.clone(), "missing_dir/filename")
                 .await
                 .is_err()
         );
@@ -275,10 +271,10 @@ mod tests {
         tokio::fs::create_dir_all(base.join("existing_dir"))
             .await
             .unwrap();
-        create_directory_hierarchy_from_key(base.clone(), "existing_dir/filename")
+        require_directory_for_key(base.clone(), "existing_dir/filename")
             .await
             .unwrap();
-        create_directory_hierarchy_from_key(base, "existing_dir/")
+        require_directory_for_key(base, "existing_dir/")
             .await
             .unwrap();
     }
@@ -805,18 +801,18 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_family = "unix")]
-    async fn create_parent_directory_errors_on_missing_and_succeeds_on_existing() {
+    async fn require_parent_directory_errors_on_missing_and_succeeds_on_existing() {
         init_dummy_tracing_subscriber();
 
         let temp = tempfile::tempdir().unwrap();
 
         // Parent doesn't exist → error.
         let missing_key = format!("{}/nested/deeper/file", temp.path().display());
-        assert!(create_parent_directory(&missing_key).await.is_err());
+        assert!(require_parent_directory(&missing_key).await.is_err());
 
         // Parent exists (the tempdir itself) → ok.
         let existing_key = format!("{}/file", temp.path().display());
-        create_parent_directory(&existing_key).await.unwrap();
+        require_parent_directory(&existing_key).await.unwrap();
     }
 
     #[tokio::test]
