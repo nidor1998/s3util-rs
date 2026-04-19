@@ -73,13 +73,13 @@ mod tests {
         let result = build_config_from_args(args_with_extra(
             "/tmp/source",
             "s3://my-bucket/prefix",
-            &["--version-id", "abc123"],
+            &["--source-version-id", "abc123"],
         ));
         assert!(result.is_err());
         assert!(
             result
                 .unwrap_err()
-                .contains("--version-id, source must be s3://")
+                .contains("--source-version-id, source must be s3://")
         );
     }
 

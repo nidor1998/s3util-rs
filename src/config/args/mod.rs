@@ -66,7 +66,7 @@ const BOTH_STDIO_SPECIFIED: &str = "source and target cannot both be stdin/stdou
 const BOTH_LOCAL_SPECIFIED: &str = "source and target cannot both be local paths\n";
 const SERVER_SIDE_COPY_REQUIRES_BOTH_S3: &str =
     "with --server-side-copy, both source and target must be s3://\n";
-const VERSION_ID_REQUIRES_S3_SOURCE: &str = "with --version-id, source must be s3://\n";
+const VERSION_ID_REQUIRES_S3_SOURCE: &str = "with --source-version-id, source must be s3://\n";
 const STDIO_INCOMPATIBLE_WITH_SERVER_SIDE_COPY: &str =
     "stdin/stdout (-) is incompatible with --server-side-copy\n";
 const LOCAL_STORAGE_SPECIFIED_WITH_STORAGE_CLASS: &str =
@@ -335,7 +335,7 @@ Example: key1=value1&key2=value2"#)]
 
     /// Version ID of the source object (requires S3 source)
     #[arg(long, env, help_heading = "Versioning")]
-    version_id: Option<String>,
+    source_version_id: Option<String>,
 
     /// Server-side encryption. Valid choices: AES256 | aws:kms | aws:kms:dsse
     #[arg(long, env, value_parser = sse::parse_sse, help_heading = "Encryption")]
@@ -621,7 +621,7 @@ impl CpArgs {
     }
 
     fn check_version_id_conflict(&self) -> Result<(), String> {
-        if self.version_id.is_none() {
+        if self.source_version_id.is_none() {
             return Ok(());
         }
         if !self.is_source_s3() {
@@ -1080,7 +1080,7 @@ impl TryFrom<CpArgs> for Config {
                 .disable_express_one_zone_additional_checksum,
             max_parallel_uploads: value.max_parallel_uploads,
             rate_limit_bandwidth,
-            version_id: value.version_id,
+            version_id: value.source_version_id,
             is_stdio_source,
             is_stdio_target,
         })
