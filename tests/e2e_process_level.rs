@@ -7,6 +7,7 @@
 //!   flag combination.
 //! - The `--show-progress` indicator, which prints a one-line summary to stderr
 //!   on success.
+//! - The `--disable-payload-signing` flag on a LocalToS3 upload.
 //!
 //! Gated by `cfg(e2e_test)` because they hit real AWS (the user runs e2e tests).
 
@@ -535,6 +536,50 @@ mod tests {
             stderr.contains("etag verify:"),
             "expected indicator summary with 'etag verify:' on stderr, got: {stderr}"
         );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    // ---------------------------------------------------------------
+    // Disable payload signing
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn disable_payload_signing_process_level() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let body = b"disable payload signing body";
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "disable_payload_signing.txt", body);
+        let key = "disable_payload_signing.txt";
+        let target = format!("s3://{}/{}", bucket, key);
+
+        let output = run_s3util(&[
+            "cp",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--disable-payload-signing",
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "disable_payload_signing_process_level must exit 0; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        assert!(helper.is_object_exist(&bucket, key, None).await);
+        let fetched = helper.get_object_bytes(&bucket, key, None).await;
+        assert_eq!(fetched, body.to_vec());
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

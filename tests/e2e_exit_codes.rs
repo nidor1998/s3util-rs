@@ -7,6 +7,8 @@ mod tests {
     use super::*;
     use common::*;
 
+    use std::process::{Command, Stdio};
+
     // Process exit codes are defined in src/bin/s3util/cli/mod.rs:
     //   EXIT_CODE_SUCCESS = 0
     //   EXIT_CODE_ERROR   = 1
@@ -132,6 +134,60 @@ mod tests {
         assert!(
             stdout.contains("s3util"),
             "expected bash completion output mentioning 's3util', got first 200 chars: {}",
+            &stdout.chars().take(200).collect::<String>()
+        );
+    }
+
+    /// `--auto-complete-shell zsh` generates a zsh completion script to stdout
+    /// and exits 0. Asserts on the stable `#compdef s3util` anchor that
+    /// `clap_complete`'s zsh generator emits at the top of its script.
+    #[tokio::test]
+    async fn auto_complete_shell_zsh() {
+        let output = Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--auto-complete-shell", "zsh"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "--auto-complete-shell zsh must exit 0, got: {}",
+            output.status
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("#compdef s3util"),
+            "expected zsh completion output containing '#compdef s3util', got first 200 chars: {}",
+            &stdout.chars().take(200).collect::<String>()
+        );
+    }
+
+    /// `--auto-complete-shell fish` generates a fish completion script to
+    /// stdout and exits 0. Asserts on fish's `complete -c <program>` line
+    /// convention.
+    #[tokio::test]
+    async fn auto_complete_shell_fish() {
+        let output = Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--auto-complete-shell", "fish"])
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .stdin(Stdio::null())
+            .output()
+            .unwrap();
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "--auto-complete-shell fish must exit 0, got: {}",
+            output.status
+        );
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("complete -c s3util"),
+            "expected fish completion output containing 'complete -c s3util', got first 200 chars: {}",
             &stdout.chars().take(200).collect::<String>()
         );
     }
