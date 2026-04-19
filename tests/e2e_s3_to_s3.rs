@@ -2840,4 +2840,52 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
+
+    #[tokio::test]
+    async fn s3_to_s3_with_source_version_id() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.enable_bucket_versioning(&bucket1).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let v1_content = b"v1 content";
+        let v2_content = b"v2 content";
+        let v1_id = helper
+            .put_object_with_version(&bucket1, "ver_test.txt", v1_content.to_vec())
+            .await;
+        helper
+            .put_object(&bucket1, "ver_test.txt", v2_content.to_vec())
+            .await;
+
+        let source = format!("s3://{}/ver_test.txt", bucket1);
+        let target = format!("s3://{}/ver_test.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--source-version-id",
+                &v1_id,
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_object_content_md5(&bucket2, "ver_test.txt", v1_content)
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
 }

@@ -1810,4 +1810,49 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
+
+    #[tokio::test]
+    async fn s3_to_local_with_source_version_id() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let v1_content = b"v1 content";
+        let v2_content = b"v2 content";
+        let v1_id = helper
+            .put_object_with_version(&bucket, "ver_test.txt", v1_content.to_vec())
+            .await;
+        helper
+            .put_object(&bucket, "ver_test.txt", v2_content.to_vec())
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let local_file = local_dir.join("ver_test.txt");
+
+        let source = format!("s3://{}/ver_test.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--source-version-id",
+                &v1_id,
+                &source,
+                local_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let content = std::fs::read(&local_file).unwrap();
+        assert_eq!(content, v1_content);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
 }

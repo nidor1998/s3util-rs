@@ -12,10 +12,10 @@ use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
-    BucketInfo, BucketLocationConstraint, BucketType, ChecksumMode, CreateBucketConfiguration,
-    DataRedundancy, LocationInfo, LocationType, Object, ServerSideEncryption,
-    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
-    Tag,
+    BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
+    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object,
+    ServerSideEncryption, ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
+    ServerSideEncryptionRule, Tag, VersioningConfiguration,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -273,6 +273,20 @@ impl TestHelper {
             .unwrap();
     }
 
+    pub async fn enable_bucket_versioning(&self, bucket: &str) {
+        let versioning_config = VersioningConfiguration::builder()
+            .status(BucketVersioningStatus::Enabled)
+            .build();
+
+        self.client
+            .put_bucket_versioning()
+            .bucket(bucket)
+            .versioning_configuration(versioning_config)
+            .send()
+            .await
+            .unwrap();
+    }
+
     pub async fn is_bucket_exist(&self, bucket: &str) -> bool {
         let head_bucket_result = self.client.head_bucket().bucket(bucket).send().await;
         if head_bucket_result.is_ok() {
@@ -433,6 +447,20 @@ impl TestHelper {
             .send()
             .await
             .unwrap();
+    }
+
+    pub async fn put_object_with_version(&self, bucket: &str, key: &str, body: Vec<u8>) -> String {
+        let stream = ByteStream::from(body);
+        let output = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(stream)
+            .send()
+            .await
+            .unwrap();
+        output.version_id().unwrap().to_string()
     }
 
     pub async fn put_object_from_file(&self, bucket: &str, key: &str, path: &str) {
