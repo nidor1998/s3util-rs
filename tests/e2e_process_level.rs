@@ -1,10 +1,12 @@
-//! Process-level happy-path e2e tests for four transfer directions:
-//! S3ToLocal, S3ToS3, StdioToS3, and S3ToStdio.
+//! Process-level happy-path e2e tests.
 //!
 //! These tests invoke the real `s3util` binary via `env!("CARGO_BIN_EXE_s3util")`
-//! as a subprocess and assert that the process exit code is 0. They cover
-//! every valid `--source-request-payer` / `--target-request-payer` flag
-//! combination for each direction.
+//! as a subprocess and assert that the process exit code is 0. They cover:
+//! - The four transfer directions S3ToLocal, S3ToS3, StdioToS3, and S3ToStdio,
+//!   across every valid `--source-request-payer` / `--target-request-payer`
+//!   flag combination.
+//! - The `--show-progress` indicator, which prints a one-line summary to stderr
+//!   on success.
 //!
 //! Gated by `cfg(e2e_test)` because they hit real AWS (the user runs e2e tests).
 
@@ -481,5 +483,60 @@ mod tests {
         assert_eq!(output.stdout, body);
 
         helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    // ---------------------------------------------------------------
+    // Indicator
+    // ---------------------------------------------------------------
+
+    /// `--show-progress` prints a final summary line to stderr on success.
+    /// Uses LocalToS3 as the simplest direction that can exercise the
+    /// indicator path (no stdin/stdout piping to interfere with stderr
+    /// capture).
+    #[tokio::test]
+    async fn show_indicator_emits_summary() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "indicator.txt", b"indicator body");
+        let target = format!("s3://{}/indicator.txt", bucket);
+
+        let output = run_s3util(&[
+            "cp",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--show-progress",
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "show_indicator_emits_summary must exit 0; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            stderr,
+        );
+
+        // The indicator's final summary line contains throughput (e.g.
+        // "1.00 KB | 5.00 KB/sec") and "etag verify: <status>".
+        assert!(
+            stderr.contains("/sec"),
+            "expected indicator summary with '/sec' on stderr, got: {stderr}"
+        );
+        assert!(
+            stderr.contains("etag verify:"),
+            "expected indicator summary with 'etag verify:' on stderr, got: {stderr}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
     }
 }
