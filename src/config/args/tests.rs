@@ -1,7 +1,7 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::config::args::build_config_from_args;
+    use crate::config::args::{build_config_from_args, parse_from_args};
     use crate::types::S3Credentials;
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
@@ -554,5 +554,35 @@ mod tests {
             }
             other => panic!("expected Credentials variant, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn missing_target_rejected() {
+        let result = build_config_from_args(vec![
+            "s3util".to_string(),
+            "cp".to_string(),
+            "s3://bucket/key".to_string(),
+        ]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn missing_source_and_target_rejected() {
+        let result = build_config_from_args(vec!["s3util".to_string(), "cp".to_string()]);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn auto_complete_shell_allows_missing_source_and_target() {
+        // Clap must accept --auto-complete-shell without source/target so
+        // main.rs can short-circuit into completion generation before
+        // Config::try_from runs.
+        let result = parse_from_args(vec![
+            "s3util".to_string(),
+            "cp".to_string(),
+            "--auto-complete-shell".to_string(),
+            "bash".to_string(),
+        ]);
+        assert!(result.is_ok());
     }
 }
