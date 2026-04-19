@@ -324,6 +324,19 @@ impl LocalStorage {
                 source_checksum_algorithm.as_ref().unwrap().as_str();
 
             if source_final_checksum != target_final_checksum {
+                // full_object_checksum covers the whole object; a mismatch cannot be
+                // explained by chunksize differences and always indicates corruption.
+                if is_full_object_checksum(&Some(source_final_checksum.clone())) {
+                    return Err(anyhow!(
+                        "additional checksum mismatch. file in the local storage may be corrupted. \
+                         key={}, algorithm={}, source_final_checksum={}, target_final_checksum={}",
+                        key,
+                        additional_checksum_algorithm,
+                        source_final_checksum,
+                        target_final_checksum
+                    ));
+                }
+
                 warn!(
                     key = key,
                     additional_checksum_algorithm = additional_checksum_algorithm,

@@ -34,7 +34,9 @@ use crate::storage::{
 use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, SyncStatistics};
+use crate::types::{
+    S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, SyncStatistics, is_full_object_checksum,
+};
 
 const MISMATCH_WARNING_WITH_HELP: &str = "mismatch. object in the target storage may be corrupted. \
  or the current multipart_threshold or multipart_chunksize may be different when uploading to the source. \
@@ -2034,9 +2036,13 @@ impl UploadManager {
                             .to_string()
                     };
 
-                    // When the source precalculates its checksum (local file or stdin),
-                    // a mismatch means the uploaded object is corrupted — treat as error.
-                    if !source_remote_storage {
+                    // A mismatch is an error when either:
+                    //   - the source precalculates its checksum (local file or stdin), or
+                    //   - the source is a full_object_checksum — chunksize differences
+                    //     cannot cause that to mismatch, so a mismatch is real corruption.
+                    if !source_remote_storage
+                        || is_full_object_checksum(&Some(source_checksum.clone()))
+                    {
                         return Err(anyhow!(
                             "{} key={}, algorithm={}, source_checksum={}, target_checksum={}",
                             message,

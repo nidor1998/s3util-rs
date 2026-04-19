@@ -253,6 +253,19 @@ pub async fn transfer(
                 })
                 .await;
         } else {
+            // full_object_checksum covers the whole object; a mismatch cannot be
+            // explained by chunksize differences and always indicates corruption.
+            if is_full_object_checksum(&Some(source_checksum.clone())) {
+                return Err(anyhow::anyhow!(
+                    "additional checksum mismatch. output data may be corrupted. \
+                     key={}, algorithm={}, source_final_checksum={}, target_final_checksum={}",
+                    source_key,
+                    additional_checksum_algorithm,
+                    source_checksum,
+                    target_final_checksum
+                ));
+            }
+
             warn!(
                 key = source_key,
                 additional_checksum_algorithm = additional_checksum_algorithm,
