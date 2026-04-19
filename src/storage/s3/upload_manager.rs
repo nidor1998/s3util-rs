@@ -424,14 +424,17 @@ impl UploadManager {
         let source_sse = get_object_output_first_chunk
             .server_side_encryption()
             .cloned();
-        let source_local_storage = self.source.is_local_storage();
-        let source_remote_storage = !source_local_storage;
         let source_content_length = self
             .source_total_size
             .expect("source_total_size is Some in non-streaming upload path");
         let source_e_tag = get_object_output_first_chunk
             .e_tag()
             .map(|e_tag| e_tag.to_string());
+        // Local files and stdin both arrive through a synthetic GetObjectOutput
+        // that carries no ETag — a synthetic ETag is computed below from the
+        // upload's per-part MD5s. Real S3 sources always populate the ETag.
+        let source_remote_storage = source_e_tag.is_some();
+        let source_local_storage = !source_remote_storage;
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output_first_chunk.storage_class().cloned();
 
@@ -1718,9 +1721,11 @@ impl UploadManager {
         mut get_object_output: GetObjectOutput,
     ) -> Result<PutObjectOutput> {
         let source_sse = get_object_output.server_side_encryption().cloned();
-        let source_local_storage = self.source.is_local_storage();
-        let source_remote_storage = !source_local_storage;
         let source_e_tag = get_object_output.e_tag().map(|e_tag| e_tag.to_string());
+        // See upload_parts_and_complete for the convention: an absent ETag
+        // signals a precalculating source (local file or stdin).
+        let source_remote_storage = source_e_tag.is_some();
+        let source_local_storage = !source_remote_storage;
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output.storage_class().cloned();
         let source_version_id = get_object_output.version_id().map(|v| v.to_string());
