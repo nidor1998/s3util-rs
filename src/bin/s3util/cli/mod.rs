@@ -67,6 +67,11 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
     trace!(direction = ?direction, "detected transfer direction");
 
+    if let Err(e) = check_local_source_not_directory(&config.source, &direction) {
+        error!(error = %e, "copy failed.");
+        return Err(e);
+    }
+
     // For cp, the full path is always passed as the key to get_object/put_object.
     // Storage instances are created with an empty base path so that key = full path.
     let (source_key, target_key) = match extract_keys(&config) {
@@ -419,6 +424,30 @@ fn format_target_path(target: &StoragePath, target_key: &str) -> String {
     }
 }
 
+/// Reject local source directories for `cp`.
+///
+/// LocalStorage::head_object returns a 0-byte success for directories (inherited
+/// from s3sync's recursive-sync semantics). `s3util cp` is single-file only, so
+/// without this guard a command like `s3util cp /tmp/ s3://bucket/` would silently
+/// upload an empty object.
+fn check_local_source_not_directory(
+    source: &StoragePath,
+    direction: &TransferDirection,
+) -> Result<()> {
+    if !matches!(direction, TransferDirection::LocalToS3) {
+        return Ok(());
+    }
+    if let StoragePath::Local(path) = source
+        && path.is_dir()
+    {
+        return Err(anyhow!(
+            "source is a directory: {}. cp command copies a single file.",
+            path.display()
+        ));
+    }
+    Ok(())
+}
+
 /// Create a LocalStorage base path (empty — full path is passed as the key).
 fn empty_local_storage_path() -> StoragePath {
     StoragePath::Local(".".into())
@@ -598,5 +627,47 @@ mod tests {
         let config = build_config(vec!["s3util", "cp", "-", "s3://b/dir/"]);
         let err = extract_keys(&config).unwrap_err();
         assert!(err.to_string().contains("target S3 key is required"));
+    }
+
+    #[test]
+    fn check_local_source_not_directory_rejects_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = StoragePath::Local(tmp.path().to_path_buf());
+        let err =
+            check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("source is a directory"), "message: {msg}");
+    }
+
+    #[test]
+    fn check_local_source_not_directory_allows_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let source = StoragePath::Local(tmp.path().to_path_buf());
+        check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap();
+    }
+
+    #[test]
+    fn check_local_source_not_directory_allows_nonexistent_path() {
+        // head_object downstream turns this into a "file not found" error; the
+        // directory guard should not pre-empt that path.
+        let source = StoragePath::Local(PathBuf::from("/nonexistent/path/for/test"));
+        check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap();
+    }
+
+    #[test]
+    fn check_local_source_not_directory_skips_non_local_to_s3_direction() {
+        // A Local source only reaches transfer for LocalToS3. Guard must be a
+        // no-op for every other direction so we don't stat paths that aren't
+        // the local source.
+        let tmp = tempfile::tempdir().unwrap();
+        let source = StoragePath::Local(tmp.path().to_path_buf());
+        for direction in [
+            TransferDirection::S3ToLocal,
+            TransferDirection::S3ToS3,
+            TransferDirection::StdioToS3,
+            TransferDirection::S3ToStdio,
+        ] {
+            check_local_source_not_directory(&source, &direction).unwrap();
+        }
     }
 }
