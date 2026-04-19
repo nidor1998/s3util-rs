@@ -821,6 +821,142 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Byte-exact boundary: stdin length == multipart_threshold - 1 byte → single-part.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_is_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        let etag = head.e_tag().unwrap();
+        assert!(
+            !etag.contains('-'),
+            "5 MiB - 1 byte < 5 MiB threshold → single-part ETag, got: {etag}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Byte-exact boundary: stdin length == multipart_threshold → multipart
+    /// (matches local_to_s3 behavior; dispatch uses strict `<`).
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_is_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        let etag = head.e_tag().unwrap();
+        assert!(
+            etag.contains("-1"),
+            "5 MiB == 5 MiB threshold → multipart with 1 part, got: {etag}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Byte-exact boundary: stdin length == multipart_threshold + 1 byte → multipart (2 parts).
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_is_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3sync-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        let etag = head.e_tag().unwrap();
+        assert!(
+            etag.contains("-2"),
+            "5 MiB + 1 byte > 5 MiB threshold → multipart with 2 parts, got: {etag}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     /// Empty stdin: 0 bytes piped in. Falls through the buffered path
     /// (probe_up_to returns empty < threshold) and must produce a zero-byte object.
     #[tokio::test]
