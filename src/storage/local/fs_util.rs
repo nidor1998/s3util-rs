@@ -17,10 +17,6 @@ pub async fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(File::open(path).await?.metadata().await?.len())
 }
 
-pub async fn is_regular_file(path: &PathBuf) -> Result<bool> {
-    Ok(File::open(path).await?.metadata().await?.is_file())
-}
-
 pub async fn get_last_modified(path: &PathBuf) -> Result<DateTime> {
     Ok(DateTime::from(
         File::open(path).await?.metadata().await?.modified()?,
