@@ -477,6 +477,7 @@ impl LocalStorage {
     async fn put_object_multipart(
         &self,
         key: &str,
+        source_key: &str,
         source: Storage,
         source_size: u64,
         source_additional_checksum: Option<String>,
@@ -590,7 +591,7 @@ impl LocalStorage {
             let mut cloned_file = tokio::fs::File::from_std(temp_file.reopen()?);
 
             let cloned_source = dyn_clone::clone_box(&*(source));
-            let source_key = key.to_string();
+            let source_key = source_key.to_string();
             let source_version_id = source_version_id.clone();
             let source_sse_c = self.config.source_sse_c.clone();
             let source_sse_c_key = self.config.source_sse_c_key.clone();
@@ -1078,7 +1079,7 @@ impl StorageTrait for LocalStorage {
         &self,
         key: &str,
         source: Storage,
-        _source_key: &str,
+        source_key: &str,
         source_size: u64,
         source_additional_checksum: Option<String>,
         get_object_output_first_chunk: GetObjectOutput,
@@ -1097,8 +1098,12 @@ impl StorageTrait for LocalStorage {
             )
             .await
         } else {
+            // Pass source_key through — the multipart path fetches remaining
+            // chunks from the source via ranged GETs, which need the source
+            // key (not the local destination path).
             self.put_object_multipart(
                 key,
+                source_key,
                 source,
                 source_size,
                 source_additional_checksum,
