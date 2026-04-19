@@ -394,7 +394,7 @@ impl LocalStorage {
 
         let byte_stream = convert_to_buf_byte_stream_with_callback(
             get_object_output.body.into_async_read(),
-            Some(self.get_stats_sender()),
+            None,
             source.get_rate_limit_bandwidth(),
             None,
             None,
@@ -416,6 +416,10 @@ impl LocalStorage {
 
             let buffer_len = buffer.len();
             file.write_all(buffer).await?;
+            let _ = self
+                .get_stats_sender()
+                .send(SyncStatistics::SyncBytes(buffer_len as u64))
+                .await;
             buf_reader.consume(buffer_len);
 
             // make it easy to cancel
