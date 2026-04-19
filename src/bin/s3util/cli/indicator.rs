@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use tracing::info;
 
 const MOVING_AVERAGE_PERIOD_SECS: usize = 10;
-const REFRESH_INTERVAL: f32 = 0.1;
+const REFRESH_INTERVAL: f32 = 1.0;
 
 pub fn show_indicator(
     stats_receiver: Receiver<SyncStatistics>,
@@ -99,7 +99,7 @@ pub fn show_indicator(
 
                     if show_result && total_error_count == 0 {
                         let mut parts = vec![format!(
-                            "{} | {}/sec",
+                            "Transferred: {} | {}/sec",
                             HumanBytes(total_sync_bytes),
                             HumanBytes(sync_bytes_per_sec)
                         )];
@@ -138,7 +138,7 @@ pub fn show_indicator(
 
             if show_progress {
                 let progress_message = format!(
-                    "{:>3} | {:>3}/sec",
+                    "Transferred: {:>3} | {:>3}/sec",
                     HumanBytes(total_sync_bytes),
                     HumanBytes(ma_synced_bytes.get_average())
                 );
