@@ -611,6 +611,35 @@ mod tests {
         );
     }
 
+    #[test]
+    fn build_profile_files_returns_none_when_no_overrides() {
+        // With neither file overridden, the SDK defaults are left untouched.
+        assert!(build_profile_files(None, None).is_none());
+    }
+
+    #[test]
+    fn build_profile_files_with_only_config_file_falls_back_to_default_credentials() {
+        // Exercises the None arm of the credentials match — the helper must
+        // still include the system default credentials file.
+        let config_path = PathBuf::from("/tmp/fake-aws-config");
+        assert!(build_profile_files(Some(&config_path), None).is_some());
+    }
+
+    #[test]
+    fn build_profile_files_with_only_credentials_file_falls_back_to_default_config() {
+        // Exercises the None arm of the config match — the helper must still
+        // include the system default config file.
+        let creds_path = PathBuf::from("/tmp/fake-aws-creds");
+        assert!(build_profile_files(None, Some(&creds_path)).is_some());
+    }
+
+    #[test]
+    fn build_profile_files_with_both_overrides() {
+        let config_path = PathBuf::from("/tmp/fake-aws-config");
+        let creds_path = PathBuf::from("/tmp/fake-aws-creds");
+        assert!(build_profile_files(Some(&config_path), Some(&creds_path)).is_some());
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
