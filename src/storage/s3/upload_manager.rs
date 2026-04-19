@@ -392,7 +392,17 @@ impl UploadManager {
             .await
             .context("upload_parts() failed.");
         if upload_result.is_err() {
-            self.abort_multipart_upload(bucket, key, upload_id).await?;
+            // Abort is best-effort: if upload_parts_and_complete already completed the
+            // multipart upload (e.g., failed during post-complete verification), the
+            // abort will fail with NoSuchUpload. Don't let that mask the real error.
+            if let Err(abort_err) = self.abort_multipart_upload(bucket, key, upload_id).await {
+                warn!(
+                    bucket = bucket,
+                    key = key,
+                    upload_id = upload_id,
+                    "abort_multipart_upload failed: {abort_err:?}"
+                );
+            }
             return Err(upload_result.err().unwrap());
         }
 
@@ -414,14 +424,14 @@ impl UploadManager {
         let source_sse = get_object_output_first_chunk
             .server_side_encryption()
             .cloned();
-        let source_remote_storage = get_object_output_first_chunk.e_tag().is_some();
+        let source_local_storage = self.source.is_local_storage();
+        let source_remote_storage = !source_local_storage;
         let source_content_length = self
             .source_total_size
             .expect("source_total_size is Some in non-streaming upload path");
         let source_e_tag = get_object_output_first_chunk
             .e_tag()
             .map(|e_tag| e_tag.to_string());
-        let source_local_storage = source_e_tag.is_none();
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output_first_chunk.storage_class().cloned();
 
@@ -499,7 +509,7 @@ impl UploadManager {
                 &target_sse,
                 &target_e_tag,
             )
-            .await;
+            .await?;
         }
 
         if !self.config.disable_additional_checksum_verify {
@@ -515,7 +525,7 @@ impl UploadManager {
                 &source_e_tag,
                 source_remote_storage,
             )
-            .await;
+            .await?;
         }
 
         Ok(PutObjectOutput::builder()
@@ -531,7 +541,7 @@ impl UploadManager {
         source_e_tag: &Option<String>,
         target_sse: &Option<ServerSideEncryption>,
         target_e_tag: &Option<String>,
-    ) {
+    ) -> Result<()> {
         let verify_result = storage::e_tag_verify::verify_e_tag(
             !self.config.disable_multipart_verify,
             &self.config.source_sse_c,
@@ -555,14 +565,29 @@ impl UploadManager {
                         "skip e_tag verification"
                     );
                 } else {
-                    let message = if source_remote_storage
+                    let chunksize_related = source_remote_storage
                         && is_multipart_upload_e_tag(source_e_tag)
-                        && !self.is_auto_chunksize_enabled()
-                    {
+                        && !self.is_auto_chunksize_enabled();
+                    let message = if chunksize_related {
                         format!("{} {}", "e_tag", MISMATCH_WARNING_WITH_HELP)
                     } else {
                         "e_tag mismatch. file in the target storage may be corrupted.".to_string()
                     };
+
+                    let source_e_tag_str = source_e_tag.clone().unwrap();
+                    let target_e_tag_str = target_e_tag.clone().unwrap();
+
+                    // When the source precalculates its ETag (local file or stdin),
+                    // a mismatch means the uploaded object is corrupted — treat as error.
+                    if !source_remote_storage {
+                        return Err(anyhow!(
+                            "{} key={}, source_e_tag={}, target_e_tag={}",
+                            message,
+                            key,
+                            source_e_tag_str,
+                            target_e_tag_str
+                        ));
+                    }
 
                     self.send_stats(SyncWarning {
                         key: key.to_string(),
@@ -570,13 +595,10 @@ impl UploadManager {
                     .await;
                     self.has_warning.store(true, Ordering::SeqCst);
 
-                    let source_e_tag = source_e_tag.clone().unwrap();
-                    let target_e_tag = target_e_tag.clone().unwrap();
-
                     warn!(
                         key = &key,
-                        source_e_tag = source_e_tag,
-                        target_e_tag = target_e_tag,
+                        source_e_tag = source_e_tag_str,
+                        target_e_tag = target_e_tag_str,
                         message
                     );
                 }
@@ -594,6 +616,8 @@ impl UploadManager {
                 );
             }
         }
+
+        Ok(())
     }
 
     // skipcq: RS-R1000
@@ -1057,7 +1081,7 @@ impl UploadManager {
             let target_e_tag = complete_output.e_tag().map(|e| e.to_string());
 
             self.verify_e_tag(key, &None, false, &source_e_tag, &target_sse, &target_e_tag)
-                .await;
+                .await?;
         }
 
         if !self.config.disable_additional_checksum_verify {
@@ -1073,7 +1097,7 @@ impl UploadManager {
                 &None,
                 false,
             )
-            .await;
+            .await?;
         }
 
         Ok(PutObjectOutput::builder()
@@ -1694,9 +1718,9 @@ impl UploadManager {
         mut get_object_output: GetObjectOutput,
     ) -> Result<PutObjectOutput> {
         let source_sse = get_object_output.server_side_encryption().cloned();
-        let source_remote_storage = get_object_output.e_tag().is_some();
+        let source_local_storage = self.source.is_local_storage();
+        let source_remote_storage = !source_local_storage;
         let source_e_tag = get_object_output.e_tag().map(|e_tag| e_tag.to_string());
-        let source_local_storage = source_e_tag.is_none();
         let source_checksum = self.source_additional_checksum.clone();
         let source_storage_class = get_object_output.storage_class().cloned();
         let source_version_id = get_object_output.version_id().map(|v| v.to_string());
@@ -1929,7 +1953,7 @@ impl UploadManager {
                 &target_sse,
                 &target_e_tag,
             )
-            .await;
+            .await?;
         }
 
         if !self.config.disable_additional_checksum_verify {
@@ -1945,7 +1969,7 @@ impl UploadManager {
                 &source_e_tag,
                 source_remote_storage,
             )
-            .await;
+            .await?;
         }
 
         Ok(put_object_output)
@@ -1958,7 +1982,7 @@ impl UploadManager {
         target_checksum: Option<String>,
         source_e_tag: &Option<String>,
         source_remote_storage: bool,
-    ) {
+    ) -> Result<()> {
         if self.config.additional_checksum_mode.is_some() && source_checksum.is_none() {
             self.send_stats(SyncWarning {
                 key: key.to_string(),
@@ -1995,21 +2019,34 @@ impl UploadManager {
                         "skip additional checksum verification."
                     );
                 } else {
-                    self.send_stats(SyncWarning {
-                        key: key.to_string(),
-                    })
-                    .await;
-                    self.has_warning.store(true, Ordering::SeqCst);
-
-                    let message = if source_remote_storage
+                    let chunksize_related = source_remote_storage
                         && is_multipart_upload_e_tag(source_e_tag)
-                        && !self.is_auto_chunksize_enabled()
-                    {
+                        && !self.is_auto_chunksize_enabled();
+                    let message = if chunksize_related {
                         format!("{} {}", "additional checksum", MISMATCH_WARNING_WITH_HELP)
                     } else {
                         "additional checksum mismatch. file in the target storage may be corrupted."
                             .to_string()
                     };
+
+                    // When the source precalculates its checksum (local file or stdin),
+                    // a mismatch means the uploaded object is corrupted — treat as error.
+                    if !source_remote_storage {
+                        return Err(anyhow!(
+                            "{} key={}, algorithm={}, source_checksum={}, target_checksum={}",
+                            message,
+                            key,
+                            additional_checksum_algorithm,
+                            source_checksum,
+                            target_checksum
+                        ));
+                    }
+
+                    self.send_stats(SyncWarning {
+                        key: key.to_string(),
+                    })
+                    .await;
+                    self.has_warning.store(true, Ordering::SeqCst);
 
                     warn!(
                         key = &key,
@@ -2034,6 +2071,8 @@ impl UploadManager {
                 );
             }
         }
+
+        Ok(())
     }
 
     fn generate_e_tag_hash(&self, parts_count: i64) -> String {
