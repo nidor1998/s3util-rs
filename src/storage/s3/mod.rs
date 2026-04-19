@@ -412,13 +412,11 @@ impl StorageTrait for S3Storage {
             None
         };
 
-        // Use a dummy stats sender for the body wrapper — we don't want SyncBytes
-        // sent when reading from source (reads can be instant for local files).
-        // Instead, SyncBytes are sent after each upload_part/singlepart upload completes.
-        let (dummy_stats_sender, _dummy_stats_receiver) = async_channel::unbounded();
+        // No SyncBytes emission at the source body read — SyncBytes are sent
+        // after each upload_part/singlepart upload completes.
         get_object_output_first_chunk.body = convert_to_buf_byte_stream_with_callback(
             get_object_output_first_chunk.body.into_async_read(),
-            Some(dummy_stats_sender),
+            None,
             self.rate_limit_bandwidth.clone(),
             checksum,
             object_checksum.clone(),
