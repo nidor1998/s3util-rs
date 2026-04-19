@@ -7,7 +7,7 @@ use tokio::time::Instant;
 use tracing::info;
 
 const MOVING_AVERAGE_PERIOD_SECS: usize = 10;
-const REFRESH_INTERVAL: f32 = 1.0;
+const REFRESH_INTERVAL: f32 = 0.1;
 
 pub fn show_indicator(
     stats_receiver: Receiver<SyncStatistics>,
