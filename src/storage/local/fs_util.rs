@@ -822,6 +822,63 @@ mod tests {
         assert_eq!(mtime.secs(), 777);
     }
 
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn create_parent_directory_creates_and_short_circuits() {
+        init_dummy_tracing_subscriber();
+
+        let temp = tempfile::tempdir().unwrap();
+        let key = format!("{}/nested/deeper/file", temp.path().display());
+
+        // First call: parent doesn't exist → gets created, returns true.
+        assert!(create_parent_directory(&key).await.unwrap());
+        let parent = PathBuf::from(&key).parent().unwrap().to_path_buf();
+        assert!(parent.try_exists().unwrap());
+
+        // Second call: parent exists → short-circuits to false.
+        assert!(!create_parent_directory(&key).await.unwrap());
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn create_temp_file_for_key_creates_parent_and_file() {
+        init_dummy_tracing_subscriber();
+
+        let temp = tempfile::tempdir().unwrap();
+        let key = format!("{}/new/subdir/tempfile", temp.path().display());
+
+        let file = create_temp_file_for_key(&key).await.unwrap();
+        assert!(file.path().exists());
+        assert_eq!(
+            file.path().parent().unwrap(),
+            PathBuf::from(&key).parent().unwrap()
+        );
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
+    async fn create_directory_hierarchy_creates_fresh_tempdir() {
+        // Exercises the tokio::fs::create_dir_all success branch — the existing
+        // playground/-based test can no-op when the fixture dir is already
+        // present from a prior run.
+        init_dummy_tracing_subscriber();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base: PathBuf = format!("{}/", temp.path().display()).into();
+        assert!(
+            create_directory_hierarchy_from_key(base.clone(), "fresh_dir/file")
+                .await
+                .unwrap()
+        );
+
+        // Second call: directory now exists → returns false.
+        assert!(
+            !create_directory_hierarchy_from_key(base, "fresh_dir/")
+                .await
+                .unwrap()
+        );
+    }
+
     #[test]
     fn remove_root_slash_test() {
         init_dummy_tracing_subscriber();

@@ -294,4 +294,26 @@ mod tests {
         let path = "s3://bucket-only";
         assert_eq!(extract_multi_region_arn(path), "bucket-only");
     }
+
+    #[test]
+    fn check_storage_path_accepts_multi_region_arn() {
+        // Multi-region ARN is recognized by the dedicated regex branch and
+        // returned verbatim; it must not fall into the Url::parse path where
+        // "arn:aws" would look like a scheme and fail validation.
+        let path = "s3://arn:aws:s3::123456789012:accesspoint/my-ap/some/key";
+        assert_eq!(check_storage_path(path).unwrap(), path);
+    }
+
+    #[test]
+    fn parse_storage_path_returns_s3_for_multi_region_arn() {
+        let path = "s3://arn:aws:s3::123456789012:accesspoint/my-ap/some/key";
+        match parse_storage_path(path) {
+            StoragePath::S3 { bucket, prefix } => {
+                assert!(bucket.starts_with("arn:aws:s3"));
+                assert!(bucket.contains("accesspoint/my-ap"));
+                assert_eq!(prefix, "some/key");
+            }
+            _ => panic!("expected multi-region ARN to parse as S3"),
+        }
+    }
 }

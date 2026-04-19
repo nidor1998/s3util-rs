@@ -40,6 +40,22 @@ mod tests {
     }
 
     #[test]
+    fn check_at_least_one_s3_or_stdio_rejects_both_local_direct() {
+        // check_at_least_one_s3_or_stdio is normally preempted by
+        // check_both_local in the validation chain, so the NO_S3_STORAGE
+        // branch is defensive. Call the method directly on a CpArgs with
+        // two local paths to exercise that branch.
+        use crate::config::args::Commands;
+        let cli = parse_from_args(args_with("/tmp/a", "/tmp/b")).unwrap();
+        let Commands::Cp(cp_args) = cli.command;
+        let err = cp_args.check_at_least_one_s3_or_stdio().unwrap_err();
+        assert!(
+            err.contains("either SOURCE or TARGET must be s3://"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn server_side_copy_requires_both_s3() {
         let result = build_config_from_args(args_with_extra(
             "/tmp/source",

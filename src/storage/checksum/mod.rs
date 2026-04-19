@@ -91,4 +91,14 @@ mod tests {
         AdditionalChecksum::new(ChecksumAlgorithm::Crc64Nvme, false);
         AdditionalChecksum::new(ChecksumAlgorithm::Crc64Nvme, true);
     }
+
+    #[test]
+    #[should_panic(expected = "Unknown ChecksumAlgorithm")]
+    fn unknown_algorithm_panics() {
+        // ChecksumAlgorithm is #[non_exhaustive] and its From<&str> impl returns
+        // ChecksumAlgorithm::Unknown(_) for unrecognized inputs, which lands on
+        // the `_ =>` arm of AdditionalChecksum::new.
+        let unknown = ChecksumAlgorithm::from("bogus");
+        AdditionalChecksum::new(unknown, false);
+    }
 }

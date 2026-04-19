@@ -90,4 +90,43 @@ mod tests {
         assert_eq!(8 * 1024 * 1024, parse_human_bytes("8MiB").unwrap());
         assert_eq!(5 * 1024 * 1024, parse_human_bytes("5242880").unwrap());
     }
+
+    #[test]
+    fn check_valid_bandwidth() {
+        check_human_bandwidth("1MiB").unwrap();
+        check_human_bandwidth("10MiB").unwrap();
+        check_human_bandwidth("1GiB").unwrap();
+        check_human_bandwidth("100GiB").unwrap();
+    }
+
+    #[test]
+    fn check_invalid_bandwidth_format() {
+        assert!(check_human_bandwidth("bogus").is_err());
+        assert!(check_human_bandwidth("1Zib").is_err());
+    }
+
+    #[test]
+    fn check_under_min_bandwidth() {
+        // 1 byte below the 1 MiB floor.
+        let result = check_human_bandwidth("1048575");
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), UNDER_MIN_BANDWIDTH);
+    }
+
+    #[test]
+    fn check_over_max_bandwidth() {
+        // 1 byte above the 100 GiB ceiling.
+        let result = check_human_bandwidth("107374182401");
+        assert!(result.is_err());
+        assert_eq!(result.err().unwrap(), OVER_MAX_BANDWIDTH);
+    }
+
+    #[test]
+    fn parse_valid_bandwidth() {
+        assert_eq!(1024 * 1024, parse_human_bandwidth("1MiB").unwrap());
+        assert_eq!(
+            10u64 * 1024 * 1024 * 1024,
+            parse_human_bandwidth("10GiB").unwrap()
+        );
+    }
 }

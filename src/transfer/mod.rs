@@ -179,5 +179,74 @@ mod tests {
             let out = translate_source_head_object_error(input, "k");
             assert_eq!(out.to_string(), "some other failure");
         }
+
+        fn generic_service_error(
+            code: Option<&str>,
+            message: Option<&str>,
+            status: u16,
+        ) -> SdkError<HeadObjectError, Response<SdkBody>> {
+            let mut builder = aws_smithy_types::error::metadata::ErrorMetadata::builder();
+            if let Some(c) = code {
+                builder = builder.code(c);
+            }
+            if let Some(m) = message {
+                builder = builder.message(m);
+            }
+            SdkError::service_error(
+                HeadObjectError::generic(builder.build()),
+                Response::new(StatusCode::try_from(status).unwrap(), SdkBody::from("")),
+            )
+        }
+
+        #[test]
+        fn service_error_with_code_and_message_uses_code_colon_message() {
+            let input = anyhow!(generic_service_error(
+                Some("AccessDenied"),
+                Some("User is not authorized"),
+                403,
+            ));
+            let out = translate_source_head_object_error(input, "k");
+            assert_eq!(out.to_string(), "AccessDenied: User is not authorized");
+        }
+
+        #[test]
+        fn service_error_with_code_only_appends_http_status() {
+            let input = anyhow!(generic_service_error(Some("AccessDenied"), None, 403));
+            let out = translate_source_head_object_error(input, "k");
+            assert_eq!(out.to_string(), "AccessDenied (HTTP 403)");
+        }
+
+        #[test]
+        fn service_error_with_message_only_appends_http_status() {
+            let input = anyhow!(generic_service_error(None, Some("redirect"), 301));
+            let out = translate_source_head_object_error(input, "k");
+            assert_eq!(out.to_string(), "redirect (HTTP 301)");
+        }
+
+        #[test]
+        fn service_error_without_code_or_message_falls_back_to_status() {
+            let input = anyhow!(generic_service_error(None, None, 301));
+            let out = translate_source_head_object_error(input, "k");
+            assert_eq!(
+                out.to_string(),
+                "S3 returned HTTP 301 without error details"
+            );
+        }
+
+        #[test]
+        fn non_service_sdk_error_uses_display_error_context() {
+            // A construction-failure SdkError routes through the final
+            // DisplayErrorContext arm rather than the ServiceError match.
+            let sdk: SdkError<HeadObjectError, Response<SdkBody>> =
+                SdkError::construction_failure(anyhow!("cannot build request"));
+            let input = anyhow!(sdk);
+            let out = translate_source_head_object_error(input, "k");
+            // DisplayErrorContext walks the source chain; the inner "cannot
+            // build request" must be surfaced somewhere in the rendered string.
+            assert!(
+                out.to_string().contains("cannot build request"),
+                "unexpected output: {out}"
+            );
+        }
     }
 }

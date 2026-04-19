@@ -252,6 +252,101 @@ mod tests {
         join_handle.await.unwrap();
     }
 
+    #[tokio::test]
+    async fn indicator_fast_completion_falls_back_to_raw_total_for_rate() {
+        // Closes immediately so elapsed_secs_f64 < REFRESH_INTERVAL — the
+        // branch that assigns sync_bytes_per_sec = total_sync_bytes to avoid
+        // a misleading spike on sub-100ms transfers.
+        init_dummy_tracing_subscriber();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let join_handle = show_indicator(stats_receiver, false, true, true, None);
+
+        stats_sender
+            .send(SyncStatistics::SyncBytes(10))
+            .await
+            .unwrap();
+        stats_sender.close();
+
+        join_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn indicator_with_resolved_target_prints_destination_line() {
+        // Covers the `Some(ref resolved)` arm of resolved_target on successful
+        // completion (no errors).
+        init_dummy_tracing_subscriber();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let join_handle = show_indicator(
+            stats_receiver,
+            false,
+            false,
+            false,
+            Some("s3://bucket/resolved/key".to_string()),
+        );
+
+        stats_sender
+            .send(SyncStatistics::SyncBytes(1))
+            .await
+            .unwrap();
+        stats_sender.close();
+
+        join_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn indicator_warning_without_etag_verified_shows_etag_skipped() {
+        // Warning > 0 but no ETagVerified: etag status takes the middle arm
+        // ("failed") and checksum status falls through to "skipped".
+        init_dummy_tracing_subscriber();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let join_handle = show_indicator(stats_receiver, false, true, false, None);
+
+        stats_sender
+            .send(SyncStatistics::SyncBytes(1))
+            .await
+            .unwrap();
+        stats_sender
+            .send(SyncStatistics::SyncWarning {
+                key: "test".to_string(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        stats_sender.close();
+        join_handle.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn indicator_etag_verified_plus_warning_shows_checksum_failed() {
+        // ETagVerified + SyncWarning but no ChecksumVerified: checksum status
+        // renders as "failed" (the `else if` middle arm).
+        init_dummy_tracing_subscriber();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let join_handle = show_indicator(stats_receiver, false, true, false, None);
+
+        stats_sender
+            .send(SyncStatistics::SyncBytes(1))
+            .await
+            .unwrap();
+        stats_sender
+            .send(SyncStatistics::ETagVerified {
+                key: "test".to_string(),
+            })
+            .await
+            .unwrap();
+        stats_sender
+            .send(SyncStatistics::SyncWarning {
+                key: "test".to_string(),
+            })
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        stats_sender.close();
+        join_handle.await.unwrap();
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("dummy=trace")

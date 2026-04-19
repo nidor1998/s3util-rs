@@ -670,4 +670,38 @@ mod tests {
             check_local_source_not_directory(&source, &direction).unwrap();
         }
     }
+
+    #[test]
+    fn extract_keys_s3_to_existing_local_directory_appends_basename() {
+        // `aws s3 cp s3://bucket/key /existing/dir` resolves the target to
+        // /existing/dir/<basename> — exercises the p.is_dir() branch.
+        let tmp = tempfile::tempdir().unwrap();
+        let target_arg = tmp.path().to_string_lossy().to_string();
+        let config = build_config(vec![
+            "s3util",
+            "cp",
+            "s3://b/remote/file.dat",
+            target_arg.as_str(),
+        ]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        let expected = tmp.path().join("file.dat").to_string_lossy().to_string();
+        assert_eq!(tgt, expected);
+    }
+
+    #[test]
+    fn extract_keys_s3_to_local_path_with_trailing_separator_appends_basename() {
+        // Non-existent local path ending with the platform separator is also
+        // treated as a directory target — the second half of the branch
+        // condition in extract_keys.
+        let sep = std::path::MAIN_SEPARATOR;
+        let target_arg = format!("/tmp/s3util_nonexistent_dir_{sep}");
+        let config = build_config(vec![
+            "s3util",
+            "cp",
+            "s3://b/remote/object.bin",
+            target_arg.as_str(),
+        ]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        assert!(tgt.ends_with("object.bin"), "target was: {tgt}");
+    }
 }
