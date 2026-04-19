@@ -4,7 +4,7 @@
 //! as a subprocess and assert that the process exit code is 0. They cover:
 //! - The four transfer directions S3ToLocal, S3ToS3, StdioToS3, and S3ToStdio,
 //!   across every valid `--source-request-payer` / `--target-request-payer`
-//!   flag combination.
+//!   flag combination, plus LocalToS3 with `--target-request-payer`.
 //! - The `--show-progress` indicator, which prints a one-line summary to stderr
 //!   on success.
 //! - The `--disable-payload-signing` flag on a LocalToS3 upload.
@@ -484,6 +484,52 @@ mod tests {
         assert_eq!(output.stdout, body);
 
         helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    // ---------------------------------------------------------------
+    // LocalToS3 (1)
+    // ---------------------------------------------------------------
+
+    #[tokio::test]
+    async fn local_to_s3_process_level_with_target_request_payer() {
+        // Limitation: Without a Requester-Pays bucket, we can only verify that the
+        // CLI accepts --target-request-payer and exits 0.
+        // On a non-requester-pays bucket the header is ignored server-side.
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let body = b"local_to_s3 target rp body";
+        let test_file = TestHelper::create_test_file(&local_dir, "local_to_s3_rp.txt", body);
+        let key = "local_to_s3_rp.txt";
+        let target = format!("s3://{}/{}", bucket, key);
+
+        let output = run_s3util(&[
+            "cp",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--target-request-payer",
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "local_to_s3_process_level_with_target_request_payer must exit 0; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+
+        assert!(helper.is_object_exist(&bucket, key, None).await);
+        let fetched = helper.get_object_bytes(&bucket, key, None).await;
+        assert_eq!(fetched, body);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
     }
 
     // ---------------------------------------------------------------
