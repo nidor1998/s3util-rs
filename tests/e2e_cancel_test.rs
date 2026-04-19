@@ -9,11 +9,13 @@ mod tests {
     use super::*;
 
     /// Baseline cancel test: sends SIGINT to a running `s3util cp` and
-    /// asserts the process exits with a non-zero status (i.e. does not
-    /// hang or report success). The richer orphan-MPU assertions live in
-    /// `cancel_multipart_upload_sigint_no_orphan_mpu` below.
+    /// asserts the process exits (i.e. does not hang) within `child.wait()`.
+    /// Exit status is intentionally not checked — ctrl-c cancellation is
+    /// expected to exit 0 per s3sync convention. The richer orphan-MPU
+    /// assertions live in `cancel_multipart_upload_sigint_no_orphan_mpu`
+    /// below.
     #[tokio::test]
-    async fn cancel_upload_with_sigint_exit_nonzero() {
+    async fn cancel_upload_with_sigint_does_not_hang() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -61,14 +63,9 @@ mod tests {
                 let _ = kill(pid, Signal::SIGINT);
             }
 
-            let status = child.wait().unwrap();
-            // After SIGINT, the process must exit non-successfully.
-            // (`code().is_some()` alone would also accept exit 0, so we
-            // require either non-success or a signal exit.)
-            assert!(
-                !status.success(),
-                "process exited successfully after SIGINT: {status:?}"
-            );
+            // The process must reach exit (not hang). Exit code is not asserted:
+            // s3util intentionally exits 0 on ctrl-c cancellation.
+            let _status = child.wait().unwrap();
         }
 
         // Clean up — abort any MPUs that may have been left pending so
@@ -79,16 +76,18 @@ mod tests {
     }
 
     /// Strengthened cancel test: SIGINTs a multipart upload and verifies
-    /// three properties:
-    ///   1. The process exits non-successfully (interrupted or error).
-    ///   2. The final target object is NOT present in the bucket (or, if
+    /// two properties:
+    ///   1. The final target object is NOT present in the bucket (or, if
     ///      present, its size is 0) — i.e. cancellation did not race and
     ///      complete the upload anyway.
-    ///   3. No orphan multipart uploads remain in the bucket — s3util-rs
+    ///   2. No orphan multipart uploads remain in the bucket — s3util-rs
     ///      is expected to abort the MPU on cancel/error via
     ///      `abort_multipart_upload` in `upload_manager.rs`.
     ///
-    /// Property (3) is the most load-bearing assertion. If the tool
+    /// Exit status is not asserted — s3util intentionally exits 0 on
+    /// ctrl-c cancellation (matches s3sync convention).
+    ///
+    /// Property (2) is the most load-bearing assertion. If the tool
     /// DOES leak MPUs under SIGINT, this test will fail — in that case
     /// investigate the abort logic rather than weakening the assertion.
     /// The teardown still aborts any pending MPUs so the bucket can be
@@ -152,13 +151,9 @@ mod tests {
                 let _ = kill(pid, Signal::SIGINT);
                 delivered = true;
 
-                let status = child.wait().unwrap();
-
-                // (1) Non-successful exit after SIGINT.
-                assert!(
-                    !status.success(),
-                    "process exited successfully after SIGINT: {status:?}"
-                );
+                // Process must reach exit (not hang). Exit code is not checked;
+                // s3util intentionally exits 0 on ctrl-c.
+                let _status = child.wait().unwrap();
 
                 // Give S3 a brief moment to reflect AbortMultipartUpload
                 // completing on the server side.
@@ -182,7 +177,7 @@ mod tests {
         // SIGINT — on a platform without unix signals this test becomes a
         // no-op.
         if cancelled {
-            // (2) The final object must not be a completed, non-empty
+            // (1) The final object must not be a completed, non-empty
             // upload. It's acceptable for it to be absent or zero-length.
             let exists = helper.is_object_exist(&bucket, target_key, None).await;
             if exists {
@@ -194,7 +189,7 @@ mod tests {
                 );
             }
 
-            // (3) No orphan multipart uploads should remain.
+            // (2) No orphan multipart uploads should remain.
             let mpu_count = helper.count_multipart_uploads(&bucket).await;
             assert_eq!(
                 mpu_count, 0,
