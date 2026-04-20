@@ -180,6 +180,10 @@ It cannot work between different object storages or regions."#)]
     #[arg(long, env, default_value_t = DEFAULT_REQUEST_PAYER, help_heading = "Source Options")]
     source_request_payer: bool,
 
+    /// Do not sign the request. If this argument is specified, credentials will not be loaded
+    #[arg(long, env, default_value_t = false, help_heading = "AWS Configuration")]
+    source_no_sign_request: bool,
+
     /// Force path-style addressing for source endpoint.
     #[arg(long, env, default_value_t = DEFAULT_FORCE_PATH_STYLE, help_heading = "Source Options")]
     source_force_path_style: bool,
@@ -873,7 +877,9 @@ impl CpArgs {
         &self,
         request_checksum_calculation: RequestChecksumCalculation,
     ) -> (Option<ClientConfig>, Option<ClientConfig>) {
-        let source_credential = if let Some(source_profile) = self.source_profile.clone() {
+        let source_credential = if self.source_no_sign_request {
+            Some(S3Credentials::NoSignRequest)
+        } else if let Some(source_profile) = self.source_profile.clone() {
             Some(S3Credentials::Profile(source_profile))
         } else if self.source_access_key.is_some() {
             self.source_access_key

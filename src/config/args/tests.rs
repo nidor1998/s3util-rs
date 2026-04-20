@@ -756,4 +756,20 @@ mod tests {
         let result = build_config_from_args(args_with("s3://b/foo.", &dst));
         assert!(result.is_ok(), "{:?}", result.err());
     }
+
+    #[test]
+    fn source_no_sign_request_produces_no_sign_request_credential() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://public-bucket/key",
+            "/tmp/out",
+            &["--source-no-sign-request"],
+        ))
+        .unwrap();
+
+        let source_credential = config.source_client_config.unwrap().credential;
+        assert!(
+            matches!(source_credential, S3Credentials::NoSignRequest),
+            "expected NoSignRequest, got {source_credential:?}"
+        );
+    }
 }
