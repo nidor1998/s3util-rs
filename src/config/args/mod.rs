@@ -182,7 +182,19 @@ It cannot work between different object storages or regions."#)]
     source_request_payer: bool,
 
     /// Do not sign the request. If this argument is specified, credentials will not be loaded
-    #[arg(long, env, default_value_t = DEFAULT_SOURCE_NO_SIGN_REQUEST, help_heading = "AWS Configuration")]
+    #[arg(
+        long,
+        env,
+        default_value_t = DEFAULT_SOURCE_NO_SIGN_REQUEST,
+        conflicts_with_all = [
+            "source_profile",
+            "source_access_key",
+            "source_secret_access_key",
+            "source_session_token",
+            "source_request_payer",
+        ],
+        help_heading = "AWS Configuration"
+    )]
     source_no_sign_request: bool,
 
     /// Force path-style addressing for source endpoint.

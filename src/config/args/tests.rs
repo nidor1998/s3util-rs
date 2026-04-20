@@ -772,4 +772,97 @@ mod tests {
             "expected NoSignRequest, got {source_credential:?}"
         );
     }
+
+    #[test]
+    fn source_no_sign_request_conflicts_with_source_profile() {
+        let err = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/out",
+            &["--source-no-sign-request", "--source-profile", "myprofile"],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("cannot be used with"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_no_sign_request_conflicts_with_source_access_key() {
+        let err = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/out",
+            &[
+                "--source-no-sign-request",
+                "--source-access-key",
+                "AKIA...",
+                "--source-secret-access-key",
+                "secret",
+            ],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("cannot be used with"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_no_sign_request_conflicts_with_source_secret_access_key() {
+        // Bare --source-secret-access-key would be rejected by `requires`; pair
+        // it with --source-access-key to exercise the --source-no-sign-request
+        // conflict specifically.
+        let err = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/out",
+            &[
+                "--source-no-sign-request",
+                "--source-access-key",
+                "AKIA...",
+                "--source-secret-access-key",
+                "secret",
+            ],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("cannot be used with"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_no_sign_request_conflicts_with_source_session_token() {
+        let err = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/out",
+            &[
+                "--source-no-sign-request",
+                "--source-access-key",
+                "AKIA...",
+                "--source-secret-access-key",
+                "secret",
+                "--source-session-token",
+                "token",
+            ],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("cannot be used with"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_no_sign_request_conflicts_with_source_request_payer() {
+        let err = build_config_from_args(args_with_extra(
+            "s3://b/k",
+            "/tmp/out",
+            &["--source-no-sign-request", "--source-request-payer"],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("cannot be used with"),
+            "unexpected error: {err}"
+        );
+    }
 }
