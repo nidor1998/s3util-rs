@@ -528,9 +528,11 @@ mod tests {
 
     #[test]
     fn source_access_key_builds_credentials_variant() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dst").to_string_lossy().to_string();
         let result = build_config_from_args(args_with_extra(
             "s3://src/k",
-            "/tmp/dst",
+            &target,
             &[
                 "--source-access-key",
                 "AKIATEST",

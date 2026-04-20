@@ -608,7 +608,9 @@ mod tests {
 
     #[test]
     fn extract_keys_s3_to_local_with_no_source_key_errors() {
-        let config = build_config(vec!["s3util", "cp", "s3://b", "/tmp/dst"]);
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("dst").to_string_lossy().to_string();
+        let config = build_config(vec!["s3util", "cp", "s3://b", &target]);
         let err = extract_keys(&config).unwrap_err();
         assert!(err.to_string().contains("source S3 key is required"));
     }
