@@ -881,4 +881,21 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn source_no_sign_request_rejects_stdio_source() {
+        // `is_source_s3()` returns false for Stdio just as it does for Local;
+        // the guard should apply uniformly. Target must be S3 so we don't trip
+        // the "both stdio" check first.
+        let err = build_config_from_args(args_with_extra(
+            "-",
+            "s3://my-bucket/key",
+            &["--source-no-sign-request"],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("--source-no-sign-request, source must be s3://"),
+            "unexpected error: {err}"
+        );
+    }
 }
