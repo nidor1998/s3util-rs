@@ -1923,4 +1923,64 @@ mod tests {
 
         helper.delete_bucket_with_cascade(&bucket).await;
     }
+
+    /// Upload with 5MiB chunks + SHA256; pipe to stdout at default chunksize.
+    /// The source stores a composite (`-N`-suffixed) SHA256 computed over 5MiB
+    /// parts, but the local recompute uses default 8MiB parts — the composite
+    /// values disagree. Composite mismatches must warn, not error. This pins
+    /// the else-branch of the full_object_checksum check in s3_to_stdio.rs.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_sha256_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
 }

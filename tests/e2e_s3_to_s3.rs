@@ -2888,4 +2888,62 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
+
+    /// S3→S3 copy of a multipart object with `--additional-checksum-algorithm`
+    /// but WITHOUT `--enable-additional-checksum`. This is the CLI shape that
+    /// required `get_final_checksum` to force `ChecksumMode::Enabled` on
+    /// head_object: without the fix, final_checksum would be None and the
+    /// ranged-GET's range-scoped checksum (no `-N`) would reach
+    /// validate_checksum, causing a false mismatch.
+    #[tokio::test]
+    async fn s3_to_s3_multipart_algorithm_without_mode_crc32c() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_file = TestHelper::create_sized_file(&local_dir, "algo.bin", 9 * 1024 * 1024);
+
+        let source = format!("s3://{}/algo.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                src_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/algo.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
 }

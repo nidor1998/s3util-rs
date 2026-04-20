@@ -104,7 +104,6 @@ pub async fn transfer(
     // Build object checksum using the s3sync-ported helper
     let final_checksum = first_chunk::get_final_checksum(
         &*source,
-        &*target,
         config,
         &get_object_output,
         range.as_deref(),

@@ -69,7 +69,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     trace!(direction = ?direction, "detected transfer direction");
 
     if let Err(e) = check_local_source_not_directory(&config.source, &direction) {
-        error!(error = %e, "copy failed.");
+        error!(error = format!("{e:#}"), "copy failed.");
         return Err(e);
     }
 
@@ -78,7 +78,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let (source_key, target_key) = match extract_keys(&config) {
         Ok(keys) => keys,
         Err(e) => {
-            error!(error = %e, "copy failed.");
+            error!(error = format!("{e:#}"), "copy failed.");
             return Err(e);
         }
     };
@@ -335,7 +335,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             // a misleading "copy failed." with the inner upload context.
             return Ok(ExitStatus::Success);
         }
-        error!(error = %e, "copy failed.");
+        error!(error = format!("{e:#}"), "copy failed.");
         return Err(result.unwrap_err());
     }
 

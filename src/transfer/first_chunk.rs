@@ -246,7 +246,6 @@ pub async fn get_object_parts_if_necessary(
 #[allow(clippy::too_many_arguments)]
 pub async fn get_final_checksum(
     source: &dyn StorageTrait,
-    target: &dyn StorageTrait,
     config: &Config,
     get_object_output: &GetObjectOutput,
     range: Option<&str>,
@@ -254,10 +253,8 @@ pub async fn get_final_checksum(
     version_id: Option<String>,
     checksum_algorithm: Option<&[ChecksumAlgorithm]>,
 ) -> Option<String> {
-    let _additional_checksum_algorithm = if let Some(algorithm) = checksum_algorithm {
-        if algorithm.is_empty()
-            || (config.additional_checksum_mode.is_none() && !target.is_local_storage())
-        {
+    let additional_checksum_algorithm = if let Some(algorithm) = checksum_algorithm {
+        if algorithm.is_empty() {
             None
         } else {
             // Only one algorithm supported
@@ -275,8 +272,9 @@ pub async fn get_final_checksum(
         );
     }
 
-    // If additional_checksum_mode is not set in remote storage, we cannot get the final checksum.
-    config.additional_checksum_mode.as_ref()?;
+    if config.additional_checksum_mode.is_none() && config.additional_checksum_algorithm.is_none() {
+        return None;
+    }
 
     // If range option is not specified, the final checksum is already calculated.
     if range.is_none() {
@@ -286,12 +284,16 @@ pub async fn get_final_checksum(
         );
     }
 
-    // if range option is specified, we need to get the final checksum from the head object.
+    // With a range, GetObject returns a range-scoped checksum (no -N suffix),
+    // so fetch the whole-object composite via HeadObject. Force
+    // ChecksumMode::Enabled regardless of config: if algorithm is set, we
+    // need the server to return the checksum — callers that don't want
+    // verification skip this function upstream.
     let head_object_result = source
         .head_object(
             source_key,
             version_id,
-            config.additional_checksum_mode.clone(),
+            Some(ChecksumMode::Enabled),
             None,
             config.source_sse_c.clone(),
             config.source_sse_c_key.clone(),
@@ -310,7 +312,7 @@ pub async fn get_final_checksum(
 
     get_additional_checksum_with_head_object(
         &head_object_result.unwrap(),
-        _additional_checksum_algorithm,
+        additional_checksum_algorithm,
     )
 }
 
