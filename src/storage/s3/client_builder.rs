@@ -123,6 +123,7 @@ impl ClientConfig {
         let provider_region = if matches!(
             &self.credential,
             crate::types::S3Credentials::FromEnvironment
+                | crate::types::S3Credentials::NoSignRequest,
         ) {
             RegionProviderChain::first_try(self.region.clone().map(Region::new))
                 .or_default_provider()
@@ -653,6 +654,47 @@ mod tests {
         assert!(
             config_debug.contains("identity_resolvers: None"),
             "NoSignRequest must not install a sigv4 credentials identity resolver, got: {config_debug}"
+        );
+    }
+
+    #[tokio::test]
+    async fn no_sign_request_uses_default_region_chain_not_profile_files() {
+        // NoSignRequest must not consult profile files for region resolution.
+        // Point at a nonexistent config file; if the code consulted it, client
+        // construction would fail. With NoSignRequest it should fall through
+        // to the default region chain.
+        init_dummy_tracing_subscriber();
+
+        let client_config = ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: Some("/definitely/does/not/exist/config".into()),
+                aws_shared_credentials_file: Some("/definitely/does/not/exist/creds".into()),
+            },
+            credential: crate::types::S3Credentials::NoSignRequest,
+            region: Some("us-east-1".to_string()),
+            endpoint_url: Some("https://my.endpoint.local".to_string()),
+            force_path_style: false,
+            retry_config: crate::config::RetryConfig {
+                aws_max_attempts: 10,
+                initial_backoff_milliseconds: 100,
+            },
+            cli_timeout_config: crate::config::CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: false,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+            accelerate: false,
+            request_payer: None,
+        };
+
+        let client = client_config.create_client().await;
+        assert_eq!(
+            client.config().region().unwrap().to_string(),
+            "us-east-1".to_string(),
         );
     }
 
