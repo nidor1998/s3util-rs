@@ -582,6 +582,7 @@ impl CpArgs {
         self.check_full_object_checksum_conflict()?;
         self.check_accelerate_conflict()?;
         self.check_request_payer_conflict()?;
+        self.check_target_local_directory_exists()?;
 
         Ok(())
     }
@@ -799,6 +800,11 @@ impl CpArgs {
         if self.target_request_payer && !self.is_target_s3() {
             return Err(TARGET_LOCAL_STORAGE_SPECIFIED_WITH_REQUEST_PAYER.to_string());
         }
+        Ok(())
+    }
+
+    fn check_target_local_directory_exists(&self) -> Result<(), String> {
+        // Task 2 replaces this stub with the real algorithm.
         Ok(())
     }
 

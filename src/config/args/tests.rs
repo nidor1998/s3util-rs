@@ -601,4 +601,12 @@ mod tests {
         ]);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn target_in_existing_directory_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("out.bin").to_string_lossy().to_string();
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
+    }
 }
