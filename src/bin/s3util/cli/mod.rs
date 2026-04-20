@@ -697,11 +697,12 @@ mod tests {
 
     #[test]
     fn extract_keys_s3_to_local_path_with_trailing_separator_appends_basename() {
-        // Non-existent local path ending with the platform separator is also
-        // treated as a directory target — the second half of the branch
-        // condition in extract_keys.
+        // Target ending with the platform separator triggers the
+        // directory-target branch in extract_keys, appending the source
+        // basename.
+        let tmp = tempfile::tempdir().unwrap();
         let sep = std::path::MAIN_SEPARATOR;
-        let target_arg = format!("/tmp/s3util_nonexistent_dir_{sep}");
+        let target_arg = format!("{}{sep}", tmp.path().to_string_lossy());
         let config = build_config(vec![
             "s3util",
             "cp",
