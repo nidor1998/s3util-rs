@@ -1,11 +1,12 @@
 //! E2E: `--source-no-sign-request` against a real AWS public bucket.
 //!
-//! Uses `s3://nyc-tlc/misc/taxi_zone_lookup.csv` (~12 KiB) from the AWS
-//! Registry of Open Data. Requires network access; does NOT require AWS
-//! credentials or config — that is the whole point of the test.
+//! Uses `s3://1000genomes/CHANGELOG` (~251 KiB) from the AWS Registry of
+//! Open Data. Requires network access; does NOT require AWS credentials
+//! or config — that is the whole point of the test.
 //!
-//! If nyc-tlc is ever retired, replace with another Registry of Open Data
-//! object and update the size lower bound below.
+//! If 1000genomes is ever retired or stops allowing anonymous reads,
+//! replace with another Registry of Open Data object and update the size
+//! lower bound below.
 #![cfg(e2e_test)]
 
 use std::process::{Command, Stdio};
@@ -21,7 +22,7 @@ fn cp_from_public_bucket_without_credentials() {
             "--source-no-sign-request",
             "--source-region",
             "us-east-1",
-            "s3://nyc-tlc/misc/taxi_zone_lookup.csv",
+            "s3://1000genomes/CHANGELOG",
             tmp.path().to_str().unwrap(),
         ])
         // Intentionally clear any AWS_* env vars that could interfere with
@@ -45,7 +46,7 @@ fn cp_from_public_bucket_without_credentials() {
 
     let len = std::fs::metadata(tmp.path()).unwrap().len();
     assert!(
-        len > 1_000,
+        len > 100_000,
         "downloaded file suspiciously small: {len} bytes\nstderr:\n{stderr}",
     );
 }
