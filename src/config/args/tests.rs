@@ -624,4 +624,59 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn target_existing_directory_trailing_separator_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = format!(
+            "{}{}",
+            dir.path().to_string_lossy(),
+            std::path::MAIN_SEPARATOR
+        );
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn target_nonexistent_directory_trailing_separator_rejected() {
+        let target = format!(
+            "/definitely/does/not/exist/abc123{}",
+            std::path::MAIN_SEPARATOR
+        );
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX)
+        );
+    }
+
+    #[test]
+    fn target_existing_directory_no_trailing_separator_passes() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().to_string_lossy().to_string();
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn target_relative_filename_no_parent_passes() {
+        // Bare filename → parent is "" → treated as cwd → check skipped.
+        let result = build_config_from_args(args_with("s3://my-bucket/key", "out.bin"));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn target_s3_skips_directory_check() {
+        // S3→S3 transfer — local directory logic not exercised.
+        let result = build_config_from_args(args_with("s3://src-bucket/k", "s3://dst-bucket/k"));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn target_stdio_skips_directory_check() {
+        let result = build_config_from_args(args_with("s3://my-bucket/key", "-"));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
 }
