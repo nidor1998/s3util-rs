@@ -58,6 +58,7 @@ const DEFAULT_DISABLE_EXPRESS_ONE_ZONE_ADDITIONAL_CHECKSUM: bool = false;
 const DEFAULT_MAX_PARALLEL_MULTIPART_UPLOADS: u16 = 16;
 const DEFAULT_ACCELERATE: bool = false;
 const DEFAULT_REQUEST_PAYER: bool = false;
+const DEFAULT_SOURCE_NO_SIGN_REQUEST: bool = false;
 const DEFAULT_SHOW_PROGRESS: bool = false;
 const DEFAULT_IF_NONE_MATCH: bool = false;
 
@@ -181,7 +182,7 @@ It cannot work between different object storages or regions."#)]
     source_request_payer: bool,
 
     /// Do not sign the request. If this argument is specified, credentials will not be loaded
-    #[arg(long, env, default_value_t = false, help_heading = "AWS Configuration")]
+    #[arg(long, env, default_value_t = DEFAULT_SOURCE_NO_SIGN_REQUEST, help_heading = "AWS Configuration")]
     source_no_sign_request: bool,
 
     /// Force path-style addressing for source endpoint.
