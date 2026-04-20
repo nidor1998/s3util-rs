@@ -385,10 +385,6 @@ impl LocalStorage {
         };
         let source_storage_class = get_object_output.storage_class().cloned();
 
-        if fs_util::check_directory_traversal(key) {
-            return Err(anyhow!(S3syncError::DirectoryTraversalError));
-        }
-
         if fs_util::is_key_a_directory(key) {
             fs_util::require_parent_directory(key).await?;
 
@@ -527,10 +523,6 @@ impl LocalStorage {
             .as_ref()
             .unwrap()
             .subsec_nanos();
-
-        if fs_util::check_directory_traversal(key) {
-            return Err(anyhow!(S3syncError::DirectoryTraversalError));
-        }
 
         if fs_util::is_key_a_directory(key) {
             fs_util::require_parent_directory(key).await?;

@@ -583,6 +583,7 @@ impl CpArgs {
         self.check_full_object_checksum_conflict()?;
         self.check_accelerate_conflict()?;
         self.check_request_payer_conflict()?;
+        self.check_source_s3_key()?;
         self.check_target_local_directory_exists()?;
 
         Ok(())
@@ -800,6 +801,28 @@ impl CpArgs {
         }
         if self.target_request_payer && !self.is_target_s3() {
             return Err(TARGET_LOCAL_STORAGE_SPECIFIED_WITH_REQUEST_PAYER.to_string());
+        }
+        Ok(())
+    }
+
+    fn check_source_s3_key(&self) -> Result<(), String> {
+        if !self.is_source_s3() {
+            return Ok(());
+        }
+        // Validate the raw CLI input. `url::Url::parse` in the value-parser
+        // layer normalizes `s3://` paths (strips trailing `.`, collapses
+        // `/foo/..`), so the post-parsed prefix no longer carries the signal
+        // we want to reject. Read directly from the raw argument instead.
+        let raw = self.source_str();
+        if raw.ends_with('/') {
+            return Err("source S3 URL ending in '/' is not supported: \
+                 `s3util cp` copies a single object, not a prefix."
+                .to_string());
+        }
+        if raw.ends_with("/.") || raw.ends_with("/..") {
+            return Err(format!(
+                "source S3 key has an invalid final segment ('.' or '..'): {raw}"
+            ));
         }
         Ok(())
     }

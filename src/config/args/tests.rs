@@ -697,4 +697,69 @@ mod tests {
         let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
         assert!(result.is_ok(), "{:?}", result.err());
     }
+
+    #[test]
+    fn source_s3_url_trailing_slash_rejected() {
+        let result = build_config_from_args(args_with("s3://b/dir/", "/tmp/dst"));
+        let err = result.unwrap_err();
+        assert!(err.contains("URL ending in '/'"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn source_s3_url_trailing_dot_rejected() {
+        let result = build_config_from_args(args_with("s3://b/foo/.", "/tmp/dst"));
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid final segment"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_s3_url_trailing_dotdot_rejected() {
+        let result = build_config_from_args(args_with("s3://b/foo/..", "/tmp/dst"));
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid final segment"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_s3_url_bare_dot_rejected() {
+        let result = build_config_from_args(args_with("s3://b/.", "/tmp/dst"));
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid final segment"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_s3_url_bare_dotdot_rejected() {
+        let result = build_config_from_args(args_with("s3://b/..", "/tmp/dst"));
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("invalid final segment"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn source_s3_url_mid_path_dotdot_accepted() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().to_string_lossy().to_string();
+        let result = build_config_from_args(args_with("s3://b/foo/../etc/passwd", &dst));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn source_s3_url_filename_ending_in_dot_accepted() {
+        // `foo.` is a legitimate filename ending in `.` (not a path
+        // segment equal to `.`). Raw `ends_with("/.")` does NOT match.
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().to_string_lossy().to_string();
+        let result = build_config_from_args(args_with("s3://b/foo.", &dst));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
 }

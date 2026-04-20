@@ -62,8 +62,12 @@ Stdin→S3, S3→Stdout.
 - **Target parent directory must already exist** when downloading to local.
   `s3util` will not create missing directories; it returns an error asking the
   user to create them first.
-- **Path-traversal guard.** Any key containing `../` or `..\` is rejected
-  before local write.
+- **Source S3 URL hygiene.** A source S3 URL ending in `/` is rejected —
+  `s3util cp` copies a single object, not a prefix (no recursive mode). A
+  source S3 URL whose final path segment is `.` or `..` (e.g.
+  `s3://bucket/foo/..`) is rejected at argument-parse time. Targets may
+  contain `..` — a user-chosen target like `../` or `../backup/` is honored
+  and resolved by the OS in the usual way.
 - **Verification on upload.** When the source is a local file or stdin,
   s3util precalculates the ETag and (if requested) the additional checksum,
   then compares them against the S3-reported values. A mismatch is treated as
@@ -71,8 +75,11 @@ Stdin→S3, S3→Stdout.
   transfers, mismatches remain warnings because they can be explained by
   differing multipart chunksizes.
 - **Resolved target key.** If the target is `s3://bucket`, `s3://bucket/dir/`,
-  or an existing local directory, the source basename is appended. With stdin
-  as the source there is no basename, so the target key must be spelled out.
+  or a directory-style local path (an existing directory, or one ending in a
+  path separator like `../`), the source basename is appended. The resolved
+  write path is printed on a `-> <path>` line before the transfer summary.
+  With stdin as the source there is no basename, so the target key must be
+  spelled out.
 - **ctrl-c.** Cancellation aborts any in-flight multipart upload and exits 0.
 
 ## `s3util cp`
@@ -247,6 +254,9 @@ of the same name (for example `--max-parallel-uploads` ↔ `MAX_PARALLEL_UPLOADS
 ```
 # Upload a single local file
 s3util cp ./release.tar.gz s3://my-bucket/releases/
+
+# Download to the parent directory (source basename is appended → ../hosts)
+s3util cp s3://my-bucket/hosts ../
 
 # Download, with additional SHA256 verification
 s3util cp --enable-additional-checksum --additional-checksum-algorithm SHA256 \
