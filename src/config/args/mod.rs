@@ -108,8 +108,7 @@ const TARGET_LOCAL_STORAGE_SPECIFIED_WITH_ADDITIONAL_CHECKSUM_ALGORITHM: &str =
     "with --additional-checksum-algorithm, target storage must be s3://\n";
 const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_ENABLE_ADDITIONAL_CHECKSUM: &str =
     "with --enable-additional-checksum, source storage must be s3://\n";
-pub(crate) const TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX: &str =
-    "target directory does not exist";
+const TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX: &str = "target directory does not exist";
 
 #[derive(Parser, Clone, Debug)]
 #[command(name = "s3util", version, about = "S3 utility commands")]
