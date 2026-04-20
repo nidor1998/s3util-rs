@@ -98,6 +98,9 @@ impl ClientConfig {
                     config_loader.credentials_provider(builder.profile_name(profile_name).build());
             }
             crate::types::S3Credentials::FromEnvironment => {}
+            crate::types::S3Credentials::NoSignRequest => {
+                config_loader = config_loader.no_credentials();
+            }
         }
         config_loader
     }
@@ -608,6 +611,43 @@ mod tests {
         assert_eq!(
             client.config().region().unwrap().to_string(),
             "my-region2".to_string()
+        );
+    }
+
+    #[tokio::test]
+    async fn create_client_with_no_sign_request_credential() {
+        init_dummy_tracing_subscriber();
+
+        let client_config = ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: None,
+                aws_shared_credentials_file: None,
+            },
+            credential: crate::types::S3Credentials::NoSignRequest,
+            region: Some("my-region".to_string()),
+            endpoint_url: Some("https://my.endpoint.local".to_string()),
+            force_path_style: false,
+            retry_config: crate::config::RetryConfig {
+                aws_max_attempts: 10,
+                initial_backoff_milliseconds: 100,
+            },
+            cli_timeout_config: crate::config::CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: false,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+            accelerate: false,
+            request_payer: None,
+        };
+
+        let client = client_config.create_client().await;
+        assert_eq!(
+            client.config().region().unwrap().to_string(),
+            "my-region".to_string()
         );
     }
 
