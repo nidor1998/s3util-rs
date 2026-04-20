@@ -680,4 +680,21 @@ mod tests {
         let result = build_config_from_args(args_with("s3://my-bucket/key", "-"));
         assert!(result.is_ok(), "{:?}", result.err());
     }
+
+    #[test]
+    fn target_with_parent_dir_segment_skips_directory_check() {
+        // Paths containing `..` defer to the runtime directory-traversal
+        // guard. Intermediate components may not exist on disk (this test's
+        // `nested/data1/` don't), so a CLI-time try_exists() would
+        // misleadingly report "directory does not exist" instead of letting
+        // the traversal check fire.
+        let dir = tempfile::tempdir().unwrap();
+        let target = format!(
+            "{}{sep}nested{sep}data1{sep}..{sep}..{sep}out.bin",
+            dir.path().to_string_lossy(),
+            sep = std::path::MAIN_SEPARATOR,
+        );
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
 }

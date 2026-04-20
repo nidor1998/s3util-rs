@@ -811,6 +811,19 @@ impl CpArgs {
             StoragePath::S3 { .. } | StoragePath::Stdio => return Ok(()),
         };
 
+        // Paths with `..` segments are handled by the runtime
+        // directory-traversal guard (fs_util::check_directory_traversal).
+        // Defer: intermediate components of synthetic traversal paths may
+        // legitimately not exist on disk, so a try_exists() check would
+        // produce a misleading "directory does not exist" error instead of
+        // the correct traversal-rejection error.
+        if target_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Ok(());
+        }
+
         let ends_with_sep = target_path
             .to_string_lossy()
             .ends_with(std::path::MAIN_SEPARATOR);
