@@ -982,34 +982,36 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
-    /// Security test: verify s3util-rs rejects a destination path that
-    /// contains `..` traversal segments when downloading from S3. The
-    /// transfer must fail (sync_error >= 1) and the tool must NOT write
-    /// a file to the resolved path outside `local_dir`.
+    /// Positive case: when the user explicitly chooses a target path
+    /// containing `..`, `s3util cp` honors it. Basename semantics in
+    /// `extract_keys` append the source basename onto the resolved
+    /// target directory, so the file lands where the user asked for.
     ///
-    /// Mirrors s3sync's `s3_to_local_with_directory_traversal_error`.
+    /// Replaces the pre-2026-04-20 test that asserted traversal rejection:
+    /// the combined-path regex guard in the local storage layer was
+    /// removed, and user-chosen `..` is a legitimate filesystem concept,
+    /// not an attack vector. The arg-time guard in `check_source_s3_key`
+    /// still rejects malformed *source* URLs — that's unit-covered in
+    /// `src/config/args/tests.rs::source_s3_url_*_rejected`.
     #[tokio::test]
-    async fn s3_to_local_directory_traversal_rejected() {
+    async fn s3_to_local_user_chosen_parent_dir_target_accepted() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
         let bucket = TestHelper::generate_bucket_name();
         helper.create_bucket(&bucket, REGION).await;
 
-        // Put a benign object in the bucket. Use a unique probe filename
-        // so the post-condition "no file outside local_dir" is not
-        // clobbered by another concurrent test.
-        let probe_name = format!("traversal_probe_{}.dat", uuid::Uuid::new_v4());
-        let test_content = b"traversal defense payload";
+        let probe_name = format!("parent_dir_probe_{}.dat", uuid::Uuid::new_v4());
+        let test_content = b"user chose parent dir";
         helper
             .put_object(&bucket, &probe_name, test_content.to_vec())
             .await;
 
+        // `nested` exists; `..` walks back to `local_dir`, its parent.
         let local_dir = TestHelper::create_temp_dir();
-        // Construct a traversal target path inside the local dir. The path
-        // contains `../../` which, if naively resolved, would escape
-        // `local_dir`. `s3util-rs` must detect this and abort.
-        let traversal_target = local_dir.join(format!("nested/data1/../../{probe_name}"));
+        let nested_dir = local_dir.join("nested");
+        std::fs::create_dir_all(&nested_dir).unwrap();
+        let target = nested_dir.join("..").to_string_lossy().to_string();
 
         let source = format!("s3://{}/{}", bucket, probe_name);
         let stats = helper
@@ -1019,38 +1021,19 @@ mod tests {
                 "--source-profile",
                 "s3sync-e2e-test",
                 &source,
-                traversal_target.to_str().unwrap(),
+                target.as_str(),
             ])
             .await;
 
-        // The transfer must NOT succeed silently — require either a
-        // warning or an error to be recorded.
-        assert!(
-            stats.sync_error >= 1 || stats.sync_warning >= 1,
-            "expected sync_error or sync_warning, got stats = {stats:?}"
-        );
-        assert_eq!(
-            stats.sync_complete, 0,
-            "transfer must not report sync_complete when the destination path contains a traversal"
-        );
+        assert_eq!(stats.sync_complete, 1, "stats = {stats:?}");
+        assert_eq!(stats.sync_error, 0);
 
-        // The traversal path (after naive resolution) points to the parent
-        // of `local_dir`. Verify no file was created there.
-        let would_escape_to = local_dir
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("."))
-            .join(&probe_name);
+        // File lands in local_dir (parent of nested_dir) with the source basename.
+        let expected = local_dir.join(&probe_name);
         assert!(
-            !TestHelper::is_file_exist(would_escape_to.to_str().unwrap()),
-            "traversal defense failed: file was written outside local_dir at {}",
-            would_escape_to.display()
-        );
-
-        // The literal traversal path itself must also not exist.
-        assert!(
-            !TestHelper::is_file_exist(traversal_target.to_str().unwrap()),
-            "traversal target {} should not have been created",
-            traversal_target.display()
+            TestHelper::is_file_exist(expected.to_str().unwrap()),
+            "expected file at {}",
+            expected.display()
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;
