@@ -13,9 +13,9 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
     BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
-    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object,
-    ServerSideEncryption, ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
-    ServerSideEncryptionRule, Tag, VersioningConfiguration,
+    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object, ObjectOwnership,
+    PublicAccessBlockConfiguration, ServerSideEncryption, ServerSideEncryptionByDefault,
+    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, Tag, VersioningConfiguration,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -238,6 +238,37 @@ impl TestHelper {
             .create_bucket()
             .create_bucket_configuration(configuration)
             .bucket(bucket_name)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    pub async fn create_bucket_with_acl_enabled(&self, bucket: &str, region: &str) {
+        let constraint = BucketLocationConstraint::from(region);
+        let cfg = CreateBucketConfiguration::builder()
+            .location_constraint(constraint)
+            .build();
+
+        self.client
+            .create_bucket()
+            .create_bucket_configuration(cfg)
+            .bucket(bucket)
+            .object_ownership(ObjectOwnership::BucketOwnerPreferred)
+            .send()
+            .await
+            .unwrap();
+
+        let public_access_block = PublicAccessBlockConfiguration::builder()
+            .block_public_acls(false)
+            .ignore_public_acls(false)
+            .block_public_policy(false)
+            .restrict_public_buckets(false)
+            .build();
+
+        self.client
+            .put_public_access_block()
+            .bucket(bucket)
+            .public_access_block_configuration(public_access_block)
             .send()
             .await
             .unwrap();

@@ -142,6 +142,240 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn local_to_s3_with_storage_class_reduced_redundancy() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "REDUCED_REDUNDANCY",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(
+            head.storage_class().unwrap(),
+            &StorageClass::ReducedRedundancy
+        );
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "sc.txt", b"storage class test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_storage_class_onezone_ia() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "ONEZONE_IA",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(head.storage_class().unwrap(), &StorageClass::OnezoneIa);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "sc.txt", b"storage class test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_storage_class_intelligent_tiering() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "INTELLIGENT_TIERING",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(
+            head.storage_class().unwrap(),
+            &StorageClass::IntelligentTiering
+        );
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "sc.txt", b"storage class test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_storage_class_glacier_ir() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "GLACIER_IR",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(head.storage_class().unwrap(), &StorageClass::GlacierIr);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "sc.txt", b"storage class test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_storage_class_glacier() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "GLACIER",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert!(helper.is_object_exist(&bucket, "sc.txt", None).await);
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(head.storage_class().unwrap(), &StorageClass::Glacier);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_storage_class_deep_archive() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "sc.txt", b"storage class test");
+
+        let target = format!("s3://{}/sc.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--storage-class",
+                "DEEP_ARCHIVE",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert!(helper.is_object_exist(&bucket, "sc.txt", None).await);
+        let head = helper.head_object(&bucket, "sc.txt", None).await;
+        assert_eq!(head.storage_class().unwrap(), &StorageClass::DeepArchive);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
     async fn local_to_s3_with_sse_kms() {
         TestHelper::init_dummy_tracing_subscriber();
 
@@ -990,6 +1224,222 @@ mod tests {
 
         helper
             .verify_uploaded_object_etag_value(&bucket, "acl_large.bin", ETAG_9M_ZEROS_8M_CHUNK)
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_private() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "private",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_public_read() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket_with_acl_enabled(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "public-read",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_public_read_write() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket_with_acl_enabled(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "public-read-write",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_authenticated_read() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket_with_acl_enabled(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "authenticated-read",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_aws_exec_read() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket_with_acl_enabled(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "aws-exec-read",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_with_acl_bucket_owner_read() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "acl.txt", b"acl test");
+
+        let target = format!("s3://{}/acl.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--acl",
+                "bucket-owner-read",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        helper
+            .verify_uploaded_object_etag(&bucket, "acl.txt", b"acl test")
             .await;
 
         helper.delete_bucket_with_cascade(&bucket).await;
