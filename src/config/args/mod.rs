@@ -105,6 +105,8 @@ const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_REQUEST_PAYER: &str =
     "with --source-request-payer, source storage must be s3://\n";
 const TARGET_LOCAL_STORAGE_SPECIFIED_WITH_REQUEST_PAYER: &str =
     "with --target-request-payer, target storage must be s3://\n";
+const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_NO_SIGN_REQUEST: &str =
+    "with --source-no-sign-request, source must be s3://\n";
 const TARGET_LOCAL_STORAGE_SPECIFIED_WITH_ADDITIONAL_CHECKSUM_ALGORITHM: &str =
     "with --additional-checksum-algorithm, target storage must be s3://\n";
 const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_ENABLE_ADDITIONAL_CHECKSUM: &str =
@@ -600,6 +602,7 @@ impl CpArgs {
         self.check_full_object_checksum_conflict()?;
         self.check_accelerate_conflict()?;
         self.check_request_payer_conflict()?;
+        self.check_source_no_sign_request_conflict()?;
         self.check_source_s3_key()?;
         self.check_target_local_directory_exists()?;
 
@@ -818,6 +821,13 @@ impl CpArgs {
         }
         if self.target_request_payer && !self.is_target_s3() {
             return Err(TARGET_LOCAL_STORAGE_SPECIFIED_WITH_REQUEST_PAYER.to_string());
+        }
+        Ok(())
+    }
+
+    fn check_source_no_sign_request_conflict(&self) -> Result<(), String> {
+        if self.source_no_sign_request && !self.is_source_s3() {
+            return Err(SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_NO_SIGN_REQUEST.to_string());
         }
         Ok(())
     }

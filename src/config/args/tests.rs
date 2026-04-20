@@ -865,4 +865,20 @@ mod tests {
             "unexpected error: {err}"
         );
     }
+
+    #[test]
+    fn source_no_sign_request_requires_s3_source() {
+        // Local source + --source-no-sign-request is nonsensical; reject at
+        // parse-time with a clear message (mirrors --source-endpoint-url).
+        let err = build_config_from_args(args_with_extra(
+            "/tmp/local-source",
+            "s3://my-bucket/key",
+            &["--source-no-sign-request"],
+        ))
+        .unwrap_err();
+        assert!(
+            err.contains("--source-no-sign-request, source must be s3://"),
+            "unexpected error: {err}"
+        );
+    }
 }
