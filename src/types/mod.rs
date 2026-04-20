@@ -310,6 +310,7 @@ pub struct ClientConfigLocation {
 }
 
 #[derive(Debug, Clone)]
+#[non_exhaustive]
 pub enum S3Credentials {
     Profile(String),
     Credentials { access_keys: AccessKeys },
