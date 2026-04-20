@@ -609,4 +609,19 @@ mod tests {
         let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
         assert!(result.is_ok(), "expected Ok, got {:?}", result.err());
     }
+
+    #[test]
+    fn target_inside_nonexistent_directory_rejected() {
+        let target = format!(
+            "/definitely/does/not/exist/abc123{}out.bin",
+            std::path::MAIN_SEPARATOR
+        );
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        assert!(
+            err.contains("target directory does not exist"),
+            "unexpected error: {err}"
+        );
+    }
 }

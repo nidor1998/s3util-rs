@@ -804,8 +804,44 @@ impl CpArgs {
     }
 
     fn check_target_local_directory_exists(&self) -> Result<(), String> {
-        // Task 2 replaces this stub with the real algorithm.
-        Ok(())
+        let target = storage_path::parse_storage_path(self.target_str());
+        let target_path = match target {
+            StoragePath::Local(p) => p,
+            StoragePath::S3 { .. } | StoragePath::Stdio => return Ok(()),
+        };
+
+        let ends_with_sep = target_path
+            .to_string_lossy()
+            .ends_with(std::path::MAIN_SEPARATOR);
+
+        let effective_dir: PathBuf = if ends_with_sep {
+            // e.g. "/tmp/" → "/tmp"
+            let mut s = target_path.to_string_lossy().into_owned();
+            s.pop();
+            if s.is_empty() {
+                // Degenerate input like "/" alone — root directory, trivially exists.
+                return Ok(());
+            }
+            PathBuf::from(s)
+        } else if target_path.is_dir() {
+            target_path.clone()
+        } else {
+            // File-style target — the parent directory is what must exist.
+            match target_path.parent() {
+                None => return Ok(()),
+                Some(p) if p.as_os_str().is_empty() => return Ok(()),
+                Some(p) => p.to_path_buf(),
+            }
+        };
+
+        if effective_dir.try_exists().unwrap_or(false) {
+            return Ok(());
+        }
+
+        Err(format!(
+            "target directory does not exist: '{}'. Please create it before running this command.\n",
+            effective_dir.to_string_lossy()
+        ))
     }
 
     fn build_client_configs(
