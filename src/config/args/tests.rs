@@ -620,7 +620,7 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(
-            err.contains("target directory does not exist"),
+            err.contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX),
             "unexpected error: {err}"
         );
     }
