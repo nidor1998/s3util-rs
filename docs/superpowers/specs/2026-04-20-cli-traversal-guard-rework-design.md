@@ -2,6 +2,44 @@
 
 **Date:** 2026-04-20
 
+## 2026-04-20 Amendment (after implementation probe)
+
+During Task 1 implementation, the subagent discovered that `url::Url::parse` — used inside `src/config/args/value_parser/storage_path.rs::check_storage_path` — normalizes `s3://` URL paths per RFC 3986 **before** `extract_keys` ever sees them. Empirically:
+
+| Input URL | Prefix seen by `extract_keys` |
+| --- | --- |
+| `s3://b/dir/` | `dir/` |
+| `s3://b/foo/.` | `foo/` (`.` stripped, slash remains) |
+| `s3://b/foo/..` | `""` (segment collapsed) |
+| `s3://b/../etc/passwd` | `etc/passwd` (leading `..` stripped) |
+
+This invalidates the original plan to run the `.` / `..` checks inside `extract_keys`: by that point, the signal has already been erased. User direction (2026-04-20) is to **validate the raw input, not the normalized form**, so the user's typed URL is evaluated verbatim against the rule.
+
+**Amended design (supersedes Section "Design → 1. Arg-time validation in extract_keys" below):**
+
+- Add `CpArgs::check_source_s3_key()` on `src/config/args/mod.rs`, called from `validate_storage_config()` alongside `check_target_local_directory_exists()`.
+- The new check reads `self.source_str()` (raw CLI arg, already stored on `CpArgs::source: Option<String>`) and applies the rule to the raw string:
+  - `raw.ends_with('/')` → "source S3 URL ending in '/' is not supported" (prefix/recursive copy is not supported).
+  - `raw.ends_with("/.")` or `raw.ends_with("/..")` → "source S3 key has an invalid final segment ('.' or '..')".
+- Scope: only applied when `self.is_source_s3()`. Local and stdio sources are unchanged.
+- `extract_keys` in `src/bin/s3util/cli/mod.rs` stays untouched — validation moved upstream.
+- Tests move to `src/config/args/tests.rs` (style-matched with existing `build_config_from_args` tests).
+
+**Why raw ends_with beats segment parsing:**
+
+The raw ends_with approach handles both plain S3 URLs (`s3://bucket/...`) and multi-region ARN forms (`s3://arn:...:accesspoint/ap/...`) uniformly without needing to understand their internal slash structure. `s3://b/..` ends in `/..` → caught. `s3://b/foo/..` ends in `/..` → caught. Mid-path `..` like `s3://b/foo/../etc` does not end in `/..` → allowed (matches user's rule).
+
+**What stays from the original design:**
+
+- Remove the combined-path `check_directory_traversal` guard in `src/storage/local/mod.rs:388-390, :531-533`. This is the user-visible fix — user-chosen `..` targets stop being rejected.
+- Delete `check_directory_traversal`, `DirectoryTraversalError`, and their tests.
+- Drop the `..`-segment deferral branch in `check_target_local_directory_exists` (`src/config/args/mod.rs:814-825`).
+- Rewrite the e2e test `s3_to_local_directory_traversal_rejected`.
+
+---
+
+_The original design sections below are preserved for historical context but in places superseded by the Amendment above. The Amendment is authoritative where they conflict._
+
 ## Problem
 
 `s3util cp s3://data.cpp17.org/hosts ../` fails with:
