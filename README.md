@@ -113,6 +113,7 @@ of the same name (for example `--max-parallel-uploads` ↔ `MAX_PARALLEL_UPLOADS
 |-----------------------------------------|-------------|
 | `--aws-config-file <FILE>`              | Alternate AWS config file. |
 | `--aws-shared-credentials-file <FILE>`  | Alternate AWS credentials file. |
+| `--source-no-sign-request`              | Do not sign the source request. Credentials will not be loaded. |
 | `--source-profile <NAME>`               | Source AWS profile. |
 | `--source-access-key <KEY>`             | Source access key. |
 | `--source-secret-access-key <KEY>`      | Source secret access key. |
