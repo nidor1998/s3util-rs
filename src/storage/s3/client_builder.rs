@@ -209,6 +209,38 @@ mod tests {
     use tokio::sync::Semaphore;
     use tracing_subscriber::EnvFilter;
 
+    /// Scoped guard that sets an environment variable for the lifetime of the
+    /// guard and restores the previous value (or removes the variable) on drop.
+    ///
+    /// Rust edition 2024 requires `unsafe` for `std::env::set_var` /
+    /// `remove_var` because concurrent mutation of the process environment is
+    /// a data race. Tests that mutate the same env var must not run
+    /// concurrently.
+    struct EnvGuard {
+        key: &'static str,
+        previous: Option<String>,
+    }
+
+    impl EnvGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var(key).ok();
+            // SAFETY: The process env is shared across threads; callers must
+            // ensure no other test mutates the same key concurrently.
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: see `EnvGuard::set`.
+            match &self.previous {
+                Some(v) => unsafe { std::env::set_var(self.key, v) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
     #[tokio::test]
     async fn create_client_from_credentials() {
         init_dummy_tracing_subscriber();
@@ -695,6 +727,59 @@ mod tests {
         assert_eq!(
             client.config().region().unwrap().to_string(),
             "us-east-1".to_string(),
+        );
+    }
+
+    #[tokio::test]
+    async fn no_sign_request_no_region_falls_through_to_env_default_chain() {
+        // With `region: None`, `RegionProviderChain::first_try(None)` yields no
+        // region, so resolution falls through to whatever provider chain the
+        // `matches!` arm selects. If NoSignRequest is included in the
+        // `matches!` pattern, `or_default_provider()` reads AWS_REGION from
+        // the environment. If NoSignRequest is removed from the `matches!`
+        // pattern, we fall into the `else` branch which builds a
+        // `ProfileFileRegionProvider` pointed at nonexistent files, yielding
+        // `None` and panicking on `unwrap()` below.
+        //
+        // NOTE: Rust tests run in parallel by default, so concurrent mutation
+        // of `AWS_REGION` is a data race. This is tolerated here because no
+        // other test in this file reads `AWS_REGION`. If additional
+        // env-dependent tests are added, introduce a `Mutex` to serialize
+        // them.
+        init_dummy_tracing_subscriber();
+
+        let _guard = EnvGuard::set("AWS_REGION", "eu-west-3");
+
+        let client_config = ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: Some("/definitely/does/not/exist/config".into()),
+                aws_shared_credentials_file: Some("/definitely/does/not/exist/creds".into()),
+            },
+            credential: crate::types::S3Credentials::NoSignRequest,
+            region: None,
+            endpoint_url: Some("https://my.endpoint.local".to_string()),
+            force_path_style: false,
+            retry_config: crate::config::RetryConfig {
+                aws_max_attempts: 10,
+                initial_backoff_milliseconds: 100,
+            },
+            cli_timeout_config: crate::config::CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: false,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+            accelerate: false,
+            request_payer: None,
+        };
+
+        let client = client_config.create_client().await;
+        assert_eq!(
+            client.config().region().unwrap().to_string(),
+            "eu-west-3".to_string(),
         );
     }
 
