@@ -3,8 +3,6 @@ use thiserror::Error;
 
 #[derive(Error, Debug, PartialEq)]
 pub enum S3syncError {
-    #[error("a object references a parent directory.")]
-    DirectoryTraversalError,
     #[error("cancelled")]
     Cancelled,
     #[error("an error occurred while downloading an object")]
@@ -27,7 +25,7 @@ mod tests {
     fn is_cancelled_error_test() {
         assert!(is_cancelled_error(&anyhow!(S3syncError::Cancelled)));
         assert!(!is_cancelled_error(&anyhow!(
-            S3syncError::DirectoryTraversalError
+            S3syncError::DownloadForceRetryableError
         )));
     }
 

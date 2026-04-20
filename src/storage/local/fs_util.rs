@@ -7,11 +7,6 @@ use regex::Regex;
 use tempfile::NamedTempFile;
 use tokio::fs::File;
 
-pub fn check_directory_traversal(key: &str) -> bool {
-    let re = Regex::new(r"\.\.[/\\]").unwrap();
-    re.is_match(key)
-}
-
 pub async fn get_file_size(path: &PathBuf) -> Result<u64> {
     Ok(File::open(path).await?.metadata().await?.len())
 }
@@ -135,35 +130,6 @@ mod tests {
     use tracing_subscriber::EnvFilter;
 
     const TEST_DATA_SIZE: u64 = 5;
-
-    #[test]
-    fn check_directory_traversal_test() {
-        init_dummy_tracing_subscriber();
-
-        assert!(check_directory_traversal("../etc/passwd"));
-        assert!(check_directory_traversal("dir1/dir2/../../etc/passwd"));
-        assert!(check_directory_traversal("/xyz/data/../../etc/passwd"));
-
-        assert!(check_directory_traversal("..\\etc\\passwd"));
-        assert!(check_directory_traversal("dir1\\dir2\\..\\..\\etc\\passwd"));
-        assert!(check_directory_traversal(
-            "\\xyz\\data\\..\\..\\etc\\passwd"
-        ));
-        assert!(check_directory_traversal(
-            "c:\\xyz\\data\\..\\..\\etc\\passwd"
-        ));
-
-        assert!(!check_directory_traversal("/etc/passwd"));
-        assert!(!check_directory_traversal("etc/passwd"));
-        assert!(!check_directory_traversal("passwd"));
-        assert!(!check_directory_traversal("/xyz/test.jpg"));
-        assert!(!check_directory_traversal("/xyz/test..jpg"));
-
-        assert!(!check_directory_traversal("\\etc\\passwd"));
-        assert!(!check_directory_traversal("etc\\passwd"));
-        assert!(!check_directory_traversal("\\xyz\\test.jpg"));
-        assert!(!check_directory_traversal("\\xyz\\test..jpg"));
-    }
 
     #[tokio::test]
     async fn get_file_size_test() {
