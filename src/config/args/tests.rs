@@ -645,10 +645,10 @@ mod tests {
         );
         let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
         assert!(result.is_err());
+        let err = result.unwrap_err();
         assert!(
-            result
-                .unwrap_err()
-                .contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX)
+            err.contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX),
+            "unexpected error: {err}"
         );
     }
 
@@ -676,6 +676,7 @@ mod tests {
 
     #[test]
     fn target_stdio_skips_directory_check() {
+        // Stdio target (`-`) — local directory logic not exercised.
         let result = build_config_from_args(args_with("s3://my-bucket/key", "-"));
         assert!(result.is_ok(), "{:?}", result.err());
     }
