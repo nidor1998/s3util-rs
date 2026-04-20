@@ -649,6 +649,11 @@ mod tests {
             client.config().region().unwrap().to_string(),
             "my-region".to_string()
         );
+        let config_debug = format!("{:?}", client.config());
+        assert!(
+            config_debug.contains("identity_resolvers: None"),
+            "NoSignRequest must not install a sigv4 credentials identity resolver, got: {config_debug}"
+        );
     }
 
     #[test]
