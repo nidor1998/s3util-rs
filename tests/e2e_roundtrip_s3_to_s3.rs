@@ -41,6 +41,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket2, "rt_s2s.txt", None).await;
         assert_eq!(downloaded, content);
@@ -82,7 +85,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket2, "rt_ssc.txt", None).await;
         assert_eq!(downloaded, content);
@@ -125,6 +130,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_sc.txt", None).await;
         assert_eq!(head.storage_class().unwrap(), &StorageClass::StandardIa);
@@ -174,6 +182,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_meta.txt", None).await;
         assert_eq!(head.cache_control().unwrap(), TEST_CACHE_CONTROL);
@@ -326,6 +337,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_kms.txt", None).await;
         assert_eq!(
@@ -374,6 +388,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_dsse.txt", None).await;
         assert_eq!(
@@ -421,6 +438,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper
             .get_object_bytes(&bucket2, "rt_nosign.txt", None)
@@ -515,6 +535,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket2, "rt_acl.txt", None).await;
         assert_eq!(downloaded, content);
@@ -562,6 +585,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_ssc_meta.txt", None).await;
         assert_eq!(head.cache_control().unwrap(), TEST_CACHE_CONTROL);
@@ -611,6 +637,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_ssc_sc.txt", None).await;
         assert_eq!(head.storage_class().unwrap(), &StorageClass::StandardIa);

@@ -35,6 +35,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         // Independent verification: download via SDK and compare
         let downloaded = helper.get_object_bytes(&bucket, "rt.txt", None).await;
@@ -86,6 +89,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         // Verify all metadata (8 assertions inside)
         assert!(
@@ -130,6 +136,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "rt_sc.txt", None).await;
         assert_eq!(head.storage_class().unwrap(), &StorageClass::StandardIa);
@@ -169,6 +178,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "rt_kms.txt", None).await;
         assert_eq!(
@@ -211,6 +223,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "rt_dsse.txt", None).await;
         assert_eq!(
@@ -250,7 +265,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "rt_large.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
@@ -292,6 +309,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket, "rt_nomd5.txt", None).await;
         assert_eq!(downloaded, content);
@@ -327,6 +347,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper
             .get_object_bytes(&bucket, "rt_nosign.txt", None)
@@ -364,6 +387,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper
             .get_object_bytes(&bucket, "rt_nosign_large.bin", None)
@@ -404,6 +430,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket, "rt_acl.txt", None).await;
         assert_eq!(downloaded, content);
@@ -440,6 +469,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper
             .get_object_bytes(&bucket, "rt_acl_large.bin", None)
@@ -480,6 +512,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "rt_redir.txt", None).await;
         assert_eq!(

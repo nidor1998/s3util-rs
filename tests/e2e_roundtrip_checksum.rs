@@ -41,6 +41,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_sha256.dat", None).await;
@@ -83,6 +85,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_crc32.dat", None).await;
@@ -123,6 +127,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_crc32c.dat", None).await;
@@ -165,6 +171,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_sha1.dat", None).await;
@@ -205,6 +213,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_crc64.dat", None).await;
@@ -249,6 +259,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_mp_sha256.bin", None).await;
@@ -293,6 +305,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_mp_crc32.bin", None).await;
@@ -337,6 +351,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_mp_crc64.bin", None).await;
@@ -404,6 +420,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "rt_sha256.dat", None).await;
         assert!(head.checksum_sha256().is_some());
@@ -464,6 +483,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_crc32.dat", None).await;
         assert!(head.checksum_crc32().is_some());
@@ -512,6 +534,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_kms_sha256.dat", None).await;
@@ -560,6 +584,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "rt_kms_crc32.dat", None).await;
@@ -608,6 +634,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -658,6 +686,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -713,6 +743,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -758,6 +790,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -807,6 +841,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -854,6 +890,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper

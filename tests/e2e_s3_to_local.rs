@@ -43,6 +43,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         // Verify downloaded content
         let content = std::fs::read(&local_file).unwrap();
@@ -93,7 +96,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&local_file).unwrap();
         assert_eq!(content.len(), 1024);
@@ -137,7 +142,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&local_file).unwrap();
         assert_eq!(content.len(), 512);
@@ -181,6 +188,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&local_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -249,6 +259,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"sse-c download test");
@@ -284,6 +297,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&local_file).unwrap();
         assert_eq!(metadata.len(), 0);
@@ -337,6 +353,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"sha256 checksum test");
@@ -391,6 +410,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"crc32 checksum test");
@@ -445,6 +467,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"crc32c checksum test");
@@ -499,6 +524,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"sha1 checksum test");
@@ -556,6 +584,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"crc64nvme checksum test");
@@ -609,6 +640,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"sse-kms download test");
@@ -662,6 +696,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"dsse-kms download test");
@@ -721,6 +758,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"kms and sha256 test");
@@ -775,6 +815,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -826,6 +869,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -877,6 +923,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -933,6 +982,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -972,7 +1024,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&local_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1149,6 +1203,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let local_mtime = TestHelper::get_file_last_modified(local_file.to_str().unwrap());
         assert_eq!(
@@ -1198,6 +1255,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&local_file_path).unwrap();
         assert_eq!(content, test_content);
@@ -1235,6 +1295,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Download with additional checksum verification enabled.
         let download_file = local_dir.join("empty_sha256_dl.dat");
@@ -1253,6 +1316,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 0);
@@ -1291,6 +1356,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_sha1.bin");
         let stats = helper
@@ -1308,6 +1376,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1347,6 +1417,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_crc32c.bin");
         let stats = helper
@@ -1364,6 +1437,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1404,6 +1479,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_crc32c_fo.bin");
         let stats = helper
@@ -1421,6 +1499,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1461,6 +1541,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_no_verify.bin");
         let stats = helper
@@ -1477,8 +1560,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1521,6 +1605,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_8mib_sha256.bin");
         let stats = helper
@@ -1537,9 +1624,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
-        assert_eq!(stats.sync_warning, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), TEST_FILE_SIZE_8MIB as u64);
@@ -1582,6 +1669,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_8mib_crc32_fo.bin");
         let stats = helper
@@ -1598,9 +1688,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
-        assert_eq!(stats.sync_warning, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), TEST_FILE_SIZE_8MIB as u64);
@@ -1643,6 +1733,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_8mib_crc32c_fo.bin");
         let stats = helper
@@ -1659,9 +1752,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
-        assert_eq!(stats.sync_warning, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), TEST_FILE_SIZE_8MIB as u64);
@@ -1703,6 +1796,9 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_8mib_crc64nvme.bin");
         let stats = helper
@@ -1719,9 +1815,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
-        assert_eq!(stats.sync_warning, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), TEST_FILE_SIZE_8MIB as u64);
@@ -1785,6 +1881,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -1831,6 +1930,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let content = std::fs::read(&local_file).unwrap();
         assert_eq!(content, v1_content);

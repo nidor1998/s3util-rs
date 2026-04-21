@@ -231,6 +231,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, src_bytes);
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -279,6 +280,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0); // KMS ETag not MD5-based
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, src_bytes);
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -327,6 +329,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, src_bytes);
 
         helper.delete_bucket_with_cascade(&bucket).await;

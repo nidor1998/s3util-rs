@@ -38,6 +38,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket1, "8m.bin", None).await;
         assert_eq!(head.e_tag().unwrap(), ETAG_8M_FILE_8M_CHUNK);
@@ -62,6 +63,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.e_tag_verified, 1);
         assert_eq!(stats2.sync_warning, 0);
+        assert_eq!(stats2.checksum_verified, 0);
 
         let head2 = helper.head_object(&bucket2, "8m.bin", None).await;
         assert_eq!(head2.e_tag().unwrap(), ETAG_8M_FILE_8M_CHUNK);
@@ -109,6 +111,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket1, "8m_plus1.bin", None).await;
         assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
@@ -136,6 +139,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.e_tag_verified, 1);
         assert_eq!(stats2.sync_warning, 0);
+        assert_eq!(stats2.checksum_verified, 0);
 
         let head2 = helper.head_object(&bucket2, "8m_plus1.bin", None).await;
         assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
@@ -182,6 +186,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "8m_minus1.bin", None).await;
         assert_eq!(head.e_tag().unwrap(), ETAG_8M_MINUS_1_FILE_8M_CHUNK);

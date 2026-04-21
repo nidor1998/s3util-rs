@@ -41,6 +41,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         helper.delete_directory_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -76,6 +79,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         helper.delete_directory_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -126,6 +132,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"express download test");
@@ -186,6 +195,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         assert!(helper.is_object_exist(&bucket2, "s3copy.txt", None).await);
 
@@ -226,6 +238,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "crc64.txt", None).await;
@@ -266,6 +280,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "mp_crc64.bin", None).await;
@@ -311,6 +327,8 @@ mod tests {
 
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 0);
         assert_eq!(upload_stats.checksum_verified, 1);
 
         // Download
@@ -329,6 +347,9 @@ mod tests {
 
         assert_eq!(download_stats.sync_complete, 1);
         assert_eq!(download_stats.sync_error, 0);
+        assert_eq!(download_stats.sync_warning, 0);
+        assert_eq!(download_stats.e_tag_verified, 0);
+        assert_eq!(download_stats.checksum_verified, 1);
 
         let content = std::fs::read(&download_file).unwrap();
         assert_eq!(content, b"express roundtrip crc64nvme test");
@@ -375,6 +396,8 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 0);
         assert_eq!(upload_stats.checksum_verified, 1);
 
         // Copy from bucket1 to bucket2
@@ -395,6 +418,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         assert!(
             helper
@@ -437,6 +463,9 @@ mod tests {
 
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket, "mp_roundtrip.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
@@ -457,6 +486,9 @@ mod tests {
 
         assert_eq!(download_stats.sync_complete, 1);
         assert_eq!(download_stats.sync_error, 0);
+        assert_eq!(download_stats.sync_warning, 0);
+        assert_eq!(download_stats.e_tag_verified, 0);
+        assert_eq!(download_stats.checksum_verified, 1);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 9 * 1024 * 1024);
@@ -506,6 +538,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_directory_bucket_with_cascade(&bucket).await;

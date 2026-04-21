@@ -124,6 +124,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert!(helper.is_object_exist(&bucket, "smoke.txt", None).await);
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -160,6 +162,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, test_content);
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -201,6 +205,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, v1_content);
 
         helper.delete_bucket_with_cascade(&bucket).await;
