@@ -1185,7 +1185,7 @@ impl StorageTrait for LocalStorage {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_family = "unix"))]
 fn remove_local_path_prefix(path: &str, prefix: &str) -> String {
     if path == prefix {
         let path = PathBuf::from(path);
@@ -1222,6 +1222,7 @@ fn convert_windows_directory_char_to_slash(path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(target_family = "unix")]
     use tracing_subscriber::EnvFilter;
 
     #[test]
@@ -1249,6 +1250,7 @@ mod tests {
         );
     }
 
+    #[cfg(target_family = "unix")]
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(
