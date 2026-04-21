@@ -14,7 +14,8 @@ use std::process::{Command, Stdio};
 #[test]
 fn cp_from_public_bucket_without_credentials() {
     let bin = env!("CARGO_BIN_EXE_s3util");
-    let tmp = tempfile::NamedTempFile::new().unwrap();
+    let tmp_dir = tempfile::tempdir().unwrap();
+    let tmp_path = tmp_dir.path().join("CHANGELOG");
 
     let output = Command::new(bin)
         .args([
@@ -23,7 +24,7 @@ fn cp_from_public_bucket_without_credentials() {
             "--source-region",
             "us-east-1",
             "s3://1000genomes/CHANGELOG",
-            tmp.path().to_str().unwrap(),
+            tmp_path.to_str().unwrap(),
         ])
         // Intentionally clear any AWS_* env vars that could interfere with
         // the "no credentials" guarantee the flag makes.
@@ -44,7 +45,7 @@ fn cp_from_public_bucket_without_credentials() {
         output.status.code(),
     );
 
-    let len = std::fs::metadata(tmp.path()).unwrap().len();
+    let len = std::fs::metadata(&tmp_path).unwrap().len();
     assert!(
         len > 100_000,
         "downloaded file suspiciously small: {len} bytes\nstderr:\n{stderr}",
