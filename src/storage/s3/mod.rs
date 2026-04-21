@@ -15,7 +15,7 @@ use leaky_bucket::RateLimiter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tracing::info;
+use tracing::{debug, info};
 
 use crate::Config;
 use crate::config::ClientConfig;
@@ -444,7 +444,7 @@ impl StorageTrait for S3Storage {
             .await?;
 
         if put_object_output.e_tag.is_some() {
-            info!(
+            debug!(
                 key = key,
                 source_version_id = version_id,
                 source_last_modified = source_last_modified,

@@ -99,6 +99,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
         show_result,
         log_sync_summary,
         resolved_target_display,
+        source_key.clone(),
+        target_key.clone(),
     );
 
     let has_warning = Arc::new(AtomicBool::new(false));

@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::Config;
 use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
@@ -210,7 +210,7 @@ pub async fn transfer(
         .context(format!("failed to upload to target: {target_key}"))?;
 
     if put_object_output.e_tag.is_some() {
-        info!(
+        debug!(
             source_key = source_key,
             target_key = target_key,
             size = source_size,

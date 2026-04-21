@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
-use tracing::{debug, info};
+use tracing::debug;
 
 use crate::Config;
 use crate::storage::Storage;
@@ -136,7 +136,7 @@ pub async fn transfer(
         .await
         .context(format!("failed to write to target file: {target_key}"))?;
 
-    info!(
+    debug!(
         source_key = source_key,
         target_key = target_key,
         size = source_size,

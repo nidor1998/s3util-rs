@@ -15,6 +15,8 @@ pub fn show_indicator(
     show_result: bool,
     log_sync_summary: bool,
     resolved_target: Option<String>,
+    source_key: String,
+    target_key: String,
 ) -> JoinHandle<()> {
     let progress_style = ProgressStyle::with_template("{wide_msg}").unwrap();
     let progress_text = ProgressBar::with_draw_target(Some(0), ProgressDrawTarget::stderr());
@@ -77,6 +79,8 @@ pub fn show_indicator(
                     if log_sync_summary && total_error_count == 0 {
                         info!(
                             message = "copy summary",
+                            source_key = source_key,
+                            target_key = target_key,
                             transferred_byte = total_sync_bytes,
                             transferred_byte_per_sec = sync_bytes_per_sec,
                             etag_verified = total_e_tag_verified_count,
@@ -91,7 +95,8 @@ pub fn show_indicator(
                     progress_text.finish_and_clear();
 
                     // Show resolved destination path first
-                    if total_error_count == 0
+                    if show_result
+                        && total_error_count == 0
                         && let Some(ref resolved) = resolved_target
                     {
                         eprintln!("-> {resolved}");
@@ -161,7 +166,15 @@ mod tests {
         init_dummy_tracing_subscriber();
 
         let (stats_sender, stats_receiver) = async_channel::unbounded();
-        let join_handle = show_indicator(stats_receiver, true, true, false, None);
+        let join_handle = show_indicator(
+            stats_receiver,
+            true,
+            true,
+            false,
+            None,
+            String::new(),
+            String::new(),
+        );
 
         stats_sender
             .send(SyncStatistics::SyncBytes(1))
@@ -212,7 +225,15 @@ mod tests {
         init_dummy_tracing_subscriber();
 
         let (stats_sender, stats_receiver) = async_channel::unbounded();
-        let join_handle = show_indicator(stats_receiver, true, false, true, None);
+        let join_handle = show_indicator(
+            stats_receiver,
+            true,
+            false,
+            true,
+            None,
+            "src".to_string(),
+            "dst".to_string(),
+        );
 
         stats_sender
             .send(SyncStatistics::SyncBytes(1))
@@ -259,7 +280,15 @@ mod tests {
         // a misleading spike on sub-100ms transfers.
         init_dummy_tracing_subscriber();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
-        let join_handle = show_indicator(stats_receiver, false, true, true, None);
+        let join_handle = show_indicator(
+            stats_receiver,
+            false,
+            true,
+            true,
+            None,
+            "src".to_string(),
+            "dst".to_string(),
+        );
 
         stats_sender
             .send(SyncStatistics::SyncBytes(10))
@@ -273,15 +302,18 @@ mod tests {
     #[tokio::test]
     async fn indicator_with_resolved_target_prints_destination_line() {
         // Covers the `Some(ref resolved)` arm of resolved_target on successful
-        // completion (no errors).
+        // completion (no errors). Gated on `show_result` so `--show-progress`
+        // controls whether the line is printed.
         init_dummy_tracing_subscriber();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
         let join_handle = show_indicator(
             stats_receiver,
             false,
-            false,
+            true,
             false,
             Some("s3://bucket/resolved/key".to_string()),
+            String::new(),
+            String::new(),
         );
 
         stats_sender
@@ -299,7 +331,15 @@ mod tests {
         // ("failed") and checksum status falls through to "skipped".
         init_dummy_tracing_subscriber();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
-        let join_handle = show_indicator(stats_receiver, false, true, false, None);
+        let join_handle = show_indicator(
+            stats_receiver,
+            false,
+            true,
+            false,
+            None,
+            String::new(),
+            String::new(),
+        );
 
         stats_sender
             .send(SyncStatistics::SyncBytes(1))
@@ -323,7 +363,15 @@ mod tests {
         // renders as "failed" (the `else if` middle arm).
         init_dummy_tracing_subscriber();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
-        let join_handle = show_indicator(stats_receiver, false, true, false, None);
+        let join_handle = show_indicator(
+            stats_receiver,
+            false,
+            true,
+            false,
+            None,
+            String::new(),
+            String::new(),
+        );
 
         stats_sender
             .send(SyncStatistics::SyncBytes(1))

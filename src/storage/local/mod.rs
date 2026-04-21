@@ -475,7 +475,7 @@ impl LocalStorage {
         .await?;
 
         let lossy_path = real_path.to_string_lossy().to_string();
-        info!(
+        debug!(
             key = key,
             real_path = lossy_path,
             size = source_content_length,
@@ -816,7 +816,7 @@ impl LocalStorage {
         .await?;
 
         let lossy_path = real_path.to_string_lossy().to_string();
-        info!(
+        debug!(
             key = key,
             real_path = lossy_path,
             size = source_size,
