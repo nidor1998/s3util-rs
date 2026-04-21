@@ -4,7 +4,7 @@ mod common;
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_s3::types::{ServerSideEncryption, StorageClass};
+    use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption, StorageClass};
 
     use super::*;
     use common::ETAG_9M_ZEROS_8M_CHUNK;
@@ -2027,6 +2027,7 @@ mod tests {
 
         let head = helper.head_object(&bucket, "mp_foc_crc32.bin", None).await;
         assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -2067,6 +2068,7 @@ mod tests {
 
         let head = helper.head_object(&bucket, "mp_foc_crc32c.bin", None).await;
         assert!(head.checksum_crc32_c().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -2107,6 +2109,7 @@ mod tests {
 
         let head = helper.head_object(&bucket, "mp_foc_crc64.bin", None).await;
         assert!(head.checksum_crc64_nvme().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

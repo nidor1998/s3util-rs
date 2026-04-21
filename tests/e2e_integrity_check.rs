@@ -4,6 +4,7 @@ mod common;
 
 #[cfg(test)]
 mod tests {
+    use aws_sdk_s3::types::ChecksumType;
     use common::*;
 
     use super::*;
@@ -2427,6 +2428,10 @@ mod tests {
             .verify_uploaded_object_etag_value(&bucket, "mp_foc32.bin", ETAG_9M_ZEROS_8M_CHUNK)
             .await;
 
+        let head = helper.head_object(&bucket, "mp_foc32.bin", None).await;
+        assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
+
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
@@ -2467,6 +2472,10 @@ mod tests {
             .verify_uploaded_object_etag_value(&bucket, "mp_foc32c.bin", ETAG_9M_ZEROS_8M_CHUNK)
             .await;
 
+        let head = helper.head_object(&bucket, "mp_foc32c.bin", None).await;
+        assert!(head.checksum_crc32_c().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
+
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
@@ -2506,6 +2515,10 @@ mod tests {
         helper
             .verify_uploaded_object_etag_value(&bucket, "mp_foc64.bin", ETAG_9M_ZEROS_8M_CHUNK)
             .await;
+
+        let head = helper.head_object(&bucket, "mp_foc64.bin", None).await;
+        assert!(head.checksum_crc64_nvme().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -4829,6 +4842,10 @@ mod tests {
             .verify_uploaded_object_etag_value(&bucket2, "mp_foc32_s2s.bin", ETAG_9M_ZEROS_8M_CHUNK)
             .await;
 
+        let head = helper.head_object(&bucket2, "mp_foc32_s2s.bin", None).await;
+        assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
+
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -4894,6 +4911,12 @@ mod tests {
             )
             .await;
 
+        let head = helper
+            .head_object(&bucket2, "mp_foc32c_s2s.bin", None)
+            .await;
+        assert!(head.checksum_crc32_c().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
+
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -4929,6 +4952,10 @@ mod tests {
         assert_eq!(upload_stats.e_tag_verified, 1);
         assert_eq!(upload_stats.checksum_verified, 1);
         assert_eq!(upload_stats.sync_warning, 0);
+
+        let head = helper.head_object(&bucket, "mp_foc32_rt.bin", None).await;
+        assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         let dl_file = local_dir.join("mp_foc32_dl.bin");
         let download_stats = helper
@@ -4985,6 +5012,10 @@ mod tests {
         assert_eq!(upload_stats.e_tag_verified, 1);
         assert_eq!(upload_stats.checksum_verified, 1);
         assert_eq!(upload_stats.sync_warning, 0);
+
+        let head = helper.head_object(&bucket, "mp_foc32c_rt.bin", None).await;
+        assert!(head.checksum_crc32_c().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         let dl_file = local_dir.join("mp_foc32c_dl.bin");
         let download_stats = helper
@@ -5189,6 +5220,12 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        let head = helper
+            .head_object(&bucket2, "mp_auto_foc32.bin", None)
+            .await;
+        assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
+
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -5251,6 +5288,12 @@ mod tests {
             .get_object_bytes(&bucket2, "mp_auto_foc32c.bin", None)
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        let head = helper
+            .head_object(&bucket2, "mp_auto_foc32c.bin", None)
+            .await;
+        assert!(head.checksum_crc32_c().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;

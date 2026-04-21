@@ -6,7 +6,7 @@ mod common;
 mod tests {
     use std::collections::HashMap;
 
-    use aws_sdk_s3::types::{ServerSideEncryption, StorageClass};
+    use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption, StorageClass};
 
     use common::*;
 
@@ -1597,6 +1597,7 @@ mod tests {
             .head_object(&bucket2, "mp_full_crc32.bin", None)
             .await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
         let bytes = helper
             .get_object_bytes(&bucket2, "mp_full_crc32.bin", None)
             .await;
@@ -1648,6 +1649,7 @@ mod tests {
             .head_object(&bucket2, "mp_full_crc64.bin", None)
             .await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
         let bytes = helper
             .get_object_bytes(&bucket2, "mp_full_crc64.bin", None)
             .await;
@@ -1713,6 +1715,7 @@ mod tests {
             .head_object(&bucket2, "mp_full_crc32c.bin", None)
             .await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
         let bytes = helper
             .get_object_bytes(&bucket2, "mp_full_crc32c.bin", None)
             .await;

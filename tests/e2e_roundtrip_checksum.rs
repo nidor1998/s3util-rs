@@ -4,7 +4,7 @@ mod common;
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_s3::types::ServerSideEncryption;
+    use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption};
 
     use super::*;
     use common::*;
@@ -849,6 +849,7 @@ mod tests {
             .head_object(&bucket, "rt_mp_foc_crc32.bin", None)
             .await;
         assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         let downloaded = helper
             .get_object_bytes(&bucket, "rt_mp_foc_crc32.bin", None)
@@ -898,6 +899,7 @@ mod tests {
             .head_object(&bucket, "rt_mp_foc_crc64.bin", None)
             .await;
         assert!(head.checksum_crc64_nvme().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         let downloaded = helper
             .get_object_bytes(&bucket, "rt_mp_foc_crc64.bin", None)

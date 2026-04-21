@@ -4,6 +4,7 @@ mod common;
 
 #[cfg(test)]
 mod tests {
+    use aws_sdk_s3::types::ChecksumType;
     use common::*;
 
     use super::*;
@@ -1043,6 +1044,7 @@ mod tests {
             .head_object(&bucket, "streamed_crc64.dat", None)
             .await;
         assert!(head.checksum_crc64_nvme().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         let downloaded = helper
             .get_object_bytes(&bucket, "streamed_crc64.dat", None)
@@ -1920,6 +1922,7 @@ mod tests {
 
         let head = helper.head_object(&bucket, "foc32_mp.dat", None).await;
         assert!(head.checksum_crc32().is_some());
+        assert_eq!(head.checksum_type(), Some(&ChecksumType::FullObject));
 
         helper.delete_bucket_with_cascade(&bucket).await;
     }
