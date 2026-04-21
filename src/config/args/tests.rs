@@ -761,9 +761,11 @@ mod tests {
 
     #[test]
     fn source_no_sign_request_produces_no_sign_request_credential() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dst = tmp.path().join("out").to_string_lossy().to_string();
         let config = build_config_from_args(args_with_extra(
             "s3://public-bucket/key",
-            "/tmp/out",
+            &dst,
             &["--source-no-sign-request"],
         ))
         .unwrap();
