@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tracing::{debug, info, warn};
+use tracing::{debug, warn};
 
 use crate::Config;
 use crate::storage::Storage;
@@ -280,13 +280,6 @@ pub async fn transfer(
                 .await;
         }
     }
-
-    info!(
-        source_key = source_key,
-        size = source_size,
-        bytes_written = total_bytes,
-        "stdout transfer completed."
-    );
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {

@@ -78,7 +78,7 @@ pub fn show_indicator(
 
                     if log_sync_summary && total_error_count == 0 {
                         info!(
-                            message = "copy summary",
+                            message = "Transfer completed.",
                             source_key = source_key,
                             target_key = target_key,
                             transferred_byte = total_sync_bytes,

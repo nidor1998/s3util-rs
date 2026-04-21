@@ -5,7 +5,6 @@ use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::ChecksumAlgorithm;
 use aws_smithy_types::DateTime;
 use tokio::io::AsyncReadExt;
-use tracing::info;
 
 use crate::Config;
 use crate::storage::Storage;
@@ -110,11 +109,6 @@ async fn transfer_streaming(
         .await
         .context(format!("failed to stream to target: {target_key}"))?;
 
-    info!(
-        target_key = target_key,
-        "stdin streaming transfer completed."
-    );
-
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
             key: target_key.to_string(),
@@ -218,8 +212,6 @@ async fn transfer_buffered(
         )
         .await
         .context(format!("failed to upload to target: {target_key}"))?;
-
-    info!(target_key = target_key, "stdin transfer completed.");
 
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
