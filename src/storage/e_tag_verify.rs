@@ -785,10 +785,16 @@ mod tests {
 
         tokio::fs::create_dir_all(LARGE_FILE_DIR).await.unwrap();
 
+        // Write to a unique temp path then atomically rename into place so
+        // parallel tests never observe a partially-written LARGE_FILE_PATH.
+        let tmp_path = tempfile::Builder::new()
+            .prefix("large_file_")
+            .tempfile_in(LARGE_FILE_DIR)
+            .unwrap()
+            .into_temp_path();
         let data = vec![0_u8; LARGE_FILE_SIZE];
-        tokio::fs::write(LARGE_FILE_PATH, data.as_slice())
-            .await
-            .unwrap();
+        tokio::fs::write(&tmp_path, data.as_slice()).await.unwrap();
+        let _ = tmp_path.persist(LARGE_FILE_PATH);
     }
 
     fn init_dummy_tracing_subscriber() {
