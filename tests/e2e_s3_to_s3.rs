@@ -495,7 +495,7 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        // Upload source with SHA256 checksum via cp
+        // Upload source with CRC32 checksum via cp
         let tmp_dir = TestHelper::create_temp_dir();
         TestHelper::create_test_file(&tmp_dir, "crc32_src.txt", b"crc32 checksum test");
         let local_source = format!("{}/crc32_src.txt", tmp_dir.display());
@@ -507,7 +507,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--additional-checksum-algorithm",
-                "SHA256",
+                "CRC32",
                 &local_source,
                 &s3_source,
             ])
@@ -533,7 +533,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
         helper
             .verify_object_content_md5(&bucket2, "crc32_src.txt", b"crc32 checksum test")
             .await;
@@ -564,7 +564,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--additional-checksum-algorithm",
-                "SHA256",
+                "CRC32C",
                 &local_source,
                 &s3_source,
             ])
@@ -590,7 +590,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
         helper
             .verify_object_content_md5(&bucket2, "crc32c_src.txt", b"crc32c checksum test")
             .await;
@@ -621,7 +621,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--additional-checksum-algorithm",
-                "SHA256",
+                "SHA1",
                 &local_source,
                 &s3_source,
             ])
@@ -647,7 +647,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
         helper
             .verify_object_content_md5(&bucket2, "sha1_src.txt", b"sha1 checksum test")
             .await;
@@ -678,7 +678,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--additional-checksum-algorithm",
-                "SHA256",
+                "CRC64NVME",
                 &local_source,
                 &s3_source,
             ])
@@ -704,7 +704,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
         helper
             .verify_object_content_md5(&bucket2, "crc64_src.txt", b"crc64nvme checksum test")
             .await;
@@ -790,11 +790,23 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
+        let tmp_dir = TestHelper::create_temp_dir();
+        TestHelper::create_test_file(&tmp_dir, "kms_sha256.txt", b"kms and sha256 test");
+        let local_source = format!("{}/kms_sha256.txt", tmp_dir.display());
+        let source = format!("s3://{}/kms_sha256.txt", bucket1);
         helper
-            .put_object(&bucket1, "kms_sha256.txt", b"kms and sha256 test".to_vec())
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                &local_source,
+                &source,
+            ])
             .await;
 
-        let source = format!("s3://{}/kms_sha256.txt", bucket1);
         let target = format!("s3://{}/kms_sha256.txt", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -817,7 +829,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "kms_sha256.txt", None).await;
         assert_eq!(
@@ -828,6 +840,7 @@ mod tests {
             .verify_object_content_md5(&bucket2, "kms_sha256.txt", b"kms and sha256 test")
             .await;
 
+        std::fs::remove_dir_all(&tmp_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -972,7 +985,7 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.sync_warning, 1);
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 0);
         helper
@@ -1205,7 +1218,7 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.sync_warning, 2);
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 0);
 
@@ -1589,7 +1602,7 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.sync_warning, 2);
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 0);
 
@@ -2810,7 +2823,7 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.sync_warning, 2);
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 0);
 
@@ -2861,7 +2874,7 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.sync_warning, 2);
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 0);
 

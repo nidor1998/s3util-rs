@@ -695,6 +695,13 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_sha256_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_sha256().unwrap(),
+            SHA256_8M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -736,6 +743,13 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_crc64nvme_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_crc64_nvme().unwrap(),
+            CRC64NVME_8M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -1018,6 +1032,10 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_kms_sha1.bin", None)
+            .await;
+        assert_eq!(head.checksum_sha1().unwrap(), SHA1_8M_PLUS_1_FILE_8M_CHUNK,);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -1240,6 +1258,13 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_kms_crc32.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_crc32().unwrap(),
+            CRC32_8M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -1463,6 +1488,13 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_crc32_c_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_crc32_c().unwrap(),
+            CRC32C_8M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

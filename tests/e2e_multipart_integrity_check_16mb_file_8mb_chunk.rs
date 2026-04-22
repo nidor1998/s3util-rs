@@ -385,6 +385,13 @@ mod tests {
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "16mb_plus1_kms_sha256.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_sha256().unwrap(),
+            SHA256_16M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -963,6 +970,14 @@ mod tests {
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
         assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "16mb_plus1_kms_crc64_8c.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_crc64_nvme().unwrap(),
+            CRC64NVME_16M_PLUS_1_FILE_8M_CHUNK,
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

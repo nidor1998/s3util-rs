@@ -459,7 +459,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--additional-checksum-algorithm",
-                "SHA256",
+                "CRC32",
                 &local_source,
                 &s3_source,
             ])
@@ -485,7 +485,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "rt_crc32.dat", None).await;
         assert!(head.checksum_crc32().is_some());
