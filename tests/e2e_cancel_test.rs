@@ -77,9 +77,8 @@ mod tests {
 
     /// Strengthened cancel test: SIGINTs a multipart upload and verifies
     /// two properties:
-    ///   1. The final target object is NOT present in the bucket (or, if
-    ///      present, its size is 0) — i.e. cancellation did not race and
-    ///      complete the upload anyway.
+    ///   1. The final target object is NOT present in the bucket — i.e.
+    ///      cancellation did not race and complete the upload anyway.
     ///   2. No orphan multipart uploads remain in the bucket — s3util-rs
     ///      is expected to abort the MPU on cancel/error via
     ///      `abort_multipart_upload` in `upload_manager.rs`.
@@ -177,17 +176,15 @@ mod tests {
         // SIGINT — on a platform without unix signals this test becomes a
         // no-op.
         if cancelled {
-            // (1) The final object must not be a completed, non-empty
-            // upload. It's acceptable for it to be absent or zero-length.
-            let exists = helper.is_object_exist(&bucket, target_key, None).await;
-            if exists {
-                let head = helper.head_object(&bucket, target_key, None).await;
-                let content_length = head.content_length().unwrap_or(0);
-                assert_eq!(
-                    content_length, 0,
-                    "cancelled upload left a non-empty object of {content_length} bytes in the bucket"
-                );
-            }
+            // (1) The final object must not be present. S3 multipart
+            // upload is atomic: either CompleteMultipartUpload ran
+            // (object present at full size) or it didn't (object
+            // absent). Any object here means cancellation lost the
+            // race to completion.
+            assert!(
+                !helper.is_object_exist(&bucket, target_key, None).await,
+                "cancelled upload left an object in the bucket"
+            );
 
             // (2) No orphan multipart uploads should remain.
             let mpu_count = helper.count_multipart_uploads(&bucket).await;
