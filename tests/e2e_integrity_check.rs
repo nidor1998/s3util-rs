@@ -2935,6 +2935,7 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "CRC32",
                 &source_s3,
@@ -2945,8 +2946,11 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.checksum_verified, 0);
-        // cp tool does not emit warnings for checksum mismatch (unlike s3sync which expects 2)
-        assert_eq!(stats.sync_warning, 0);
+        // --enable-additional-checksum + a different algorithm than the
+        // source has stored → validate_checksum's first branch fires once
+        // ("algorithm is different from the target storage. skip additional
+        // checksum verification."), matching s3sync.
+        assert_eq!(stats.sync_warning, 1);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -2990,6 +2994,7 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "SHA256",
                 &source_s3,
@@ -3000,8 +3005,10 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.checksum_verified, 0);
-        // cp tool does not emit warnings for checksum mismatch (unlike s3sync which expects 1)
-        assert_eq!(stats.sync_warning, 0);
+        // --enable-additional-checksum + a different algorithm than the
+        // source has stored → validate_checksum's first branch fires once,
+        // matching s3sync.
+        assert_eq!(stats.sync_warning, 1);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;

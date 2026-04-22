@@ -1990,7 +1990,12 @@ impl UploadManager {
         source_e_tag: &Option<String>,
         source_remote_storage: bool,
     ) -> Result<()> {
-        if self.config.additional_checksum_mode.is_some() && source_checksum.is_none() {
+        // Also check algorithm.is_some(): S3 sources without ChecksumMode::Enabled never
+        // surface their stored checksum, so mode-only gating silently skipped verification.
+        if (self.config.additional_checksum_mode.is_some()
+            || self.config.additional_checksum_algorithm.is_some())
+            && source_checksum.is_none()
+        {
             self.send_stats(SyncWarning {
                 key: key.to_string(),
             })
