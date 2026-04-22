@@ -33,7 +33,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -77,7 +76,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 test_file.to_str().unwrap(),
                 &target,
             ])

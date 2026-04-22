@@ -33,7 +33,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -71,7 +70,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -109,7 +107,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 upload_file.to_str().unwrap(),
                 &s3_path,
             ])
@@ -124,7 +121,6 @@ mod tests {
                 "cp",
                 "--source-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 &s3_path,
                 download_file.to_str().unwrap(),
             ])
@@ -169,7 +165,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 upload_file.to_str().unwrap(),
                 &source_path,
             ])
@@ -187,7 +182,6 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 &source_path,
                 &target_path,
             ])
@@ -228,7 +222,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 "--additional-checksum-algorithm",
                 "CRC64NVME",
                 test_file.to_str().unwrap(),
@@ -270,7 +263,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 "--additional-checksum-algorithm",
                 "CRC64NVME",
                 test_file.to_str().unwrap(),
@@ -317,7 +309,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 "--additional-checksum-algorithm",
                 "CRC64NVME",
                 test_file.to_str().unwrap(),
@@ -339,7 +330,6 @@ mod tests {
                 "cp",
                 "--source-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 &s3_path,
                 download_file.to_str().unwrap(),
             ])
@@ -387,7 +377,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 "--additional-checksum-algorithm",
                 "CRC64NVME",
                 upload_file.to_str().unwrap(),
@@ -410,7 +399,6 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 &source_path,
                 &target_path,
             ])
@@ -455,7 +443,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 test_file.to_str().unwrap(),
                 &s3_path,
             ])
@@ -478,7 +465,6 @@ mod tests {
                 "cp",
                 "--source-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 &s3_path,
                 download_file.to_str().unwrap(),
             ])
@@ -529,7 +515,6 @@ mod tests {
                 "cp",
                 "--target-profile",
                 "s3sync-e2e-test",
-                "--disable-stalled-stream-protection",
                 "--disable-express-one-zone-additional-checksum",
                 test_file.to_str().unwrap(),
                 &target,
