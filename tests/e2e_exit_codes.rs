@@ -22,6 +22,23 @@ mod tests {
     const EXIT_CODE_ERROR: i32 = 1;
     const EXIT_CODE_WARNING: i32 = 3;
 
+    /// Exit code produced by clap when argument parsing fails.
+    ///
+    /// This is not an exit code we set ourselves — it comes from clap's
+    /// `Error::exit` implementation. As of clap 4.x, every `ErrorKind`
+    /// variant except `DisplayHelp` / `DisplayVersion` /
+    /// `DisplayHelpOnMissingArgumentOrSubcommand` (which exit 0) is mapped
+    /// to exit code 2. This covers: unknown argument, invalid value,
+    /// missing required argument, value validation, subcommand errors, etc.
+    ///
+    /// Two tests below assert this convention against two different
+    /// `ErrorKind` variants (value validation and unknown argument). If
+    /// both fail, clap has changed the exit-code convention globally —
+    /// update this constant and re-read clap's current error semantics.
+    /// If only one fails, the regression is in our own arg definition or
+    /// value parser rather than clap.
+    const EXIT_CODE_CLAP_ARG_ERROR: i32 = 2;
+
     /// Successful local→S3 cp must exit 0.
     #[tokio::test]
     async fn exit_code_success_on_normal_cp() {
@@ -193,9 +210,14 @@ mod tests {
     }
 
     /// Invalid `--multipart-threshold` value (below the 5 MiB minimum) is
-    /// rejected by the value parser, causing clap to exit with its standard
-    /// arg-error code (2). Exercises the value-validation branch reached via
-    /// `clap::Error::raw(...).exit()` in main.rs.
+    /// rejected by our value parser, which raises a clap error and exits
+    /// via `clap::Error::exit`. Exercises clap's `ValueValidation` branch.
+    ///
+    /// Asserts exactly `EXIT_CODE_CLAP_ARG_ERROR` (2) so that any drift
+    /// in clap's exit-code convention surfaces as a test failure. Paired
+    /// with `unknown_flag_exits_with_clap_arg_error` below, which hits a
+    /// different `ErrorKind` — see the `EXIT_CODE_CLAP_ARG_ERROR` doc
+    /// comment for how to interpret single vs. paired failures.
     #[tokio::test]
     async fn invalid_multipart_threshold_exits_with_clap_error() {
         let local_dir = TestHelper::create_temp_dir();
@@ -218,21 +240,44 @@ mod tests {
             .status()
             .unwrap();
 
-        // Clap's default exit code for argument-validation errors is 2.
-        // We assert "non-zero, non-success, non-warning" rather than exactly 2
-        // to stay robust if clap changes its convention.
-        let code = status.code();
-        assert!(
-            !status.success(),
-            "invalid arg must not exit success, got: {status}"
-        );
-        assert_ne!(
-            code,
-            Some(EXIT_CODE_WARNING),
-            "arg-validation error must not be reported as a runtime warning"
+        assert_eq!(
+            status.code(),
+            Some(EXIT_CODE_CLAP_ARG_ERROR),
+            "invalid --multipart-threshold must exit with clap's arg-error code ({EXIT_CODE_CLAP_ARG_ERROR}), got: {status}"
         );
 
         let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// An unknown CLI flag triggers clap's `UnknownArgument` branch,
+    /// which calls `clap::Error::exit` and terminates the process.
+    ///
+    /// Asserts exactly `EXIT_CODE_CLAP_ARG_ERROR` (2). Together with
+    /// `invalid_multipart_threshold_exits_with_clap_error` above, this
+    /// triangulates clap's convention from two different `ErrorKind`
+    /// variants — see the `EXIT_CODE_CLAP_ARG_ERROR` doc comment.
+    #[tokio::test]
+    async fn unknown_flag_exits_with_clap_arg_error() {
+        let status = std::process::Command::new("cargo")
+            .args([
+                "run",
+                "--quiet",
+                "--",
+                "cp",
+                "--this-flag-does-not-exist",
+                "local.txt",
+                "s3://any-bucket/key",
+            ])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .unwrap();
+
+        assert_eq!(
+            status.code(),
+            Some(EXIT_CODE_CLAP_ARG_ERROR),
+            "unknown flag must exit with clap's arg-error code ({EXIT_CODE_CLAP_ARG_ERROR}), got: {status}"
+        );
     }
 
     /// A cp that produces a warning (no errors) must exit 3.

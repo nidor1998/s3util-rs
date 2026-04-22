@@ -53,6 +53,7 @@ Stdin→S3, S3→Stdout.
 |------|-------------------------------------------------------------|
 | 0    | Success (also: user cancellation via SIGINT/ctrl-c)         |
 | 1    | Error — transfer failed or configuration rejected           |
+| 2    | Argument-parsing error — emitted by clap when an argument is unknown, missing, or has an invalid value. Not set by s3util itself. |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by a chunksize difference) |
 
 ## Behavior notes
