@@ -234,6 +234,14 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        // 9 MiB source was put via SDK single-shot → single-part ETag.
+        // Default --multipart-threshold=8MiB forces a 2-part multipart copy,
+        // so target ETag is a multipart ETag. Per README, S3→S3 ETag
+        // mismatches explained by chunksize differ surface as warnings, not
+        // errors; the verified counter is not incremented on a warning.
+        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_s2s_large.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
@@ -287,6 +295,12 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        // Single-part source ETag vs. multipart target ETag from the 2-part
+        // server-side multipart copy (source > default 8 MiB threshold) →
+        // warning, not verified.
+        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "rt_ssc_large.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
@@ -488,6 +502,13 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
+        // Single-part source ETag vs. multipart target ETag from the 2-part
+        // client-side multipart copy (source > default 8 MiB threshold) →
+        // warning, not verified. --disable-payload-signing does not affect
+        // verification.
+        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper
             .get_object_bytes(&bucket2, "rt_nosign_large.bin", None)
