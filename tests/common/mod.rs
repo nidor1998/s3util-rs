@@ -481,6 +481,25 @@ impl TestHelper {
             .unwrap();
     }
 
+    pub async fn put_object_with_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: Vec<u8>,
+        tagging: &str,
+    ) {
+        let stream = ByteStream::from(body);
+        self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .tagging(tagging)
+            .body(stream)
+            .send()
+            .await
+            .unwrap();
+    }
+
     pub async fn put_object_with_version(&self, bucket: &str, key: &str, body: Vec<u8>) -> String {
         let stream = ByteStream::from(body);
         let output = self

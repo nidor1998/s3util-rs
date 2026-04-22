@@ -2374,6 +2374,113 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn s3_to_s3_default_tag_propagation() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object_with_tagging(
+                &bucket1,
+                "default_tagging.txt",
+                b"default tagging test".to_vec(),
+                TEST_TAGGING,
+            )
+            .await;
+
+        let source = format!("s3://{}/default_tagging.txt", bucket1);
+        let target = format!("s3://{}/default_tagging.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
+
+        let tagging = helper
+            .get_object_tagging(&bucket2, "default_tagging.txt", None)
+            .await;
+        let tag_map = TestHelper::tag_set_to_map(tagging.tag_set());
+        let expected = HashMap::from([
+            ("tag1".to_string(), "tag_value1".to_string()),
+            ("tag2".to_string(), "tag_value2".to_string()),
+        ]);
+        assert_eq!(tag_map, expected);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_server_side_copy_default_tag_propagation() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object_with_tagging(
+                &bucket1,
+                "ssc_default_tagging.txt",
+                b"ssc default tagging test".to_vec(),
+                TEST_TAGGING,
+            )
+            .await;
+
+        let source = format!("s3://{}/ssc_default_tagging.txt", bucket1);
+        let target = format!("s3://{}/ssc_default_tagging.txt", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--server-side-copy",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
+
+        let tagging = helper
+            .get_object_tagging(&bucket2, "ssc_default_tagging.txt", None)
+            .await;
+        let tag_map = TestHelper::tag_set_to_map(tagging.tag_set());
+        let expected = HashMap::from([
+            ("tag1".to_string(), "tag_value1".to_string()),
+            ("tag2".to_string(), "tag_value2".to_string()),
+        ]);
+        assert_eq!(tag_map, expected);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
     async fn s3_to_s3_server_side_copy_special_chars() {
         TestHelper::init_dummy_tracing_subscriber();
         let helper = TestHelper::new().await;
