@@ -957,15 +957,23 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
+        let local_dir = TestHelper::create_temp_dir();
+        TestHelper::create_test_file(&local_dir, "ssc_sha256.txt", b"ssc sha256 checksum test");
+        let local_source = format!("{}/ssc_sha256.txt", local_dir.display());
+        let source = format!("s3://{}/ssc_sha256.txt", bucket1);
         helper
-            .put_object(
-                &bucket1,
-                "ssc_sha256.txt",
-                b"ssc sha256 checksum test".to_vec(),
-            )
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                &local_source,
+                &source,
+            ])
             .await;
 
-        let source = format!("s3://{}/ssc_sha256.txt", bucket1);
         let target = format!("s3://{}/ssc_sha256.txt", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -976,6 +984,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--server-side-copy",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "SHA256",
                 &source,
@@ -985,13 +994,14 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
         helper
             .verify_object_content_md5(&bucket2, "ssc_sha256.txt", b"ssc sha256 checksum test")
             .await;
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -1195,11 +1205,23 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper
-            .put_sized_object(&bucket1, "mp_sha256.bin", 9 * 1024 * 1024)
-            .await;
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_sized_file(&local_dir, "mp_sha256.bin", 9 * 1024 * 1024);
 
         let source = format!("s3://{}/mp_sha256.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
         let target = format!("s3://{}/mp_sha256.bin", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -1209,6 +1231,7 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "SHA256",
                 &source,
@@ -1218,9 +1241,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 2);
-        assert_eq!(stats.e_tag_verified, 0);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper.head_object(&bucket2, "mp_sha256.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 9 * 1024 * 1024);
@@ -1229,6 +1252,7 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -1578,11 +1602,25 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper
-            .put_sized_object(&bucket1, "mp_full_crc32.bin", 9 * 1024 * 1024)
-            .await;
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "mp_full_crc32.bin", 9 * 1024 * 1024);
 
         let source = format!("s3://{}/mp_full_crc32.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32",
+                "--full-object-checksum",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
         let target = format!("s3://{}/mp_full_crc32.bin", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -1592,6 +1630,7 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "CRC32",
                 "--full-object-checksum",
@@ -1602,9 +1641,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 2);
-        assert_eq!(stats.e_tag_verified, 0);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
             .head_object(&bucket2, "mp_full_crc32.bin", None)
@@ -1616,6 +1655,7 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -1630,11 +1670,25 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper
-            .put_sized_object(&bucket1, "mp_full_crc64.bin", 9 * 1024 * 1024)
-            .await;
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "mp_full_crc64.bin", 9 * 1024 * 1024);
 
         let source = format!("s3://{}/mp_full_crc64.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC64NVME",
+                "--full-object-checksum",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
         let target = format!("s3://{}/mp_full_crc64.bin", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -1644,6 +1698,7 @@ mod tests {
                 "s3sync-e2e-test",
                 "--target-profile",
                 "s3sync-e2e-test",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "CRC64NVME",
                 "--full-object-checksum",
@@ -1654,8 +1709,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 1);
-        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
@@ -1668,6 +1723,7 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -2798,11 +2854,25 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper
-            .put_sized_object(&bucket1, "ssc_mp_full_crc32.bin", 9 * 1024 * 1024)
-            .await;
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "ssc_mp_full_crc32.bin", 9 * 1024 * 1024);
 
         let source = format!("s3://{}/ssc_mp_full_crc32.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32",
+                "--full-object-checksum",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
         let target = format!("s3://{}/ssc_mp_full_crc32.bin", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -2813,6 +2883,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--server-side-copy",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "CRC32",
                 "--full-object-checksum",
@@ -2823,9 +2894,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 2);
-        assert_eq!(stats.e_tag_verified, 0);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
             .head_object(&bucket2, "ssc_mp_full_crc32.bin", None)
@@ -2836,6 +2907,7 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
@@ -2849,11 +2921,25 @@ mod tests {
         helper.create_bucket(&bucket1, REGION).await;
         helper.create_bucket(&bucket2, REGION).await;
 
-        helper
-            .put_sized_object(&bucket1, "ssc_mp_full_crc32c.bin", 9 * 1024 * 1024)
-            .await;
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "ssc_mp_full_crc32c.bin", 9 * 1024 * 1024);
 
         let source = format!("s3://{}/ssc_mp_full_crc32c.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+                "--full-object-checksum",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
         let target = format!("s3://{}/ssc_mp_full_crc32c.bin", bucket2);
         let stats = helper
             .cp_test_data(vec![
@@ -2864,6 +2950,7 @@ mod tests {
                 "--target-profile",
                 "s3sync-e2e-test",
                 "--server-side-copy",
+                "--enable-additional-checksum",
                 "--additional-checksum-algorithm",
                 "CRC32C",
                 "--full-object-checksum",
@@ -2874,9 +2961,9 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
-        assert_eq!(stats.sync_warning, 2);
-        assert_eq!(stats.e_tag_verified, 0);
-        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
             .head_object(&bucket2, "ssc_mp_full_crc32c.bin", None)
@@ -2887,6 +2974,7 @@ mod tests {
             .await;
         assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
 
+        std::fs::remove_dir_all(&local_dir).ok();
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
