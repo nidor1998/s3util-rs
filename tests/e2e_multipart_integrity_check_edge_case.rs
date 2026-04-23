@@ -60,6 +60,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "1byte.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 1);
@@ -96,6 +97,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "empty.bin", None).await;
         assert_eq!(head.content_length().unwrap(), 0);
@@ -133,6 +135,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "exact_8mb.bin", ETAG_8M_FILE_8M_CHUNK)
             .await;
@@ -169,6 +172,7 @@ mod tests {
         assert_eq!(stats1.sync_error, 0);
         assert_eq!(stats1.sync_warning, 0);
         assert_eq!(stats1.e_tag_verified, 1);
+        assert_eq!(stats1.checksum_verified, 0);
 
         // Download
         let download_file = local_dir.join("empty_dl.bin");
@@ -186,6 +190,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.sync_warning, 0);
         assert_eq!(stats2.e_tag_verified, 1);
+        assert_eq!(stats2.checksum_verified, 0);
 
         let metadata = std::fs::metadata(&download_file).unwrap();
         assert_eq!(metadata.len(), 0);
@@ -300,6 +305,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "8mb_multipart.bin", ETAG_8M_FILE_5M_CHUNK)
             .await;
@@ -370,6 +376,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "8mb_single_put.bin", ETAG_8M_FILE_NO_CHUNK)
             .await;
@@ -411,6 +418,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "8mb_7t_9c.bin", ETAG_8M_FILE_8M_CHUNK)
             .await;
@@ -452,6 +460,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "8mb_9t_5c.bin", ETAG_8M_FILE_NO_CHUNK)
             .await;
@@ -784,6 +793,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "1m.bin", None).await;
         assert_eq!(head.e_tag().unwrap(), ETAG_1M_FILE);
@@ -807,6 +817,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.sync_warning, 0);
         assert_eq!(stats2.e_tag_verified, 1);
+        assert_eq!(stats2.checksum_verified, 0);
         TestHelper::verify_downloaded_file_sha256(download_file.to_str().unwrap(), SHA256_1M_WHOLE);
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -928,6 +939,7 @@ mod tests {
         assert_eq!(stats1.sync_error, 0);
         assert_eq!(stats1.sync_warning, 0);
         assert_eq!(stats1.e_tag_verified, 1);
+        assert_eq!(stats1.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket1, "auto_chunk.bin", ETAG_9M_FILE_8M_CHUNK)
             .await;
@@ -951,6 +963,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.sync_warning, 0);
         assert_eq!(stats2.e_tag_verified, 1);
+        assert_eq!(stats2.checksum_verified, 0);
 
         let head = helper.head_object(&bucket2, "auto_chunk.bin", None).await;
         assert_eq!(head.content_length().unwrap(), (9 * 1024 * 1024) as i64);

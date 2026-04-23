@@ -237,6 +237,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         // Download with SSE-C
         let download_file = local_dir.join("ssec_download.txt");
@@ -337,6 +339,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_sha256.dat");
         let stats = helper
@@ -394,6 +398,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_crc32.dat");
         let stats = helper
@@ -451,6 +457,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_crc32c.dat");
         let stats = helper
@@ -508,6 +516,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_sha1.dat");
         let stats = helper
@@ -568,6 +578,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_crc64nvme.dat");
         let stats = helper
@@ -625,6 +637,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let download_file = local_dir.join("download_kms.dat");
         let stats = helper
@@ -681,6 +695,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let download_file = local_dir.join("download_dsse.dat");
         let stats = helper
@@ -742,6 +758,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_kms_sha256.dat");
         let stats = helper
@@ -799,6 +817,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_sha256.bin");
         let stats = helper
@@ -853,6 +873,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_crc32.bin");
         let stats = helper
@@ -907,6 +929,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_mp_crc64nvme.bin");
         let stats = helper
@@ -965,6 +989,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let download_file = local_dir.join("download_auto_chunk.bin");
         let stats = helper
@@ -1081,6 +1107,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 1, "stats = {stats:?}");
         assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         // File lands in local_dir (parent of nested_dir) with the source basename.
         let expected = local_dir.join(&probe_name);
@@ -1137,6 +1165,8 @@ mod tests {
 
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         // The file must exist at the expected safe path inside local_dir.
         let expected_file = local_dir.join("safe_name.dat");
@@ -1859,6 +1889,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         // Download with SSE-C source args
         let download_file = local_dir.join("ssec_mp_download.bin");

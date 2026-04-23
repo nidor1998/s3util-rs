@@ -52,6 +52,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "16mb.bin", ETAG_16M_FILE_8M_CHUNK)
             .await;
@@ -183,6 +184,7 @@ mod tests {
         assert_eq!(stats1.sync_error, 0);
         assert_eq!(stats1.sync_warning, 0);
         assert_eq!(stats1.e_tag_verified, 1);
+        assert_eq!(stats1.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket1, "16mb_rt.bin", ETAG_16M_FILE_8M_CHUNK)
             .await;
@@ -205,6 +207,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.sync_warning, 0);
         assert_eq!(stats2.e_tag_verified, 1);
+        assert_eq!(stats2.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket2, "16mb_rt.bin", ETAG_16M_FILE_8M_CHUNK)
             .await;
@@ -225,6 +228,7 @@ mod tests {
         assert_eq!(stats3.sync_error, 0);
         assert_eq!(stats3.sync_warning, 0);
         assert_eq!(stats3.e_tag_verified, 1);
+        assert_eq!(stats3.checksum_verified, 0);
 
         let orig_sha = TestHelper::get_sha256_from_file(test_file.to_str().unwrap());
         let dl_sha = TestHelper::get_sha256_from_file(download_file.to_str().unwrap());
@@ -268,6 +272,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -315,6 +320,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -339,6 +345,7 @@ mod tests {
         assert_eq!(dl_stats.sync_error, 0);
         assert_eq!(dl_stats.sync_warning, 0);
         assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 0);
 
         TestHelper::verify_downloaded_file_sha256(
             download_file.to_str().unwrap(),
@@ -431,6 +438,7 @@ mod tests {
         assert_eq!(upload_stats.sync_error, 0);
         assert_eq!(upload_stats.sync_warning, 0);
         assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let target_s3 = format!("s3://{}/16mb_plus1_ac_8c.bin", bucket2);
         let stats = helper
@@ -451,6 +459,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_ac_8c.bin", None)
             .await;
@@ -597,6 +606,7 @@ mod tests {
         assert_eq!(stats4.sync_error, 0);
         assert_eq!(stats4.sync_warning, 0);
         assert_eq!(stats4.checksum_verified, 1);
+        assert_eq!(stats4.e_tag_verified, 1);
 
         TestHelper::verify_downloaded_file_sha256(
             download_file.to_str().unwrap(),
@@ -741,6 +751,7 @@ mod tests {
         assert_eq!(stats4.sync_error, 0);
         assert_eq!(stats4.sync_warning, 0);
         assert_eq!(stats4.checksum_verified, 1);
+        assert_eq!(stats4.e_tag_verified, 1);
 
         TestHelper::verify_downloaded_file_sha256(
             download_file.to_str().unwrap(),
@@ -808,6 +819,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_ac_sha_8c.bin", None)
             .await;
@@ -877,6 +889,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_ac_crc64_8c.bin", None)
             .await;
@@ -926,6 +939,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

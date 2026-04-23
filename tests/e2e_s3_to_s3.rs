@@ -1857,6 +1857,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 0);
         assert_eq!(stats.sync_error, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -1942,6 +1944,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 0);
         assert_eq!(stats.sync_error, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;

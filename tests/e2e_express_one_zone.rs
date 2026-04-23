@@ -112,6 +112,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Download
         let download_file = local_dir.join("downloaded.txt");
@@ -171,6 +173,8 @@ mod tests {
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
         assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.e_tag_verified, 0);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Copy from bucket1 to bucket2
         let target_path = format!("s3://{}/s3copy.txt", bucket2);

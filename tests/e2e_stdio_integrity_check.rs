@@ -522,6 +522,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "size.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -562,6 +563,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "size.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -606,6 +608,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "size.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -646,6 +649,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "size.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -701,6 +705,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let downloaded = helper.get_object_bytes(&bucket, "streamed.dat", None).await;
         assert_eq!(downloaded.len(), 12 * 1024 * 1024);
@@ -745,6 +751,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "streamed.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -801,6 +809,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper
             .head_object(&bucket, "threshold_exact.dat", None)
@@ -856,6 +866,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "boundary.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -902,6 +913,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "boundary.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -947,6 +959,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "boundary.dat", None).await;
         let etag = head.e_tag().unwrap();
@@ -987,6 +1000,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "empty.dat", None).await;
         assert_eq!(head.content_length().unwrap(), 0);
@@ -1039,6 +1054,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
 
         let head = helper
             .head_object(&bucket, "streamed_crc64.dat", None)
@@ -1091,6 +1108,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Now download via stdout with --enable-additional-checksum.
         let (stats, stdout_bytes) = helper
@@ -1143,6 +1162,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1195,6 +1216,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Now download via stdout with --enable-additional-checksum.
         let (stats, stdout_bytes) = helper
@@ -1247,6 +1270,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1299,6 +1324,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Now download via stdout with --enable-additional-checksum.
         let (stats, stdout_bytes) = helper
@@ -1351,6 +1378,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1403,6 +1432,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Now download via stdout with --enable-additional-checksum.
         let (stats, stdout_bytes) = helper
@@ -1455,6 +1486,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1507,6 +1540,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         // Now download via stdout with --enable-additional-checksum.
         let (stats, stdout_bytes) = helper
@@ -1559,6 +1594,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1648,6 +1685,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1704,6 +1743,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         // Download must use matching chunksize — s3_to_stdio doesn't support
         // --auto-chunksize. Without matching, ETag computed locally won't match
@@ -1727,6 +1768,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, src_bytes);
 
         let head = helper.head_object(&bucket, "source.dat", None).await;
@@ -1765,6 +1807,8 @@ mod tests {
             ])
             .await;
         assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let (stats, stdout_bytes) = helper
             .cp_test_data_s3_to_stdout(vec![
@@ -1781,6 +1825,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stdout_bytes, src_bytes);
 
         let head = helper.head_object(&bucket, "source.dat", None).await;
@@ -1832,6 +1877,7 @@ mod tests {
             .await;
         assert_eq!(stats_small.sync_complete, 1);
         assert_eq!(stats_small.e_tag_verified, 1);
+        assert_eq!(stats_small.checksum_verified, 0);
         assert_eq!(out_small, small_bytes);
         let head_small = helper.head_object(&bucket, "small.dat", None).await;
         assert!(
@@ -1867,6 +1913,7 @@ mod tests {
             .await;
         assert_eq!(stats_big.sync_complete, 1);
         assert_eq!(stats_big.e_tag_verified, 1);
+        assert_eq!(stats_big.checksum_verified, 0);
         assert_eq!(out_big, big_bytes);
         let head_big = helper.head_object(&bucket, "big.dat", None).await;
         assert!(
@@ -2041,6 +2088,8 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
         assert!(stats.has_warning_flag);
         assert_eq!(stdout_bytes, src_bytes);
 

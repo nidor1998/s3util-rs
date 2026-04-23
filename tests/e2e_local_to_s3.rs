@@ -2389,6 +2389,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 0);
         assert_eq!(stats.sync_error, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         // Original object should still exist
         assert!(helper.is_object_exist(&bucket, "if_none.txt", None).await);
@@ -2449,6 +2451,8 @@ mod tests {
 
         assert_eq!(stats.sync_complete, 0);
         assert_eq!(stats.sync_error, 1);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         // Original object should still exist unchanged
         helper

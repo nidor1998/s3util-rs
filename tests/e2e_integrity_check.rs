@@ -2946,6 +2946,7 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         // --enable-additional-checksum + a different algorithm than the
         // source has stored → validate_checksum's first branch fires once
         // ("algorithm is different from the target storage. skip additional
@@ -3005,6 +3006,7 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 1);
         // --enable-additional-checksum + a different algorithm than the
         // source has stored → validate_checksum's first branch fires once,
         // matching s3sync.
@@ -3299,6 +3301,7 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.sync_warning, 0);
         let bytes = helper
             .get_object_bytes(&bucket2, "s2s_mp_crc64_ac.bin", None)

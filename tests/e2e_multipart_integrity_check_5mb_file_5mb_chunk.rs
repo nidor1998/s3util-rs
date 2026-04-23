@@ -56,6 +56,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "5mb.bin", ETAG_5M_FILE_5M_CHUNK)
             .await;
@@ -102,6 +103,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
 
         let head = helper.head_object(&bucket, "5mb_plus1.bin", None).await;
         assert_eq!(head.content_length().unwrap(), (5 * 1024 * 1024 + 1) as i64);
@@ -150,6 +152,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -555,6 +558,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -633,6 +637,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -778,6 +783,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
         // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -820,6 +826,7 @@ mod tests {
         assert_eq!(upload_stats.sync_error, 0);
         assert_eq!(upload_stats.sync_warning, 0);
         assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket1,
@@ -848,6 +855,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         let bytes = helper
             .get_object_bytes(&bucket2, "5mb_plus1_autochunk.bin", None)
             .await;

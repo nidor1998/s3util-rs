@@ -57,6 +57,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "16mb_5c.bin", ETAG_16M_FILE_5M_CHUNK)
             .await;
@@ -220,6 +221,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -265,6 +267,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -392,6 +395,7 @@ mod tests {
         assert_eq!(upload_stats.sync_error, 0);
         assert_eq!(upload_stats.sync_warning, 0);
         assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket1,
@@ -419,6 +423,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_autochunk_5c.bin", None)
             .await;
@@ -652,6 +657,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_ac_sha_5c.bin", None)
             .await;
@@ -885,6 +891,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "16mb_plus1_ac_crc64_5c.bin", None)
             .await;
@@ -934,6 +941,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);

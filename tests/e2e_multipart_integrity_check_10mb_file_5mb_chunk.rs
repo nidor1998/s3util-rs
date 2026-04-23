@@ -57,6 +57,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket, "10mb_5c.bin", ETAG_10M_FILE_5M_CHUNK)
             .await;
@@ -223,6 +224,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -274,6 +276,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(
                 &bucket,
@@ -486,6 +489,7 @@ mod tests {
         assert_eq!(upload_stats.sync_error, 0);
         assert_eq!(upload_stats.sync_warning, 0);
         assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 0);
 
         let target_s3 = format!("s3://{}/10mb_plus1_ac.bin", bucket2);
         let stats = helper
@@ -506,6 +510,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 0);
         let bytes = helper
             .get_object_bytes(&bucket2, "10mb_plus1_ac.bin", None)
             .await;
@@ -575,6 +580,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "10mb_plus1_ac_sha.bin", None)
             .await;
@@ -644,6 +650,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stats.e_tag_verified, 1);
         let bytes = helper
             .get_object_bytes(&bucket2, "10mb_plus1_ac_crc64.bin", None)
             .await;
@@ -692,6 +699,7 @@ mod tests {
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
@@ -996,6 +1004,7 @@ mod tests {
         assert_eq!(stats1.sync_error, 0);
         assert_eq!(stats1.sync_warning, 0);
         assert_eq!(stats1.e_tag_verified, 1);
+        assert_eq!(stats1.checksum_verified, 0);
         helper
             .verify_uploaded_object_etag_value(&bucket1, "10mb_ssc.bin", ETAG_10M_FILE_5M_CHUNK)
             .await;
@@ -1020,6 +1029,7 @@ mod tests {
         assert_eq!(stats2.sync_error, 0);
         assert_eq!(stats2.sync_warning, 0);
         assert_eq!(stats2.e_tag_verified, 1);
+        assert_eq!(stats2.checksum_verified, 0);
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
