@@ -658,8 +658,8 @@ impl UploadManager {
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
         let mut upload_parts_join_handles = FuturesUnordered::new();
-        let mut part_number = 1;
-        for offset in (0..source_total_size).step_by(config_chunksize) {
+        for (part_number, offset) in (1i32..).zip((0..source_total_size).step_by(config_chunksize))
+        {
             if self.cancellation_token.is_cancelled() {
                 return Err(anyhow!(S3syncError::Cancelled));
             }
@@ -947,8 +947,6 @@ impl UploadManager {
             });
 
             upload_parts_join_handles.push(task);
-
-            part_number += 1;
         }
 
         while let Some(result) = upload_parts_join_handles.next().await {
