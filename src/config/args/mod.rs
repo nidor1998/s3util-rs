@@ -23,6 +23,12 @@ use std::str::FromStr;
 use std::sync::Arc;
 use tokio::sync::Semaphore;
 
+#[cfg(feature = "version")]
+use shadow_rs::shadow;
+
+#[cfg(feature = "version")]
+shadow!(build);
+
 pub mod value_parser;
 
 #[cfg(test)]
@@ -114,7 +120,18 @@ const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_ENABLE_ADDITIONAL_CHECKSUM: &str =
 const TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX: &str = "target directory does not exist";
 
 #[derive(Parser, Clone, Debug)]
-#[command(name = "s3util", version, about = "S3 utility commands")]
+#[cfg_attr(
+    feature = "version",
+    command(version = format!(
+        "{} ({} {}), {}",
+        build::PKG_VERSION,
+        build::SHORT_COMMIT,
+        build::BUILD_TARGET,
+        build::RUST_VERSION
+    ))
+)]
+#[cfg_attr(not(feature = "version"), command(version))]
+#[command(name = "s3util", about = "S3 utility commands")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Commands,
