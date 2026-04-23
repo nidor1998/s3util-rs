@@ -9,6 +9,29 @@ use tracing::info;
 const MOVING_AVERAGE_PERIOD_SECS: usize = 10;
 const REFRESH_INTERVAL: f32 = 1.0;
 
+fn verification_status(
+    etag_verified: u64,
+    etag_mismatch: u64,
+    checksum_verified: u64,
+    checksum_mismatch: u64,
+) -> (&'static str, &'static str) {
+    let etag = if etag_verified > 0 {
+        "ok"
+    } else if etag_mismatch > 0 {
+        "failed"
+    } else {
+        "skipped"
+    };
+    let checksum = if checksum_verified > 0 {
+        "ok"
+    } else if checksum_mismatch > 0 {
+        "failed"
+    } else {
+        "skipped"
+    };
+    (etag, checksum)
+}
+
 pub fn show_indicator(
     stats_receiver: Receiver<SyncStatistics>,
     show_progress: bool,
@@ -31,7 +54,9 @@ pub fn show_indicator(
         let mut total_error_count: u64 = 0;
         let mut total_warning_count: u64 = 0;
         let mut total_e_tag_verified_count: u64 = 0;
+        let mut total_e_tag_mismatch_count: u64 = 0;
         let mut total_checksum_verified_count: u64 = 0;
+        let mut total_checksum_mismatch_count: u64 = 0;
 
         // stats_receiver tracks high-precision byte counts.
         loop {
@@ -55,8 +80,16 @@ pub fn show_indicator(
                         SyncStatistics::ETagVerified { .. } => {
                             total_e_tag_verified_count += 1;
                         }
+                        SyncStatistics::ETagMismatch { .. } => {
+                            total_e_tag_mismatch_count += 1;
+                            total_warning_count += 1;
+                        }
                         SyncStatistics::ChecksumVerified { .. } => {
                             total_checksum_verified_count += 1;
+                        }
+                        SyncStatistics::ChecksumMismatch { .. } => {
+                            total_checksum_mismatch_count += 1;
+                            total_warning_count += 1;
                         }
                     }
                 }
@@ -109,25 +142,13 @@ pub fn show_indicator(
                             HumanBytes(sync_bytes_per_sec)
                         )];
 
-                        // ETag verify status
-                        let etag_status = if total_e_tag_verified_count > 0 {
-                            "ok"
-                        } else if total_warning_count > 0 {
-                            "failed"
-                        } else {
-                            "skipped"
-                        };
+                        let (etag_status, checksum_status) = verification_status(
+                            total_e_tag_verified_count,
+                            total_e_tag_mismatch_count,
+                            total_checksum_verified_count,
+                            total_checksum_mismatch_count,
+                        );
                         parts.push(format!("etag verify: {etag_status}"));
-
-                        // Additional checksum verify status
-                        let checksum_status = if total_checksum_verified_count > 0 {
-                            "ok"
-                        } else if total_warning_count > 0 && total_e_tag_verified_count > 0 {
-                            // Warning exists but etag passed — checksum likely failed
-                            "failed"
-                        } else {
-                            "skipped"
-                        };
                         parts.push(format!("additional checksum verify: {checksum_status}"));
 
                         let result_message = parts.join(", ");
@@ -399,5 +420,58 @@ mod tests {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("dummy=trace")
             .try_init();
+    }
+
+    #[test]
+    fn verification_status_etag_skipped_and_checksum_failed() {
+        // Regression test: ETag verification was never attempted (e.g. SSE-C
+        // source), and the additional checksum verification failed. Before the
+        // per-verification counters were introduced, the aggregate warning
+        // counter made ETag render as "failed" and checksum as "skipped"
+        // — both incorrect. Expected: etag skipped, checksum failed.
+        let (etag, checksum) = verification_status(
+            0, // etag_verified
+            0, // etag_mismatch
+            0, // checksum_verified
+            1, // checksum_mismatch
+        );
+        assert_eq!(etag, "skipped");
+        assert_eq!(checksum, "failed");
+    }
+
+    #[test]
+    fn verification_status_etag_failed_and_checksum_skipped() {
+        // Symmetric case: ETag mismatched, checksum verification not performed.
+        let (etag, checksum) = verification_status(0, 1, 0, 0);
+        assert_eq!(etag, "failed");
+        assert_eq!(checksum, "skipped");
+    }
+
+    #[test]
+    fn verification_status_both_verified() {
+        let (etag, checksum) = verification_status(1, 0, 1, 0);
+        assert_eq!(etag, "ok");
+        assert_eq!(checksum, "ok");
+    }
+
+    #[test]
+    fn verification_status_etag_ok_and_checksum_failed() {
+        let (etag, checksum) = verification_status(1, 0, 0, 1);
+        assert_eq!(etag, "ok");
+        assert_eq!(checksum, "failed");
+    }
+
+    #[test]
+    fn verification_status_etag_failed_and_checksum_ok() {
+        let (etag, checksum) = verification_status(0, 1, 1, 0);
+        assert_eq!(etag, "failed");
+        assert_eq!(checksum, "ok");
+    }
+
+    #[test]
+    fn verification_status_both_skipped() {
+        let (etag, checksum) = verification_status(0, 0, 0, 0);
+        assert_eq!(etag, "skipped");
+        assert_eq!(checksum, "skipped");
     }
 }

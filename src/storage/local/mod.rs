@@ -45,7 +45,9 @@ use crate::storage::e_tag_verify::{
 use crate::storage::{
     Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
 };
-use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
+use crate::types::SyncStatistics::{
+    ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
+};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
@@ -243,7 +245,7 @@ impl LocalStorage {
                             message
                         );
 
-                        self.send_stats(SyncWarning { key: key.clone() }).await;
+                        self.send_stats(ETagMismatch { key: key.clone() }).await;
                         self.set_warning();
                     }
                 } else {
@@ -261,16 +263,13 @@ impl LocalStorage {
                 }
             }
         } else if source_content_length != target_content_length {
-            let message = "content length mismatch. file in the local storage may be corrupted.";
-            warn!(
-                key = &key,
-                source_content_length = source_content_length,
-                target_content_length = target_content_length,
-                message
-            );
-
-            self.send_stats(SyncWarning { key: key.clone() }).await;
-            self.set_warning();
+            return Err(anyhow!(
+                "content length mismatch. file in the local storage is corrupted. \
+                 key={}, source_content_length={}, target_content_length={}",
+                key,
+                source_content_length,
+                target_content_length
+            ));
         }
 
         // Since aws-sdk-s3 1.69.0, the checksum mode is always enabled,
@@ -345,7 +344,7 @@ impl LocalStorage {
                     "additional checksum mismatch. file in the local storage may be corrupted."
                 );
 
-                self.send_stats(SyncWarning { key }).await;
+                self.send_stats(ChecksumMismatch { key }).await;
                 self.set_warning();
             } else {
                 debug!(

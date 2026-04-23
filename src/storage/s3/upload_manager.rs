@@ -31,7 +31,9 @@ use crate::storage::{
     Storage, convert_copy_to_put_object_output, convert_copy_to_upload_part_output,
     get_range_from_content_range, parse_range_header_string,
 };
-use crate::types::SyncStatistics::{ChecksumVerified, ETagVerified, SyncWarning};
+use crate::types::SyncStatistics::{
+    ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
+};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
@@ -594,7 +596,7 @@ impl UploadManager {
                         ));
                     }
 
-                    self.send_stats(SyncWarning {
+                    self.send_stats(ETagMismatch {
                         key: key.to_string(),
                     })
                     .await;
@@ -2058,7 +2060,7 @@ impl UploadManager {
                         ));
                     }
 
-                    self.send_stats(SyncWarning {
+                    self.send_stats(ChecksumMismatch {
                         key: key.to_string(),
                     })
                     .await;

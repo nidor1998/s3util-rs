@@ -226,7 +226,7 @@ pub async fn transfer(
                     "e_tag mismatch.",
                 );
                 let _ = stats_sender
-                    .send(SyncStatistics::SyncWarning {
+                    .send(SyncStatistics::ETagMismatch {
                         key: source_key.to_string(),
                     })
                     .await;
@@ -290,7 +290,7 @@ pub async fn transfer(
                 "additional checksum mismatch. output data may be corrupted."
             );
             let _ = stats_sender
-                .send(SyncStatistics::SyncWarning {
+                .send(SyncStatistics::ChecksumMismatch {
                     key: source_key.to_string(),
                 })
                 .await;

@@ -293,7 +293,9 @@ pub enum SyncStatistics {
     SyncError { key: String },
     SyncWarning { key: String },
     ETagVerified { key: String },
+    ETagMismatch { key: String },
     ChecksumVerified { key: String },
+    ChecksumMismatch { key: String },
 }
 
 #[derive(Debug, Clone)]

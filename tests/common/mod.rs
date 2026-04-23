@@ -1317,7 +1317,9 @@ impl TestHelper {
             match sync_stats {
                 SyncStatistics::SyncComplete { .. } => stats.sync_complete += 1,
                 SyncStatistics::SyncError { .. } => stats.sync_error += 1,
-                SyncStatistics::SyncWarning { .. } => stats.sync_warning += 1,
+                SyncStatistics::SyncWarning { .. }
+                | SyncStatistics::ETagMismatch { .. }
+                | SyncStatistics::ChecksumMismatch { .. } => stats.sync_warning += 1,
                 SyncStatistics::ETagVerified { .. } => stats.e_tag_verified += 1,
                 SyncStatistics::ChecksumVerified { .. } => stats.checksum_verified += 1,
                 _ => {}
@@ -1401,7 +1403,9 @@ impl TestHelper {
             match sync_stats {
                 SyncStatistics::SyncComplete { .. } => stats.sync_complete += 1,
                 SyncStatistics::SyncError { .. } => stats.sync_error += 1,
-                SyncStatistics::SyncWarning { .. } => stats.sync_warning += 1,
+                SyncStatistics::SyncWarning { .. }
+                | SyncStatistics::ETagMismatch { .. }
+                | SyncStatistics::ChecksumMismatch { .. } => stats.sync_warning += 1,
                 SyncStatistics::ETagVerified { .. } => stats.e_tag_verified += 1,
                 SyncStatistics::ChecksumVerified { .. } => stats.checksum_verified += 1,
                 _ => {}
@@ -1475,7 +1479,9 @@ impl TestHelper {
             match sync_stats {
                 SyncStatistics::SyncComplete { .. } => stats.sync_complete += 1,
                 SyncStatistics::SyncError { .. } => stats.sync_error += 1,
-                SyncStatistics::SyncWarning { .. } => stats.sync_warning += 1,
+                SyncStatistics::SyncWarning { .. }
+                | SyncStatistics::ETagMismatch { .. }
+                | SyncStatistics::ChecksumMismatch { .. } => stats.sync_warning += 1,
                 SyncStatistics::ETagVerified { .. } => stats.e_tag_verified += 1,
                 SyncStatistics::ChecksumVerified { .. } => stats.checksum_verified += 1,
                 _ => {}
