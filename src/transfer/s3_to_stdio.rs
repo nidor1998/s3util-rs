@@ -89,6 +89,11 @@ pub async fn transfer(
     // Write body to stdout while computing hashes inline
     let mut body = get_object_output.body.into_async_read();
 
+    // Honor --rate-limit-bandwidth on this path. Other directions apply it via
+    // AsyncReadWithCallback in storage/mod.rs; s3_to_stdio reads the raw body
+    // directly, so throttle explicitly here using the same leaky_bucket.
+    let rate_limit_bandwidth = source.get_rate_limit_bandwidth();
+
     let mut concatnated_md5_hash: Vec<u8> = Vec::new();
     let mut parts_count: i64 = 0;
     let mut chunk_buffer: Vec<u8> = Vec::new();
@@ -109,6 +114,10 @@ pub async fn transfer(
             .context("s3_to_stdio: failed to read body")?;
         if n == 0 {
             break;
+        }
+
+        if let Some(limiter) = &rate_limit_bandwidth {
+            limiter.acquire(n).await;
         }
 
         writer

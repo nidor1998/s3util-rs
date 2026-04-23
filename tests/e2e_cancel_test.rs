@@ -254,7 +254,20 @@ mod tests {
         // being observed inside the read loop.
         let bin = env!("CARGO_BIN_EXE_s3util");
         let child = std::process::Command::new(bin)
-            .args(["cp", "--source-profile", "s3sync-e2e-test", &s3_path, "-"])
+            .args([
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                // Throttle the download so SIGINT reliably lands mid-stream
+                // regardless of network speed: 2 MiB/s on a 30 MiB file gives
+                // ~15s of read-loop window, well beyond the 1500ms sleep
+                // below. Without this, fast same-region links finish the
+                // download before SIGINT arrives and the test sees exit 0.
+                "--rate-limit-bandwidth",
+                "2MiB",
+                &s3_path,
+                "-",
+            ])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn();
