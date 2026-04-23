@@ -12,7 +12,6 @@ use s3util_rs::storage::local::LocalStorageFactory;
 use s3util_rs::storage::s3::S3StorageFactory;
 use s3util_rs::transfer::{TransferDirection, detect_direction};
 use s3util_rs::types::StoragePath;
-use s3util_rs::types::error::is_cancelled_error;
 use s3util_rs::types::token::create_pipeline_cancellation_token;
 
 pub mod ctrl_c_handler;
@@ -39,6 +38,7 @@ fn build_rate_limiter(config: &Config) -> Option<Arc<RateLimiter>> {
 pub enum ExitStatus {
     Success,
     Warning,
+    Cancelled,
 }
 
 impl ExitStatus {
@@ -46,6 +46,7 @@ impl ExitStatus {
         match self {
             ExitStatus::Success => EXIT_CODE_SUCCESS,
             ExitStatus::Warning => EXIT_CODE_WARNING,
+            ExitStatus::Cancelled => EXIT_CODE_CANCELLED,
         }
     }
 }
@@ -53,6 +54,8 @@ impl ExitStatus {
 pub const EXIT_CODE_SUCCESS: i32 = 0;
 pub const EXIT_CODE_ERROR: i32 = 1;
 pub const EXIT_CODE_WARNING: i32 = 3;
+// Standard Unix convention for processes terminated by SIGINT (128 + 2).
+pub const EXIT_CODE_CANCELLED: i32 = 130;
 
 ///
 /// and `Err` for errors.
@@ -319,13 +322,18 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     // Wait for indicator to finish
     let _ = indicator_handle.await;
 
+    // ctrl_c_handler is the only code path that cancels this token, so an
+    // observed cancellation means SIGINT was received. Check the token first
+    // so early-exit branches in each transfer (which return `Ok(())` on
+    // cancellation) and the read-loop branch (which returns
+    // `Err(S3syncError::Cancelled)`) both land on exit 130. ctrl-c-handler
+    // already warned about shutdown, so suppress the "copy failed." log and
+    // any warning-stat that the interrupted transfer may have flipped.
+    if cancellation_token.is_cancelled() {
+        return Ok(ExitStatus::Cancelled);
+    }
+
     if let Err(e) = &result {
-        if is_cancelled_error(e) {
-            // ctrl-c-handler already warned about shutdown; match s3sync
-            // convention and exit 0 on user cancellation rather than logging
-            // a misleading "copy failed." with the inner upload context.
-            return Ok(ExitStatus::Success);
-        }
         error!(error = format!("{e:#}"), "copy failed.");
         return Err(result.unwrap_err());
     }
@@ -496,9 +504,11 @@ mod tests {
     fn exit_status_codes() {
         assert_eq!(ExitStatus::Success.code(), EXIT_CODE_SUCCESS);
         assert_eq!(ExitStatus::Warning.code(), EXIT_CODE_WARNING);
+        assert_eq!(ExitStatus::Cancelled.code(), EXIT_CODE_CANCELLED);
         assert_eq!(EXIT_CODE_SUCCESS, 0);
         assert_eq!(EXIT_CODE_ERROR, 1);
         assert_eq!(EXIT_CODE_WARNING, 3);
+        assert_eq!(EXIT_CODE_CANCELLED, 130);
     }
 
     #[test]

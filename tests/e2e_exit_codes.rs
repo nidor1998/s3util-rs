@@ -10,9 +10,10 @@ mod tests {
     use std::process::{Command, Stdio};
 
     // Process exit codes are defined in src/bin/s3util/cli/mod.rs:
-    //   EXIT_CODE_SUCCESS = 0
-    //   EXIT_CODE_ERROR   = 1
-    //   EXIT_CODE_WARNING = 3
+    //   EXIT_CODE_SUCCESS   = 0
+    //   EXIT_CODE_ERROR     = 1
+    //   EXIT_CODE_WARNING   = 3
+    //   EXIT_CODE_CANCELLED = 130 (SIGINT/ctrl-c, covered in e2e_cancel_test.rs)
     //
     // These tests invoke the actual binary as a subprocess and assert the
     // process-level exit code. They are the only tests that exercise

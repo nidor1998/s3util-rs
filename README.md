@@ -192,7 +192,7 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 
 ### Ctrl-C safety
 
-A ctrl-c handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting. The exit code is `0` for user cancellation, distinguishing it from transfer errors.
+A ctrl-c handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting. The exit code is `130` for user cancellation (standard Unix SIGINT convention, 128 + 2), distinguishing it from normal success (`0`) and transfer errors (`1`/`3`).
 
 ### Observability
 
@@ -467,11 +467,12 @@ Additional permissions depending on feature use:
 
 | Code | Meaning                                                                                                             |
 |------|---------------------------------------------------------------------------------------------------------------------|
-| 0    | Success (also: user cancellation via SIGINT/ctrl-c)                                                                 |
+| 0    | Success                                                                                                             |
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — emitted by clap when an argument is unknown, missing, or has an invalid value              |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
 | 101  | Abnormal termination (internal panic)                                                                               |
+| 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 
 ## Advanced options
 
@@ -852,7 +853,7 @@ Concrete safeguards:
 3. **Resolved target printed before transfer.** When the source basename is appended (e.g. target is a bucket root or directory), the resolved path is printed on a `-> <path>` line so the operator can catch a mistake before any bytes move.
 4. **Exit code 3 for warnings.** Transfers that complete but report a non-fatal issue (e.g. an S3→S3 ETag mismatch explained by chunksize differences) exit 3 instead of 0, so CI and scripts can treat warnings as something worth looking at.
 5. **`--if-none-match`** implements "create only" at the S3 level, preventing accidental overwrite of an existing object.
-6. **ctrl-c is safe.** A SIGINT handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting with code 0.
+6. **ctrl-c is safe.** A SIGINT handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting with code 130 (standard Unix SIGINT convention), so scripts can distinguish user cancellation from normal success.
 
 Each safeguard is independently testable; several have direct coverage in `e2e_cancel_test.rs`, `e2e_exit_codes.rs`, and `cli_config_validation_error.rs`.
 

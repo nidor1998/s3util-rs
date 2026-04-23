@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, anyhow};
 use async_channel::Sender;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tracing::{debug, warn};
@@ -8,6 +8,7 @@ use crate::storage::Storage;
 use crate::storage::additional_checksum_verify::is_multipart_upload_checksum;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::storage::e_tag_verify::{generate_e_tag_hash, normalize_e_tag, verify_e_tag};
+use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, detect_additional_checksum, is_full_object_checksum};
 
@@ -173,6 +174,17 @@ pub async fn transfer(
         .flush()
         .await
         .context("s3_to_stdio: failed to flush stdout")?;
+
+    // If the read loop broke because the cancellation token fired, we have
+    // a truncated body. Return early before ETag / additional-checksum
+    // verification so we don't compute hashes over a truncated body and
+    // log a spurious mismatch warning. cli/mod.rs observes the cancelled
+    // token and maps the run to ExitStatus::Cancelled (exit 130), so the
+    // specific error variant here is advisory only — it's the token state
+    // that drives the process exit code.
+    if cancellation_token.is_cancelled() {
+        return Err(anyhow!(S3syncError::Cancelled));
+    }
 
     // ETag verification
     if !config.disable_etag_verify && !source.is_express_onezone_storage() {

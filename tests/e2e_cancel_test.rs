@@ -10,8 +10,10 @@ mod tests {
 
     /// Baseline cancel test: sends SIGINT to a running `s3util cp` and
     /// asserts the process exits (i.e. does not hang) within `child.wait()`.
-    /// Exit status is intentionally not checked — ctrl-c cancellation is
-    /// expected to exit 0 per s3sync convention. The richer orphan-MPU
+    /// Exit status is intentionally not checked here — ctrl-c cancellation
+    /// is expected to exit 130 (standard Unix SIGINT convention, 128 + 2).
+    /// The exit-code assertion for ctrl-c lives in
+    /// `cancel_s3_to_stdout_sigint_exits_130`; the richer orphan-MPU
     /// assertions live in `cancel_multipart_upload_sigint_no_orphan_mpu`
     /// below.
     #[tokio::test]
@@ -63,8 +65,9 @@ mod tests {
                 let _ = kill(pid, Signal::SIGINT);
             }
 
-            // The process must reach exit (not hang). Exit code is not asserted:
-            // s3util intentionally exits 0 on ctrl-c cancellation.
+            // The process must reach exit (not hang). Exit code is not asserted
+            // here; ctrl-c exit-code is covered by
+            // `cancel_s3_to_stdout_sigint_exits_130`.
             let _status = child.wait().unwrap();
         }
 
@@ -83,8 +86,9 @@ mod tests {
     ///      is expected to abort the MPU on cancel/error via
     ///      `abort_multipart_upload` in `upload_manager.rs`.
     ///
-    /// Exit status is not asserted — s3util intentionally exits 0 on
-    /// ctrl-c cancellation (matches s3sync convention).
+    /// Exit status is not asserted here — ctrl-c cancellation exits 130
+    /// (standard Unix SIGINT convention); the exit-code assertion lives in
+    /// `cancel_s3_to_stdout_sigint_exits_130`.
     ///
     /// Property (2) is the most load-bearing assertion. If the tool
     /// DOES leak MPUs under SIGINT, this test will fail — in that case
@@ -150,8 +154,9 @@ mod tests {
                 let _ = kill(pid, Signal::SIGINT);
                 delivered = true;
 
-                // Process must reach exit (not hang). Exit code is not checked;
-                // s3util intentionally exits 0 on ctrl-c.
+                // Process must reach exit (not hang). Exit code is not checked
+                // here; ctrl-c exit-code is covered by
+                // `cancel_s3_to_stdout_sigint_exits_130`.
                 let _status = child.wait().unwrap();
 
                 // Give S3 a brief moment to reflect AbortMultipartUpload
@@ -197,6 +202,84 @@ mod tests {
         // Teardown — abort any pending MPUs so the bucket is deletable
         // even if an earlier assertion failed (best-effort).
         helper.abort_all_multipart_uploads(&bucket).await;
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// SIGINTs an in-progress S3→stdout transfer and asserts the process
+    /// exits 130 — the standard Unix SIGINT convention (128 + 2), shared
+    /// across all five transfer paths (Local→S3, S3→Local, S3→S3, stdin→S3,
+    /// S3→stdout).
+    ///
+    /// Without the cancel check inside `s3_to_stdio`, the read loop would
+    /// just `break` on cancellation, fall through to ETag verification over
+    /// a truncated body, trigger a mismatch, and the process would either
+    /// exit 3 (warning — default verification on) or exit 1 (if the
+    /// checksum happens to be full-object). Both are wrong for a ctrl-c.
+    ///
+    /// Spawns the built binary directly via `CARGO_BIN_EXE_s3util` instead
+    /// of `cargo run`: cargo is a middle-man process and sending SIGINT to
+    /// `child.id()` hits cargo, not the binary. Cargo's own SIGINT handling
+    /// can obscure the binary's exit code (signal-terminated status vs
+    /// clean exit 130). Spawning the binary directly makes the assertion
+    /// meaningful.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cancel_s3_to_stdout_sigint_exits_130() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_file =
+            TestHelper::create_sized_file(&local_dir, "cancel_stdout.bin", 30 * 1024 * 1024);
+        let s3_path = format!("s3://{}/cancel_stdout.bin", bucket);
+
+        // Seed the bucket.
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                src_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        // Discard stdout — otherwise the body fills the pipe buffer and the
+        // child blocks waiting on a reader, which would prevent SIGINT from
+        // being observed inside the read loop.
+        let bin = env!("CARGO_BIN_EXE_s3util");
+        let child = std::process::Command::new(bin)
+            .args(["cp", "--source-profile", "s3sync-e2e-test", &s3_path, "-"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn();
+
+        if let Ok(mut child) = child {
+            // Give the binary time to start, authenticate, issue GetObject,
+            // and enter the read loop before delivering SIGINT. 1500ms is
+            // generous — too short risks pre-loop cancel, which passes
+            // trivially and doesn't exercise the fix.
+            tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+
+            use nix::sys::signal::{Signal, kill};
+            use nix::unistd::Pid;
+            let pid = Pid::from_raw(child.id() as i32);
+            let _ = kill(pid, Signal::SIGINT);
+
+            let status = child.wait().unwrap();
+            assert_eq!(
+                status.code(),
+                Some(130),
+                "ctrl-c during s3→stdout must exit 130; status={status:?}, code={:?}",
+                status.code(),
+            );
+        }
+
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
