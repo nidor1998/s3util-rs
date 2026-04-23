@@ -25,7 +25,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -140,6 +140,12 @@ pub struct StatsCount {
     pub sync_warning: u64,
     pub e_tag_verified: u64,
     pub checksum_verified: u64,
+    // Mirrors the `has_warning` AtomicBool the production binary reads to
+    // decide between ExitStatus::Success and ExitStatus::Warning. Tracked
+    // separately from `sync_warning` (the stats-channel count) because the
+    // two are populated by different code paths and a gap between them has
+    // produced silent-success bugs in the past.
+    pub has_warning_flag: bool,
 }
 
 #[cfg(e2e_test)]
@@ -1321,6 +1327,7 @@ impl TestHelper {
         if result.is_err() {
             stats.sync_error += 1;
         }
+        stats.has_warning_flag = has_warning.load(Ordering::SeqCst);
 
         stats
     }
@@ -1404,6 +1411,7 @@ impl TestHelper {
         if result.is_err() {
             stats.sync_error += 1;
         }
+        stats.has_warning_flag = has_warning.load(Ordering::SeqCst);
 
         stats
     }
@@ -1477,6 +1485,7 @@ impl TestHelper {
         if result.is_err() {
             stats.sync_error += 1;
         }
+        stats.has_warning_flag = has_warning.load(Ordering::SeqCst);
 
         (stats, writer)
     }

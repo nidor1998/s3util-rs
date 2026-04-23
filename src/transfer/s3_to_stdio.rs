@@ -230,6 +230,10 @@ pub async fn transfer(
                         key: source_key.to_string(),
                     })
                     .await;
+                // The sync_warning stat is advisory only — the binary reads
+                // the source storage's has_warning atomic to pick
+                // ExitStatus::Warning. Flip it here so the process exits 3.
+                source.set_warning();
             }
             None => {
                 debug!(
@@ -290,6 +294,7 @@ pub async fn transfer(
                     key: source_key.to_string(),
                 })
                 .await;
+            source.set_warning();
         }
     }
 

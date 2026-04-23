@@ -1979,8 +1979,69 @@ mod tests {
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.sync_error, 0);
         assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
         assert_eq!(stats.checksum_verified, 0);
         assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Upload with 5MiB chunks, then pipe to stdout at default chunksize
+    /// without --enable-additional-checksum. The source stores a composite
+    /// (`-N`-suffixed) ETag computed over 5MiB parts; the local recompute
+    /// uses default 8MiB parts — the ETags disagree. A composite ETag
+    /// mismatch from a remote source must warn (not error), and the warning
+    /// must surface in the has_warning atomic so the binary exits 3.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_etag_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("etag_mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/etag_mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3sync-e2e-test",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        assert!(stats.has_warning_flag);
         assert_eq!(stdout_bytes, src_bytes);
 
         helper.delete_bucket_with_cascade(&bucket).await;
