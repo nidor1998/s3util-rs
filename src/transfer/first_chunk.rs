@@ -158,13 +158,28 @@ pub async fn get_object_parts_if_necessary(
             if object_parts.is_empty()
                 && e_tag_verify::is_multipart_upload_e_tag(&e_tag.map(|e_tag| e_tag.to_string()))
             {
-                error!(
-                    key = key,
-                    "failed to get object attributes information. \
-                        Please remove --auto-chunksize option and retry."
-                );
+                if config.transfer_config.auto_chunksize {
+                    error!(
+                        key = key,
+                        "failed to get object attributes information. \
+                            Please remove --auto-chunksize option and retry."
+                    );
 
-                return Err(anyhow!("failed to get object attributes information."));
+                    return Err(anyhow!("failed to get object attributes information."));
+                }
+
+                // Source is multipart but has no per-part additional checksum metadata
+                // (e.g., uploaded without --additional-checksum-algorithm, or only a
+                // FULL_OBJECT CRC64NVME). GetObjectAttributes returns empty Parts in
+                // that case; per-part additional-checksum verification is impossible
+                // but the copy itself can proceed — downstream validate_checksum will
+                // emit the algorithm-mismatch warning and skip verification.
+                warn!(
+                    key = key,
+                    "source multipart object has no per-part additional checksum. \
+                        skip additional checksum verification."
+                );
+                return Ok(None);
             }
 
             // Only assert that the first part matches first_chunk_content_length when a range
