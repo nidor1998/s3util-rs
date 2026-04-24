@@ -2,9 +2,14 @@ use crate::config::args::value_parser::{
     canned_acl, checksum_algorithm, human_bytes, metadata, sse, storage_class, storage_path,
     tagging, url,
 };
-use crate::config::{CLITimeoutConfig, ClientConfig, RetryConfig};
-use crate::types::{AccessKeys, ClientConfigLocation, S3Credentials, StoragePath};
-use aws_sdk_s3::types::{RequestPayer, ServerSideEncryption};
+use crate::config::{CLITimeoutConfig, ClientConfig, Config, RetryConfig};
+use crate::types::{
+    AccessKeys, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath,
+};
+use aws_sdk_s3::types::{
+    ChecksumAlgorithm, ChecksumMode, ObjectCannedAcl, RequestPayer, ServerSideEncryption,
+    StorageClass,
+};
 use aws_smithy_types::checksum_config::RequestChecksumCalculation;
 use chrono::{DateTime, Utc};
 use clap::Parser;
@@ -928,4 +933,186 @@ impl CommonTransferArgs {
 
         (source_client_config, target_client_config)
     }
+}
+
+/// Build a `Config` from already-validated common transfer args plus the
+/// raw source/target strings. Callers (the per-subcommand `TryFrom` impls)
+/// are responsible for running their own structural validation
+/// (`validate_storage_config`) before invoking this helper.
+///
+/// This sets `no_fail_on_verify_error: false`. Subcommands whose args
+/// expose that flag (currently only mv) override it on the returned
+/// `Config` after this returns.
+pub(crate) fn build_config_from_common(
+    common: CommonTransferArgs,
+    source: Option<String>,
+    target: Option<String>,
+) -> Result<Config, String> {
+    let original_common = common.clone();
+
+    let tracing_config =
+        common
+            .verbosity
+            .log_level()
+            .map(|log_level| crate::config::TracingConfig {
+                tracing_level: log_level,
+                json_tracing: common.json_tracing,
+                aws_sdk_tracing: common.aws_sdk_tracing,
+                span_events_tracing: common.span_events_tracing,
+                disable_color_tracing: common.disable_color_tracing,
+            });
+
+    let storage_class = common
+        .storage_class
+        .as_ref()
+        .map(|storage_class| StorageClass::from_str(storage_class).unwrap());
+
+    let sse = common
+        .sse
+        .as_ref()
+        .map(|sse| ServerSideEncryption::from_str(sse).unwrap());
+
+    let canned_acl = common
+        .acl
+        .as_ref()
+        .map(|acl| ObjectCannedAcl::from_str(acl).unwrap());
+
+    let mut additional_checksum_algorithm = common
+        .additional_checksum_algorithm
+        .as_ref()
+        .map(|algorithm| ChecksumAlgorithm::from(algorithm.as_str()));
+
+    let mut checksum_mode = if common.enable_additional_checksum {
+        Some(ChecksumMode::Enabled)
+    } else {
+        None
+    };
+
+    let tagging = common
+        .tagging
+        .as_ref()
+        .map(|tagging| tagging::parse_tagging(tagging).unwrap());
+
+    let metadata_parsed = if let Some(metadata) = common.metadata.as_ref() {
+        Some(metadata::parse_metadata(metadata)?)
+    } else {
+        None
+    };
+
+    let mut full_object_checksum = if additional_checksum_algorithm
+        .as_ref()
+        .is_some_and(|algorithm| algorithm == &ChecksumAlgorithm::Crc64Nvme)
+    {
+        true
+    } else {
+        common.full_object_checksum
+    };
+
+    let source_str = source.as_deref().unwrap_or("");
+    let target_str = target.as_deref().unwrap_or("");
+
+    if let StoragePath::S3 { bucket, .. } = storage_path::parse_storage_path(source_str) {
+        if super::is_express_onezone_storage(&bucket)
+            && !common.disable_express_one_zone_additional_checksum
+        {
+            checksum_mode = Some(ChecksumMode::Enabled);
+        }
+    }
+
+    let mut request_checksum_calculation = RequestChecksumCalculation::WhenRequired;
+    if let StoragePath::S3 { bucket, .. } = storage_path::parse_storage_path(target_str) {
+        if super::is_express_onezone_storage(&bucket)
+            && additional_checksum_algorithm.is_none()
+            && !common.disable_express_one_zone_additional_checksum
+        {
+            additional_checksum_algorithm = Some(ChecksumAlgorithm::Crc64Nvme);
+            full_object_checksum = true;
+            request_checksum_calculation = RequestChecksumCalculation::WhenSupported;
+        } else if additional_checksum_algorithm.is_some() {
+            request_checksum_calculation = RequestChecksumCalculation::WhenSupported;
+        }
+    }
+
+    let (source_client_config, target_client_config) =
+        original_common.build_client_configs(request_checksum_calculation);
+
+    let is_stdio_source = is_source_stdio(source_str);
+    let is_stdio_target = is_target_stdio(target_str);
+
+    let rate_limit_bandwidth = common
+        .rate_limit_bandwidth
+        .as_ref()
+        .map(|bandwidth| human_bytes::parse_human_bandwidth(bandwidth).unwrap());
+
+    Ok(Config {
+        source: storage_path::parse_storage_path(source_str),
+        target: storage_path::parse_storage_path(target_str),
+
+        show_progress: common.show_progress,
+
+        source_client_config,
+        target_client_config,
+
+        tracing_config,
+
+        transfer_config: crate::config::TransferConfig {
+            multipart_threshold: human_bytes::parse_human_bytes(&common.multipart_threshold)?,
+            multipart_chunksize: human_bytes::parse_human_bytes(&common.multipart_chunksize)?,
+            auto_chunksize: common.auto_chunksize,
+        },
+
+        disable_tagging: common.disable_tagging,
+        server_side_copy: common.server_side_copy,
+        no_guess_mime_type: common.no_guess_mime_type,
+        disable_multipart_verify: common.disable_multipart_verify,
+        disable_etag_verify: common.disable_etag_verify,
+        disable_additional_checksum_verify: common.disable_additional_checksum_verify,
+        storage_class,
+        sse,
+        sse_kms_key_id: SseKmsKeyId {
+            id: common.sse_kms_key_id,
+        },
+        source_sse_c: common.source_sse_c,
+        source_sse_c_key: SseCustomerKey {
+            key: common.source_sse_c_key,
+        },
+        source_sse_c_key_md5: common.source_sse_c_key_md5,
+        target_sse_c: common.target_sse_c,
+        target_sse_c_key: SseCustomerKey {
+            key: common.target_sse_c_key,
+        },
+        target_sse_c_key_md5: common.target_sse_c_key_md5,
+        canned_acl,
+        additional_checksum_algorithm,
+        additional_checksum_mode: checksum_mode,
+        cache_control: common.cache_control,
+        content_disposition: common.content_disposition,
+        content_encoding: common.content_encoding,
+        content_language: common.content_language,
+        content_type: common.content_type,
+        expires: common.expires,
+        metadata: metadata_parsed,
+        website_redirect: common.website_redirect,
+        no_sync_system_metadata: common.no_sync_system_metadata,
+        no_sync_user_defined_metadata: common.no_sync_user_defined_metadata,
+        tagging,
+        put_last_modified_metadata: common.put_last_modified_metadata,
+        disable_payload_signing: common.disable_payload_signing,
+        disable_content_md5_header: common.disable_content_md5_header,
+        full_object_checksum,
+        source_accelerate: common.source_accelerate,
+        target_accelerate: common.target_accelerate,
+        source_request_payer: common.source_request_payer,
+        target_request_payer: common.target_request_payer,
+        if_none_match: common.if_none_match,
+        disable_stalled_stream_protection: common.disable_stalled_stream_protection,
+        disable_express_one_zone_additional_checksum: common
+            .disable_express_one_zone_additional_checksum,
+        max_parallel_uploads: common.max_parallel_uploads,
+        rate_limit_bandwidth,
+        version_id: common.source_version_id,
+        is_stdio_source,
+        is_stdio_target,
+        no_fail_on_verify_error: false,
+    })
 }

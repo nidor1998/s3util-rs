@@ -1100,7 +1100,9 @@ impl TestHelper {
     /// Run a cp operation and collect stats.
     pub async fn cp_test_data(&self, args: Vec<&str>) -> StatsCount {
         let cli = parse_from_args(args).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         let config = Config::try_from(cp_args).unwrap();
 
         let cancellation_token = create_pipeline_cancellation_token();
@@ -1349,7 +1351,9 @@ impl TestHelper {
         stdin_bytes: Vec<u8>,
     ) -> StatsCount {
         let cli = parse_from_args(args).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         let config = Config::try_from(cp_args).unwrap();
 
         let cancellation_token = create_pipeline_cancellation_token();
@@ -1425,7 +1429,9 @@ impl TestHelper {
     /// Use this instead of `cp_test_data` when the target is `-` (stdout).
     pub async fn cp_test_data_s3_to_stdout(&self, args: Vec<&str>) -> (StatsCount, Vec<u8>) {
         let cli = parse_from_args(args).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         let config = Config::try_from(cp_args).unwrap();
 
         let cancellation_token = create_pipeline_cancellation_token();

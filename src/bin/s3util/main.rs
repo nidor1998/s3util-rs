@@ -38,6 +38,24 @@ async fn main() -> Result<()> {
             };
             std::process::exit(exit_code);
         }
+        Commands::Mv(mv_args) => {
+            if let Some(shell) = mv_args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+            let config = match Config::try_from(mv_args) {
+                Ok(config) => config,
+                Err(error_message) => {
+                    clap::Error::raw(clap::error::ErrorKind::ValueValidation, error_message).exit();
+                }
+            };
+            start_tracing_if_necessary(&config);
+            tracing::trace!("config = {:?}", config);
+            // Runner added in Task 7. For now, return error so the binary still
+            // compiles and `cargo build` is green.
+            eprintln!("s3util mv: not yet implemented");
+            std::process::exit(cli::EXIT_CODE_ERROR);
+        }
     }
 }
 
@@ -56,7 +74,9 @@ mod tests {
 
     fn build_config(args: Vec<&str>) -> Config {
         let cli = parse_from_args(args).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         Config::try_from(cp_args).unwrap()
     }
 

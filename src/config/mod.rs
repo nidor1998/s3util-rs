@@ -65,6 +65,7 @@ pub struct Config {
     pub version_id: Option<String>,
     pub is_stdio_source: bool,
     pub is_stdio_target: bool,
+    pub no_fail_on_verify_error: bool,
 }
 
 #[derive(Debug, Clone)]

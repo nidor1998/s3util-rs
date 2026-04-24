@@ -496,7 +496,9 @@ mod tests {
 
     fn build_config(args: Vec<&str>) -> Config {
         let cli = parse_from_args(args).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         Config::try_from(cp_args).unwrap()
     }
 

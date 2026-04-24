@@ -1,8 +1,9 @@
 #[cfg(test)]
 #[allow(clippy::module_inception)]
 mod tests {
-    use crate::config::args::{build_config_from_args, parse_from_args};
-    use crate::types::S3Credentials;
+    use crate::config::Config;
+    use crate::config::args::{Commands, build_config_from_args, parse_from_args};
+    use crate::types::{S3Credentials, StoragePath};
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
         vec![
@@ -45,9 +46,10 @@ mod tests {
         // check_both_local in the validation chain, so the NO_S3_STORAGE
         // branch is defensive. Call the method directly on a CpArgs with
         // two local paths to exercise that branch.
-        use crate::config::args::Commands;
         let cli = parse_from_args(args_with("/tmp/a", "/tmp/b")).unwrap();
-        let Commands::Cp(cp_args) = cli.command;
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
         let err = cp_args.check_at_least_one_s3_or_stdio().unwrap_err();
         assert!(
             err.contains("either SOURCE or TARGET must be s3://"),
@@ -878,5 +880,98 @@ mod tests {
             err.contains("--source-no-sign-request, source must be s3://"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn mv_parses_with_local_to_s3() {
+        let cli = parse_from_args(vec!["s3util", "mv", "/tmp/a", "s3://b/k"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(matches!(config.source, StoragePath::Local(_)));
+        assert!(matches!(config.target, StoragePath::S3 { .. }));
+        assert!(!config.no_fail_on_verify_error);
+    }
+
+    #[test]
+    fn mv_no_fail_on_verify_error_default_false() {
+        let cli = parse_from_args(vec!["s3util", "mv", "/tmp/a", "s3://b/k"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(!config.no_fail_on_verify_error);
+    }
+
+    #[test]
+    fn mv_no_fail_on_verify_error_can_be_set() {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "mv",
+            "--no-fail-on-verify-error",
+            "/tmp/a",
+            "s3://b/k",
+        ])
+        .unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(config.no_fail_on_verify_error);
+    }
+
+    #[test]
+    fn mv_rejects_stdio_source() {
+        let cli = parse_from_args(vec!["s3util", "mv", "-", "s3://b/k"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(
+            err.contains("stdin/stdout (-) is not supported by mv"),
+            "actual: {err}"
+        );
+    }
+
+    #[test]
+    fn mv_rejects_stdio_target() {
+        let cli = parse_from_args(vec!["s3util", "mv", "s3://b/k", "-"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(
+            err.contains("stdin/stdout (-) is not supported by mv"),
+            "actual: {err}"
+        );
+    }
+
+    #[test]
+    fn mv_rejects_both_local() {
+        let cli = parse_from_args(vec!["s3util", "mv", "/tmp/a", "/tmp/b"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(err.contains("source and target cannot both be local"));
+    }
+
+    #[test]
+    fn mv_inherits_storage_class_validation() {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "mv",
+            "--storage-class",
+            "STANDARD",
+            "s3://b/k",
+            "/tmp/a",
+        ])
+        .unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(err.contains("--storage-class"));
     }
 }

@@ -10,12 +10,14 @@ shadow!(build);
 
 pub mod common;
 pub mod cp;
+pub mod mv;
 pub mod value_parser;
 
 #[cfg(test)]
 mod tests;
 
 pub use cp::CpArgs;
+pub use mv::MvArgs;
 
 // Re-exports kept here so existing callers that reference
 // `crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX`
@@ -47,6 +49,8 @@ pub struct Cli {
 pub enum Commands {
     /// Copy objects from/to S3
     Cp(CpArgs),
+    /// Move objects from/to S3 (copy then delete source)
+    Mv(MvArgs),
 }
 
 pub fn parse_from_args<I, T>(args: I) -> Result<Cli, clap::Error>
@@ -65,6 +69,7 @@ where
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
+        Commands::Mv(mv_args) => Config::try_from(mv_args),
     }
 }
 

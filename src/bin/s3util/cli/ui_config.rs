@@ -35,6 +35,13 @@ mod tests {
 
     use super::*;
 
+    fn cp_args_from(cli: Cli) -> s3util_rs::config::args::CpArgs {
+        match cli.command {
+            Commands::Cp(cp_args) => cp_args,
+            Commands::Mv(_) => panic!("expected Cp variant"),
+        }
+    }
+
     #[test]
     fn is_progress_indicator_needed_json_tracing() {
         init_dummy_tracing_subscriber();
@@ -50,12 +57,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(!is_progress_indicator_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(!is_progress_indicator_needed(&config));
     }
 
     #[test]
@@ -72,12 +75,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(is_progress_indicator_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(is_progress_indicator_needed(&config));
     }
 
     #[test]
@@ -95,12 +94,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(is_progress_indicator_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(is_progress_indicator_needed(&config));
     }
 
     #[test]
@@ -116,12 +111,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(!is_progress_indicator_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(!is_progress_indicator_needed(&config));
     }
 
     #[test]
@@ -139,12 +130,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(!is_progress_indicator_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(!is_progress_indicator_needed(&config));
     }
 
     #[test]
@@ -160,12 +147,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(!is_show_result_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(!is_show_result_needed(&config));
     }
 
     #[test]
@@ -183,12 +166,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(is_show_result_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(is_show_result_needed(&config));
     }
 
     #[test]
@@ -207,12 +186,8 @@ mod tests {
             "/target-dir",
         ])
         .unwrap();
-        match cli.command {
-            Commands::Cp(cp_args) => {
-                let config = Config::try_from(cp_args).unwrap();
-                assert!(!is_show_result_needed(&config));
-            }
-        }
+        let config = Config::try_from(cp_args_from(cli)).unwrap();
+        assert!(!is_show_result_needed(&config));
     }
 
     fn init_dummy_tracing_subscriber() {
