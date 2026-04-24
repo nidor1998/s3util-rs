@@ -52,6 +52,18 @@ pub enum TransferDirection {
     S3ToStdio,
 }
 
+/// Information surfaced by a transfer call that downstream subcommands may need.
+///
+/// Today only `mv` consumes this. `cp` ignores it. Designed as a struct (rather
+/// than `Option<String>`) so future fields (e.g. `etag`, `last_modified`) can
+/// be added without churning every call site.
+#[derive(Debug, Default, Clone)]
+pub struct TransferOutcome {
+    /// The source object's version-id observed at copy time.
+    /// `None` for Local/stdio sources or non-versioned buckets.
+    pub source_version_id: Option<String>,
+}
+
 fn is_s3_path(path: &str) -> bool {
     path.starts_with("s3://")
 }
@@ -82,6 +94,12 @@ pub fn detect_direction(source: &str, target: &str) -> Result<TransferDirection>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn transfer_outcome_default_has_no_version_id() {
+        let outcome = TransferOutcome::default();
+        assert_eq!(outcome.source_version_id, None);
+    }
 
     #[test]
     fn detect_local_to_s3() {

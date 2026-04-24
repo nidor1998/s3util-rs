@@ -9,6 +9,7 @@ use tokio::io::AsyncReadExt;
 use crate::Config;
 use crate::storage::Storage;
 use crate::storage::checksum::AdditionalChecksum;
+use crate::transfer::TransferOutcome;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{ObjectChecksum, SyncStatistics};
 
@@ -42,9 +43,9 @@ pub async fn transfer(
     mut reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     let threshold = config.transfer_config.multipart_threshold as usize;
@@ -84,7 +85,7 @@ async fn transfer_streaming(
     reader: impl tokio::io::AsyncRead + Unpin + Send + 'static,
     _cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     // Chain the already-buffered bytes with the remaining reader.
     let chained: Box<dyn tokio::io::AsyncRead + Send + Unpin> =
         Box::new(std::io::Cursor::new(initial).chain(reader));
@@ -115,7 +116,7 @@ async fn transfer_streaming(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }
 
 async fn transfer_buffered(
@@ -125,7 +126,7 @@ async fn transfer_buffered(
     buffer: Vec<u8>,
     _cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     let target_clone = dyn_clone::clone_box(&*target);
 
     let source_size = buffer.len() as u64;
@@ -219,7 +220,7 @@ async fn transfer_buffered(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }
 
 /// Compute the additional checksum over an in-memory buffer using chunksize-aware

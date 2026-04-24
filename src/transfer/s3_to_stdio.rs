@@ -8,6 +8,7 @@ use crate::storage::Storage;
 use crate::storage::additional_checksum_verify::is_multipart_upload_checksum;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::storage::e_tag_verify::{generate_e_tag_hash, normalize_e_tag, verify_e_tag};
+use crate::transfer::TransferOutcome;
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, detect_additional_checksum, is_full_object_checksum};
@@ -23,9 +24,9 @@ pub async fn transfer(
     mut writer: impl tokio::io::AsyncWrite + Unpin + Send,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     // Get object from S3 source
@@ -43,7 +44,7 @@ pub async fn transfer(
         .context(format!("failed to download source object: {source_key}"))?;
 
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     let source_size = get_object_output.content_length().unwrap_or(0) as u64;
@@ -313,5 +314,5 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }

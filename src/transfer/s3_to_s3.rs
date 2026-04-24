@@ -4,7 +4,7 @@ use tracing::{debug, warn};
 
 use crate::Config;
 use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
-use crate::transfer::{first_chunk, translate_source_head_object_error};
+use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, get_additional_checksum};
 
@@ -26,9 +26,9 @@ pub async fn transfer(
     target_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     let source_clone = dyn_clone::clone_box(&*source);
@@ -100,7 +100,7 @@ pub async fn transfer(
     };
 
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     // Validate content range if range was used
@@ -230,5 +230,5 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }

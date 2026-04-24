@@ -4,6 +4,7 @@ use tracing::{debug, warn};
 
 use crate::Config;
 use crate::storage::Storage;
+use crate::transfer::TransferOutcome;
 use crate::transfer::first_chunk;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, get_additional_checksum};
@@ -22,9 +23,9 @@ pub async fn transfer(
     target_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     let source_clone = dyn_clone::clone_box(&*source);
@@ -74,7 +75,7 @@ pub async fn transfer(
         .context(format!("failed to read source file: {source_key}"))?;
 
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     // Validate content range if range was used
@@ -166,5 +167,5 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }

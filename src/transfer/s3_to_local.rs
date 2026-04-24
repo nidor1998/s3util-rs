@@ -4,7 +4,7 @@ use tracing::debug;
 
 use crate::Config;
 use crate::storage::Storage;
-use crate::transfer::{first_chunk, translate_source_head_object_error};
+use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, detect_additional_checksum_with_head_object};
 
@@ -23,9 +23,9 @@ pub async fn transfer(
     target_key: &str,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
-) -> Result<()> {
+) -> Result<TransferOutcome> {
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     let source_clone = dyn_clone::clone_box(&*source);
@@ -93,7 +93,7 @@ pub async fn transfer(
         .context(format!("failed to download source object: {source_key}"))?;
 
     if cancellation_token.is_cancelled() {
-        return Ok(());
+        return Ok(TransferOutcome::default());
     }
 
     if range.is_some() {
@@ -149,5 +149,5 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(())
+    Ok(TransferOutcome::default())
 }

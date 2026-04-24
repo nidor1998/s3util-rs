@@ -109,7 +109,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let has_warning = Arc::new(AtomicBool::new(false));
     let rate_limit_bandwidth = build_rate_limiter(&config);
 
-    let result = match direction {
+    let result: Result<()> = match direction {
         TransferDirection::LocalToS3 => {
             let target_request_payer = if config.target_request_payer {
                 Some(RequestPayer::Requester)
@@ -153,6 +153,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 stats_sender.clone(),
             )
             .await
+            .map(|_| ())
         }
         TransferDirection::S3ToLocal => {
             let source_request_payer = if config.source_request_payer {
@@ -197,6 +198,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 stats_sender.clone(),
             )
             .await
+            .map(|_| ())
         }
         TransferDirection::S3ToS3 => {
             let source_request_payer = if config.source_request_payer {
@@ -246,6 +248,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 stats_sender.clone(),
             )
             .await
+            .map(|_| ())
         }
         TransferDirection::StdioToS3 => {
             let target_request_payer = if config.target_request_payer {
@@ -276,6 +279,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 stats_sender.clone(),
             )
             .await
+            .map(|_| ())
         }
         TransferDirection::S3ToStdio => {
             let source_request_payer = if config.source_request_payer {
@@ -306,6 +310,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 stats_sender.clone(),
             )
             .await
+            .map(|_| ())
         }
     };
 
