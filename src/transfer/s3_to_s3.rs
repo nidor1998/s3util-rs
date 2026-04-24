@@ -48,6 +48,13 @@ pub async fn transfer(
         .await
         .map_err(|e| translate_source_head_object_error(e, source_key))?;
 
+    // Capture the source version-id observed at HEAD time. Threaded into the
+    // returned TransferOutcome so `s3util mv` can delete exactly the version
+    // that was copied, preserving any newer concurrent versions. Captured
+    // identically for both the server-side-copy and download+upload paths —
+    // head_object is read in both branches before the dispatch.
+    let source_version_id = head_object_output.version_id().map(String::from);
+
     let source_size = head_object_output.content_length().unwrap_or(0);
     let source_tag_count = head_object_output.tag_count();
 
@@ -230,5 +237,424 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(TransferOutcome::default())
+    Ok(TransferOutcome { source_version_id })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::TransferConfig;
+    use crate::storage::StorageTrait;
+    use crate::types::SseCustomerKey;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use anyhow::anyhow;
+    use async_channel::Sender;
+    use async_trait::async_trait;
+    use aws_sdk_s3::Client;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::operation::get_object::GetObjectOutput;
+    use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+    use aws_sdk_s3::operation::put_object::PutObjectOutput;
+    use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+    use aws_sdk_s3::primitives::{ByteStream, DateTime};
+    use aws_sdk_s3::types::{ChecksumMode, ObjectPart, Tagging};
+    use leaky_bucket::RateLimiter;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// Minimal mock used to drive `transfer()` through to a successful return
+    /// without touching real S3. `version_id` is the value head_object surfaces
+    /// — verified via `TransferOutcome.source_version_id` after the call.
+    #[derive(Clone)]
+    struct MockSource {
+        version_id: Option<String>,
+    }
+
+    #[async_trait]
+    impl StorageTrait for MockSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            Ok(GetObjectOutput::builder()
+                .body(ByteStream::from(b"data".to_vec()))
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .set_version_id(self.version_id.clone())
+                .build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            // tag_count is left None so tagging short-circuits without calling
+            // get_object_tagging in the non-disabled, no-explicit-tagging path.
+            Ok(HeadObjectOutput::builder()
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .set_version_id(self.version_id.clone())
+                .build())
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            Err(anyhow!(
+                "MockSource::put_object should not be invoked in this test"
+            ))
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Mock S3 target — returns a populated PutObjectOutput so the etag-present
+    /// debug branch is taken (as opposed to the warn branch on no etag).
+    #[derive(Clone)]
+    struct MockTarget;
+
+    #[async_trait]
+    impl StorageTrait for MockTarget {
+        fn is_local_storage(&self) -> bool {
+            // S3 target. Drives build_object_checksum's target.is_local_storage()
+            // gate the same way the real s3-to-s3 flow does.
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            Ok(PutObjectOutput::builder().e_tag("\"target-etag\"").build())
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Config tuned to skip first-chunk/multipart and disable all checksum/etag
+    /// gating that would require richer fixtures than the head response.
+    fn minimal_config(server_side_copy: bool) -> Config {
+        Config {
+            source: crate::types::StoragePath::S3 {
+                bucket: "src".to_string(),
+                prefix: String::new(),
+            },
+            target: crate::types::StoragePath::S3 {
+                bucket: "dst".to_string(),
+                prefix: String::new(),
+            },
+            show_progress: false,
+            source_client_config: None,
+            target_client_config: None,
+            tracing_config: None,
+            transfer_config: TransferConfig {
+                multipart_threshold: 8 * 1024 * 1024,
+                multipart_chunksize: 8 * 1024 * 1024,
+                auto_chunksize: false,
+            },
+            disable_tagging: false,
+            server_side_copy,
+            no_guess_mime_type: false,
+            disable_multipart_verify: false,
+            disable_etag_verify: false,
+            disable_additional_checksum_verify: false,
+            storage_class: None,
+            sse: None,
+            sse_kms_key_id: crate::types::SseKmsKeyId { id: None },
+            source_sse_c: None,
+            source_sse_c_key: SseCustomerKey { key: None },
+            source_sse_c_key_md5: None,
+            target_sse_c: None,
+            target_sse_c_key: SseCustomerKey { key: None },
+            target_sse_c_key_md5: None,
+            canned_acl: None,
+            additional_checksum_mode: None,
+            additional_checksum_algorithm: None,
+            cache_control: None,
+            content_disposition: None,
+            content_encoding: None,
+            content_language: None,
+            content_type: None,
+            expires: None,
+            metadata: None,
+            no_sync_system_metadata: false,
+            no_sync_user_defined_metadata: false,
+            website_redirect: None,
+            tagging: None,
+            put_last_modified_metadata: false,
+            disable_payload_signing: false,
+            disable_content_md5_header: false,
+            full_object_checksum: false,
+            source_accelerate: false,
+            target_accelerate: false,
+            source_request_payer: false,
+            target_request_payer: false,
+            if_none_match: false,
+            disable_stalled_stream_protection: false,
+            disable_express_one_zone_additional_checksum: false,
+            max_parallel_uploads: 1,
+            rate_limit_bandwidth: None,
+            version_id: None,
+            is_stdio_source: false,
+            is_stdio_target: false,
+            no_fail_on_verify_error: false,
+        }
+    }
+
+    #[tokio::test]
+    async fn transfer_captures_source_version_id_from_head_object() {
+        let config = minimal_config(false);
+        let source: Storage = Box::new(MockSource {
+            version_id: Some("V123".to_string()),
+        });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id.as_deref(), Some("V123"));
+    }
+
+    #[tokio::test]
+    async fn transfer_captures_none_when_head_object_has_no_version_id() {
+        let config = minimal_config(false);
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id, None);
+    }
+
+    #[tokio::test]
+    async fn transfer_captures_source_version_id_in_server_side_copy_mode() {
+        // Server-side copy bypasses the source GET — version-id capture comes
+        // from the head_object response identically to the download+upload path.
+        let config = minimal_config(true);
+        let source: Storage = Box::new(MockSource {
+            version_id: Some("V456".to_string()),
+        });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id.as_deref(), Some("V456"));
+    }
 }
