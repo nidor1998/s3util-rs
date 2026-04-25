@@ -40,12 +40,15 @@ mod tests {
             Commands::Cp(cp_args) => cp_args,
             Commands::CreateBucket(_)
             | Commands::DeleteBucket(_)
+            | Commands::DeleteBucketPolicy(_)
             | Commands::DeleteObjectTagging(_)
+            | Commands::GetBucketPolicy(_)
             | Commands::GetBucketVersioning(_)
             | Commands::GetObjectTagging(_)
             | Commands::HeadBucket(_)
             | Commands::HeadObject(_)
             | Commands::Mv(_)
+            | Commands::PutBucketPolicy(_)
             | Commands::PutBucketVersioning(_)
             | Commands::PutObjectTagging(_)
             | Commands::Rm(_) => {

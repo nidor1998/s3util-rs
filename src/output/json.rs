@@ -5,12 +5,27 @@
 //! `aws s3api --output json` surface 1-to-1 (PascalCase, omission semantics,
 //! double-encoded `Policy`, etc.).
 
+use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
+
+/// Serialise a `GetBucketPolicyOutput` to AWS CLI v2 `--output json` shape.
+///
+/// Mirrors `aws s3api get-bucket-policy --output json`: emits
+/// `{"Policy": "<escaped-JSON-string>"}`. The `Policy` value is the raw
+/// policy JSON string returned by S3, double-encoded as a JSON string.
+/// When S3 does not return a policy, the output is `{}`.
+pub fn get_bucket_policy_to_json(out: &GetBucketPolicyOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(policy) = out.policy() {
+        map.insert("Policy".to_string(), Value::String(policy.to_string()));
+    }
+    Value::Object(map)
+}
 
 /// Serialise a `GetBucketVersioningOutput` to AWS CLI v2 `--output json` shape.
 ///
@@ -263,10 +278,45 @@ pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
     use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
     use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
     use aws_sdk_s3::operation::head_object::HeadObjectOutput;
     use aws_sdk_s3::types::{BucketVersioningStatus, MfaDeleteStatus, Tag};
+
+    // ----- get_bucket_policy_to_json tests -----
+
+    #[test]
+    fn get_bucket_policy_with_policy_string() {
+        let policy_str = r#"{"Version":"2012-10-17","Statement":[]}"#;
+        let out = GetBucketPolicyOutput::builder().policy(policy_str).build();
+        let json = get_bucket_policy_to_json(&out);
+        assert_eq!(
+            json["Policy"],
+            Value::String(policy_str.to_string()),
+            "Policy must be the raw JSON string (double-encoded)"
+        );
+    }
+
+    #[test]
+    fn get_bucket_policy_absent_policy_yields_empty_object() {
+        let out = GetBucketPolicyOutput::builder().build();
+        let json = get_bucket_policy_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_policy_pretty_printed_uses_pascal_case_key() {
+        let out = GetBucketPolicyOutput::builder()
+            .policy(r#"{"Version":"2012-10-17"}"#)
+            .build();
+        let json = get_bucket_policy_to_json(&out);
+        let pretty = serde_json::to_string_pretty(&json).unwrap();
+        assert!(
+            pretty.contains("\"Policy\""),
+            "key must be PascalCase: {pretty}"
+        );
+    }
 
     // ----- get_bucket_versioning_to_json tests -----
 

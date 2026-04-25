@@ -11,12 +11,15 @@ use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
 use aws_sdk_s3::operation::delete_bucket::DeleteBucketOutput;
+use aws_sdk_s3::operation::delete_bucket_policy::DeleteBucketPolicyOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
+use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::put_bucket_policy::PutBucketPolicyOutput;
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
@@ -259,4 +262,50 @@ pub async fn get_bucket_versioning(
         .send()
         .await
         .with_context(|| format!("get-bucket-versioning on s3://{bucket}"))
+}
+
+/// Issue `PutBucketPolicy` for `bucket` with the given `policy` JSON string.
+///
+/// The policy is sent verbatim; s3util performs no client-side validation.
+/// S3 rejects malformed or invalid policies with `400 MalformedPolicy`.
+pub async fn put_bucket_policy(
+    client: &Client,
+    bucket: &str,
+    policy: &str,
+) -> Result<PutBucketPolicyOutput> {
+    client
+        .put_bucket_policy()
+        .bucket(bucket)
+        .policy(policy)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-policy on s3://{bucket}"))
+}
+
+/// Issue `GetBucketPolicy` for `bucket`. Returns the SDK response on success.
+///
+/// S3 returns `404 NoSuchBucketPolicy` when no policy is attached; this is
+/// surfaced as an error with the original context.
+pub async fn get_bucket_policy(client: &Client, bucket: &str) -> Result<GetBucketPolicyOutput> {
+    client
+        .get_bucket_policy()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("get-bucket-policy on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketPolicy` for `bucket`. Returns the SDK response on success.
+///
+/// Exits silently on success; the caller surfaces errors as exit code 1.
+pub async fn delete_bucket_policy(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketPolicyOutput> {
+    client
+        .delete_bucket_policy()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-policy on s3://{bucket}"))
 }

@@ -262,6 +262,72 @@ async fn main() -> Result<()> {
             };
             std::process::exit(exit_code);
         }
+        Commands::PutBucketPolicy(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_put_bucket_policy(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            std::process::exit(exit_code);
+        }
+        Commands::GetBucketPolicy(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_get_bucket_policy(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            std::process::exit(exit_code);
+        }
+        Commands::DeleteBucketPolicy(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_delete_bucket_policy(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            std::process::exit(exit_code);
+        }
         Commands::GetBucketVersioning(args) => {
             if let Some(shell) = args.auto_complete_shell() {
                 generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
