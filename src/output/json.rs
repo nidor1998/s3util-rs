@@ -584,4 +584,208 @@ mod tests {
         assert!(pretty.contains("\"BucketRegion\""));
         assert!(pretty.contains("\"AccessPointAlias\""));
     }
+
+    #[test]
+    fn head_bucket_with_location_type_and_name() {
+        use aws_sdk_s3::types::LocationType;
+        let out = HeadBucketOutput::builder()
+            .bucket_region("us-east-1")
+            .bucket_location_type(LocationType::AvailabilityZone)
+            .bucket_location_name("use1-az4")
+            .build();
+        let json = head_bucket_to_json(&out);
+        assert_eq!(
+            json["BucketLocationType"],
+            Value::String("AvailabilityZone".into())
+        );
+        assert_eq!(json["BucketLocationName"], Value::String("use1-az4".into()));
+    }
+
+    // ----- head_object_to_json tests for all conditional fields -----
+    //
+    // The existing tests above cover the common-fields and SSE-KMS paths.
+    // The tests below exercise each remaining optional branch one at a time
+    // so the JSON serialiser stays in lockstep with the AWS-CLI shape it
+    // claims to mirror. New SDK fields added later should add a parallel test.
+
+    #[test]
+    fn head_object_with_content_disposition() {
+        let out = HeadObjectOutput::builder()
+            .content_disposition("attachment; filename=\"x.txt\"")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ContentDisposition"],
+            Value::String("attachment; filename=\"x.txt\"".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_expires_string() {
+        let out = HeadObjectOutput::builder()
+            .expires_string("Wed, 21 Oct 2026 07:28:00 GMT")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["Expires"],
+            Value::String("Wed, 21 Oct 2026 07:28:00 GMT".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_metadata_non_empty() {
+        let out = HeadObjectOutput::builder()
+            .metadata("k1", "v1")
+            .metadata("k2", "v2")
+            .build();
+        let json = head_object_to_json(&out);
+        let meta = json["Metadata"]
+            .as_object()
+            .expect("Metadata must be object");
+        assert_eq!(meta["k1"], Value::String("v1".into()));
+        assert_eq!(meta["k2"], Value::String("v2".into()));
+    }
+
+    #[test]
+    fn head_object_with_empty_metadata_omits_key() {
+        // The SDK can produce Some(empty map) when no user metadata is set;
+        // the serialiser must omit the Metadata key in that case (matching
+        // aws s3api which only emits Metadata when at least one entry exists).
+        let out = HeadObjectOutput::builder().build();
+        let json = head_object_to_json(&out);
+        assert!(json.get("Metadata").is_none());
+    }
+
+    #[test]
+    fn head_object_with_storage_class_and_parts_count() {
+        use aws_sdk_s3::types::StorageClass;
+        let out = HeadObjectOutput::builder()
+            .storage_class(StorageClass::Standard)
+            .parts_count(3)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["StorageClass"], Value::String("STANDARD".into()));
+        assert_eq!(json["PartsCount"], Value::Number(3i32.into()));
+    }
+
+    #[test]
+    fn head_object_with_archive_status_and_restore() {
+        use aws_sdk_s3::types::ArchiveStatus;
+        let out = HeadObjectOutput::builder()
+            .archive_status(ArchiveStatus::ArchiveAccess)
+            .restore("ongoing-request=\"false\"")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ArchiveStatus"],
+            Value::String("ARCHIVE_ACCESS".into())
+        );
+        assert_eq!(
+            json["Restore"],
+            Value::String("ongoing-request=\"false\"".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_object_lock_fields() {
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::{ObjectLockLegalHoldStatus, ObjectLockMode};
+        // Pick any fixed UTC instant; we assert the formatted shape, not the
+        // specific calendar date, so we don't depend on epoch arithmetic.
+        let until = DateTime::from_secs(1_700_000_000);
+        let out = HeadObjectOutput::builder()
+            .object_lock_mode(ObjectLockMode::Compliance)
+            .object_lock_retain_until_date(until)
+            .object_lock_legal_hold_status(ObjectLockLegalHoldStatus::On)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["ObjectLockMode"], Value::String("COMPLIANCE".into()));
+        let retain = json["ObjectLockRetainUntilDate"]
+            .as_str()
+            .expect("retain date must be string");
+        // RFC3339 shape: YYYY-MM-DDTHH:MM:SS[.fff]+00:00 (or Z)
+        assert!(
+            retain.len() >= 20 && retain.contains('T'),
+            "expected RFC3339-shaped string, got {retain}"
+        );
+        assert!(
+            retain.ends_with("+00:00") || retain.ends_with('Z'),
+            "expected UTC suffix, got {retain}"
+        );
+        assert_eq!(
+            json["ObjectLockLegalHoldStatus"],
+            Value::String("ON".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_all_checksum_variants() {
+        use aws_sdk_s3::types::ChecksumType;
+        let out = HeadObjectOutput::builder()
+            .checksum_sha256("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .checksum_sha1("AAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .checksum_crc32("AAAAAA==")
+            .checksum_crc32_c("AAAAAA==")
+            .checksum_crc64_nvme("AAAAAAAAAAA=")
+            .checksum_type(ChecksumType::FullObject)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumSHA256"],
+            Value::String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into())
+        );
+        assert_eq!(
+            json["ChecksumSHA1"],
+            Value::String("AAAAAAAAAAAAAAAAAAAAAAAAAAA=".into())
+        );
+        assert_eq!(json["ChecksumCRC32"], Value::String("AAAAAA==".into()));
+        assert_eq!(json["ChecksumCRC32C"], Value::String("AAAAAA==".into()));
+        assert_eq!(
+            json["ChecksumCRC64NVME"],
+            Value::String("AAAAAAAAAAA=".into())
+        );
+        assert_eq!(json["ChecksumType"], Value::String("FULL_OBJECT".into()));
+    }
+
+    #[test]
+    fn head_object_with_request_charged_and_replication_status() {
+        use aws_sdk_s3::types::{ReplicationStatus, RequestCharged};
+        let out = HeadObjectOutput::builder()
+            .request_charged(RequestCharged::Requester)
+            .replication_status(ReplicationStatus::Completed)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["RequestCharged"], Value::String("requester".into()));
+        assert_eq!(json["ReplicationStatus"], Value::String("COMPLETED".into()));
+    }
+
+    #[test]
+    fn head_object_with_website_redirect_and_expiration() {
+        let out = HeadObjectOutput::builder()
+            .website_redirect_location("/new-location")
+            .expiration("expiry-date=\"Fri, 23 Dec 2026 00:00:00 GMT\", rule-id=\"rule-1\"")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["WebsiteRedirectLocation"],
+            Value::String("/new-location".into())
+        );
+        assert_eq!(
+            json["Expiration"],
+            Value::String(
+                "expiry-date=\"Fri, 23 Dec 2026 00:00:00 GMT\", rule-id=\"rule-1\"".into()
+            )
+        );
+    }
+
+    #[test]
+    fn head_object_with_missing_meta_and_delete_marker() {
+        let out = HeadObjectOutput::builder()
+            .missing_meta(2)
+            .delete_marker(true)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["MissingMeta"], Value::Number(2i32.into()));
+        assert_eq!(json["DeleteMarker"], Value::Bool(true));
+    }
 }
