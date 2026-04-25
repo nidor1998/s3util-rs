@@ -231,24 +231,21 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
         })
 }
 
-/// Issue `CreateBucket` for `bucket` in the given `region`.
+/// Issue `CreateBucket` for `bucket`. The `LocationConstraint` is derived
+/// from the SDK client's resolved region (which honours `--target-region`,
+/// `AWS_REGION`, and the active profile's region in that order).
 ///
 /// The `us-east-1` quirk: S3 rejects a `LocationConstraint` of `us-east-1`
-/// (the API was designed before that region existed). When `region` is `None`
-/// or `"us-east-1"`, the constraint is omitted entirely.
-pub async fn create_bucket(
-    client: &Client,
-    bucket: &str,
-    region: Option<&str>,
-) -> Result<CreateBucketOutput> {
+/// (the API was designed before that region existed), so the constraint is
+/// omitted there. It is also omitted when the client has no resolved region.
+pub async fn create_bucket(client: &Client, bucket: &str) -> Result<CreateBucketOutput> {
     let mut req = client.create_bucket().bucket(bucket);
 
-    let needs_constraint = region
-        .map(|r| !r.is_empty() && r != "us-east-1")
-        .unwrap_or(false);
-
-    if needs_constraint {
-        let constraint = BucketLocationConstraint::from(region.unwrap());
+    if let Some(region) = client.config().region().map(|r| r.as_ref())
+        && !region.is_empty()
+        && region != "us-east-1"
+    {
+        let constraint = BucketLocationConstraint::from(region);
         let cfg = CreateBucketConfiguration::builder()
             .location_constraint(constraint)
             .build();

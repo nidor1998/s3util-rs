@@ -21,10 +21,9 @@ pub async fn run_create_bucket(
     let bucket = args
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
-    let region = client_config.region.clone();
     let client = client_config.create_client().await;
 
-    api::create_bucket(&client, &bucket, region.as_deref()).await?;
+    api::create_bucket(&client, &bucket).await?;
 
     if let Some(raw_tagging) = args.tagging.as_deref() {
         let tags = parse_tagging_to_tags(raw_tagging)?;

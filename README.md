@@ -104,7 +104,7 @@ Beyond `cp`/`mv`, `s3util` ships a set of single-call wrappers that mirror `aws 
 | `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
 | `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
-| `create-bucket`          | Creates a bucket; region from `--target-region`; optional `--tagging`; exit 3 if tagging step fails after create |
+| `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; exit 3 if tagging step fails after create |
 | `delete-bucket`          | Deletes an empty bucket; silent on success                                                    |
 | `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
 | `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}` or `{}`); silent on unset            |
@@ -418,7 +418,7 @@ s3util delete-bucket-tagging s3://my-bucket
 
 ### Manage a bucket (create / delete)
 
-Create a bucket (LocationConstraint is inferred from `--target-region`; `us-east-1` is handled as the AWS default):
+Create a bucket (LocationConstraint is inferred from the SDK client's resolved region — `--target-region`, `AWS_REGION`, or the active profile; `us-east-1` is handled as the AWS default):
 
 ```bash
 s3util create-bucket --target-region us-west-2 s3://my-new-bucket
