@@ -9,13 +9,18 @@
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
+use aws_sdk_s3::operation::delete_bucket::DeleteBucketOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
-use aws_sdk_s3::types::{ChecksumMode, Tagging};
+use aws_sdk_s3::types::{
+    BucketLocationConstraint, ChecksumMode, CreateBucketConfiguration, Tagging,
+};
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -157,4 +162,62 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
         .send()
         .await
         .with_context(|| format!("head-bucket on s3://{bucket}"))
+}
+
+/// Issue `CreateBucket` for `bucket` in the given `region`.
+///
+/// The `us-east-1` quirk: S3 rejects a `LocationConstraint` of `us-east-1`
+/// (the API was designed before that region existed). When `region` is `None`
+/// or `"us-east-1"`, the constraint is omitted entirely.
+pub async fn create_bucket(
+    client: &Client,
+    bucket: &str,
+    region: Option<&str>,
+) -> Result<CreateBucketOutput> {
+    let mut req = client.create_bucket().bucket(bucket);
+
+    let needs_constraint = region
+        .map(|r| !r.is_empty() && r != "us-east-1")
+        .unwrap_or(false);
+
+    if needs_constraint {
+        let constraint = BucketLocationConstraint::from(region.unwrap());
+        let cfg = CreateBucketConfiguration::builder()
+            .location_constraint(constraint)
+            .build();
+        req = req.create_bucket_configuration(cfg);
+    }
+
+    req.send()
+        .await
+        .with_context(|| format!("create-bucket on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucket` for `bucket`. Returns the SDK response on success.
+///
+/// The bucket must be empty; S3 returns `409 BucketNotEmpty` otherwise.
+pub async fn delete_bucket(client: &Client, bucket: &str) -> Result<DeleteBucketOutput> {
+    client
+        .delete_bucket()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket on s3://{bucket}"))
+}
+
+/// Issue `PutBucketTagging` for `bucket`. Returns the SDK response on success.
+///
+/// Replaces all existing tags on the bucket with the provided `tagging`.
+pub async fn put_bucket_tagging(
+    client: &Client,
+    bucket: &str,
+    tagging: Tagging,
+) -> Result<PutBucketTaggingOutput> {
+    client
+        .put_bucket_tagging()
+        .bucket(bucket)
+        .tagging(tagging)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-tagging on s3://{bucket}"))
 }

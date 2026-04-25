@@ -38,7 +38,9 @@ mod tests {
     fn cp_args_from(cli: Cli) -> s3util_rs::config::args::CpArgs {
         match cli.command {
             Commands::Cp(cp_args) => cp_args,
-            Commands::DeleteObjectTagging(_)
+            Commands::CreateBucket(_)
+            | Commands::DeleteBucket(_)
+            | Commands::DeleteObjectTagging(_)
             | Commands::GetObjectTagging(_)
             | Commands::HeadBucket(_)
             | Commands::HeadObject(_)

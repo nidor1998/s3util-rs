@@ -11,6 +11,8 @@ shadow!(build);
 pub mod common;
 pub mod common_client;
 pub mod cp;
+pub mod create_bucket;
+pub mod delete_bucket;
 pub mod delete_object_tagging;
 pub mod get_object_tagging;
 pub mod head_bucket;
@@ -24,6 +26,8 @@ pub mod value_parser;
 mod tests;
 
 pub use cp::CpArgs;
+pub use create_bucket::CreateBucketArgs;
+pub use delete_bucket::DeleteBucketArgs;
 pub use delete_object_tagging::DeleteObjectTaggingArgs;
 pub use get_object_tagging::GetObjectTaggingArgs;
 pub use head_bucket::HeadBucketArgs;
@@ -62,6 +66,10 @@ pub struct Cli {
 pub enum Commands {
     /// Copy objects from/to S3
     Cp(CpArgs),
+    /// Create an S3 bucket
+    CreateBucket(CreateBucketArgs),
+    /// Delete an S3 bucket (must be empty)
+    DeleteBucket(DeleteBucketArgs),
     /// Delete all tags from an S3 object
     DeleteObjectTagging(DeleteObjectTaggingArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
@@ -94,6 +102,14 @@ where
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
+        Commands::CreateBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; create-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::DeleteObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
                 .to_string(),

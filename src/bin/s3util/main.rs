@@ -64,6 +64,50 @@ async fn main() -> Result<()> {
             };
             std::process::exit(exit_code);
         }
+        Commands::CreateBucket(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_create_bucket(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            std::process::exit(exit_code);
+        }
+        Commands::DeleteBucket(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return Ok(());
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_delete_bucket(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            std::process::exit(exit_code);
+        }
         Commands::Rm(args) => {
             if let Some(shell) = args.auto_complete_shell() {
                 generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());

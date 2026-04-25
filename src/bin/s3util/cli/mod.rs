@@ -16,7 +16,9 @@ use s3util_rs::types::StoragePath;
 use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancellation_token};
 
 pub mod cp;
+pub mod create_bucket;
 pub mod ctrl_c_handler;
+pub mod delete_bucket;
 pub mod delete_object_tagging;
 pub mod get_object_tagging;
 pub mod head_bucket;
@@ -28,6 +30,8 @@ pub mod rm;
 pub mod ui_config;
 
 pub use cp::run_cp;
+pub use create_bucket::run_create_bucket;
+pub use delete_bucket::run_delete_bucket;
 pub use delete_object_tagging::run_delete_object_tagging;
 pub use get_object_tagging::run_get_object_tagging;
 pub use head_bucket::run_head_bucket;
