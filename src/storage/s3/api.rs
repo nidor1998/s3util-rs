@@ -12,9 +12,11 @@ use aws_sdk_s3::Client;
 use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
 use aws_sdk_s3::operation::delete_bucket::DeleteBucketOutput;
 use aws_sdk_s3::operation::delete_bucket_policy::DeleteBucketPolicyOutput;
+use aws_sdk_s3::operation::delete_bucket_tagging::DeleteBucketTaggingOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
+use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
@@ -226,6 +228,34 @@ pub async fn put_bucket_tagging(
         .send()
         .await
         .with_context(|| format!("put-bucket-tagging on s3://{bucket}"))
+}
+
+/// Issue `GetBucketTagging` for `bucket`. Returns the SDK response on success.
+///
+/// S3 returns `404 NoSuchTagSet` when no tags are configured on the bucket;
+/// this is surfaced as an error with the original context.
+pub async fn get_bucket_tagging(client: &Client, bucket: &str) -> Result<GetBucketTaggingOutput> {
+    client
+        .get_bucket_tagging()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("get-bucket-tagging on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketTagging` for `bucket`. Returns the SDK response on success.
+///
+/// Removes all tags from the bucket. Silent on success.
+pub async fn delete_bucket_tagging(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketTaggingOutput> {
+    client
+        .delete_bucket_tagging()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-tagging on s3://{bucket}"))
 }
 
 /// Issue `PutBucketVersioning` for `bucket` with the given `status`.

@@ -14,14 +14,17 @@ pub mod cp;
 pub mod create_bucket;
 pub mod delete_bucket;
 pub mod delete_bucket_policy;
+pub mod delete_bucket_tagging;
 pub mod delete_object_tagging;
 pub mod get_bucket_policy;
+pub mod get_bucket_tagging;
 pub mod get_bucket_versioning;
 pub mod get_object_tagging;
 pub mod head_bucket;
 pub mod head_object;
 pub mod mv;
 pub mod put_bucket_policy;
+pub mod put_bucket_tagging;
 pub mod put_bucket_versioning;
 pub mod put_object_tagging;
 pub mod rm;
@@ -34,14 +37,17 @@ pub use cp::CpArgs;
 pub use create_bucket::CreateBucketArgs;
 pub use delete_bucket::DeleteBucketArgs;
 pub use delete_bucket_policy::DeleteBucketPolicyArgs;
+pub use delete_bucket_tagging::DeleteBucketTaggingArgs;
 pub use delete_object_tagging::DeleteObjectTaggingArgs;
 pub use get_bucket_policy::GetBucketPolicyArgs;
+pub use get_bucket_tagging::GetBucketTaggingArgs;
 pub use get_bucket_versioning::GetBucketVersioningArgs;
 pub use get_object_tagging::GetObjectTaggingArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
 pub use put_bucket_policy::PutBucketPolicyArgs;
+pub use put_bucket_tagging::PutBucketTaggingArgs;
 pub use put_bucket_versioning::PutBucketVersioningArgs;
 pub use put_object_tagging::PutObjectTaggingArgs;
 pub use rm::RmArgs;
@@ -82,10 +88,14 @@ pub enum Commands {
     DeleteBucket(DeleteBucketArgs),
     /// Delete the bucket policy from an S3 bucket
     DeleteBucketPolicy(DeleteBucketPolicyArgs),
+    /// Delete all tags from an S3 bucket
+    DeleteBucketTagging(DeleteBucketTaggingArgs),
     /// Delete all tags from an S3 object
     DeleteObjectTagging(DeleteObjectTaggingArgs),
     /// Retrieve the bucket policy of an S3 bucket and print it as JSON
     GetBucketPolicy(GetBucketPolicyArgs),
+    /// Retrieve the tags of an S3 bucket and print them as JSON
+    GetBucketTagging(GetBucketTaggingArgs),
     /// Retrieve the versioning state of an S3 bucket and print it as JSON
     GetBucketVersioning(GetBucketVersioningArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
@@ -98,6 +108,8 @@ pub enum Commands {
     Mv(MvArgs),
     /// Set the bucket policy on an S3 bucket
     PutBucketPolicy(PutBucketPolicyArgs),
+    /// Replace all tags on an S3 bucket
+    PutBucketTagging(PutBucketTaggingArgs),
     /// Set the versioning state of an S3 bucket (Enabled or Suspended)
     PutBucketVersioning(PutBucketVersioningArgs),
     /// Replace all tags on an S3 object
@@ -134,12 +146,20 @@ where
             "build_config_from_args is for cp/mv only; delete-bucket-policy is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::DeleteBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::DeleteObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::GetBucketPolicy(_) => Err(
             "build_config_from_args is for cp/mv only; get-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-tagging is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::GetBucketVersioning(_) => Err(
@@ -161,6 +181,10 @@ where
         Commands::Mv(mv_args) => Config::try_from(mv_args),
         Commands::PutBucketPolicy(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-tagging is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::PutBucketVersioning(_) => Err(

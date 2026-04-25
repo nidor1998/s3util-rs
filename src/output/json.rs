@@ -6,6 +6,7 @@
 //! double-encoded `Policy`, etc.).
 
 use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
+use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
@@ -47,6 +48,27 @@ pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
             Value::String(mfa.as_str().to_string()),
         );
     }
+    Value::Object(map)
+}
+
+/// Serialise a `GetBucketTaggingOutput` to AWS CLI v2 `--output json` shape.
+///
+/// `TagSet` is always emitted (as `[]` when the bucket has no tags).
+pub fn get_bucket_tagging_to_json(out: &GetBucketTaggingOutput) -> Value {
+    let mut map = Map::new();
+
+    let tag_array: Vec<Value> = out
+        .tag_set()
+        .iter()
+        .map(|tag| {
+            let mut t = Map::new();
+            t.insert("Key".to_string(), Value::String(tag.key().to_string()));
+            t.insert("Value".to_string(), Value::String(tag.value().to_string()));
+            Value::Object(t)
+        })
+        .collect();
+    map.insert("TagSet".to_string(), Value::Array(tag_array));
+
     Value::Object(map)
 }
 
@@ -279,6 +301,7 @@ pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
 mod tests {
     use super::*;
     use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
+    use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
     use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
     use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
     use aws_sdk_s3::operation::head_object::HeadObjectOutput;
@@ -357,6 +380,48 @@ mod tests {
         let json = get_bucket_versioning_to_json(&out);
         assert_eq!(json["Status"], Value::String("Enabled".into()));
         assert_eq!(json["MFADelete"], Value::String("Enabled".into()));
+    }
+
+    // ----- get_bucket_tagging_to_json tests -----
+
+    #[test]
+    fn get_bucket_tagging_empty_tag_set_yields_empty_array() {
+        let out = GetBucketTaggingOutput::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap();
+        let json = get_bucket_tagging_to_json(&out);
+        assert_eq!(json["TagSet"], Value::Array(vec![]));
+    }
+
+    #[test]
+    fn get_bucket_tagging_with_tags() {
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+        let out = GetBucketTaggingOutput::builder()
+            .tag_set(tag)
+            .build()
+            .unwrap();
+        let json = get_bucket_tagging_to_json(&out);
+        let tags = json["TagSet"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["Key"], Value::String("env".into()));
+        assert_eq!(tags[0]["Value"], Value::String("prod".into()));
+    }
+
+    #[test]
+    fn get_bucket_tagging_multiple_tags_preserve_order() {
+        let tag1 = Tag::builder().key("a").value("1").build().unwrap();
+        let tag2 = Tag::builder().key("b").value("2").build().unwrap();
+        let out = GetBucketTaggingOutput::builder()
+            .tag_set(tag1)
+            .tag_set(tag2)
+            .build()
+            .unwrap();
+        let json = get_bucket_tagging_to_json(&out);
+        let tags = json["TagSet"].as_array().unwrap();
+        assert_eq!(tags.len(), 2);
+        assert_eq!(tags[0]["Key"], Value::String("a".into()));
+        assert_eq!(tags[1]["Key"], Value::String("b".into()));
     }
 
     // ----- get_object_tagging_to_json tests -----
