@@ -30,7 +30,7 @@ async fn main() -> Result<()> {
             };
 
             start_tracing_if_necessary(&config);
-            tracing::trace!("config = {:?}", config);
+            trace_config_summary(&config);
 
             let exit_code = match cli::run_cp(config).await {
                 Ok(status) => status.code(),
@@ -50,7 +50,7 @@ async fn main() -> Result<()> {
                 }
             };
             start_tracing_if_necessary(&config);
-            tracing::trace!("config = {:?}", config);
+            trace_config_summary(&config);
 
             let exit_code = match cli::run_mv(config).await {
                 Ok(status) => status.code(),
@@ -67,6 +67,20 @@ fn start_tracing_if_necessary(config: &Config) -> bool {
     }
     tracing_init::init_tracing(config.tracing_config.as_ref().unwrap());
     true
+}
+
+// Trace only non-sensitive summary fields. Avoids `{:?}` on the full Config,
+// which would risk leaking credentials or SSE-C key material if a future field
+// is added without a redacting Debug impl.
+fn trace_config_summary(config: &Config) {
+    tracing::trace!(
+        "config = {{ source: {:?}, target: {:?}, transfer_config: {:?}, server_side_copy: {}, version_id: {:?} }}",
+        config.source,
+        config.target,
+        config.transfer_config,
+        config.server_side_copy,
+        config.version_id,
+    );
 }
 
 #[cfg(test)]

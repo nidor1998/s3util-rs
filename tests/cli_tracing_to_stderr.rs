@@ -2,10 +2,11 @@
 //! verifies that tracing output is written to stderr (and not leaked to stdout).
 //!
 //! This intentionally doesn't require AWS — the assertion only depends on the
-//! `tracing::trace!("config = {:?}", config)` line in `src/bin/s3util/main.rs`
-//! that fires immediately after `init_tracing`, before any S3 work. The cp
-//! invocation is expected to fail on the missing source, but the trace line
-//! has already been emitted by then.
+//! `trace_config_summary` call in `src/bin/s3util/main.rs` that fires
+//! immediately after `init_tracing`, before any S3 work. The cp invocation is
+//! expected to fail on the missing source, but the trace line has already been
+//! emitted by then. The trace deliberately logs only non-sensitive summary
+//! fields (no credentials or SSE-C key material).
 
 use std::process::{Command, Stdio};
 
@@ -39,7 +40,8 @@ fn tracing_output_goes_to_stderr_not_stdout() {
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);
 
-    // The trace line from main.rs:33 must appear on stderr.
+    // The trace line emitted by `trace_config_summary` in main.rs must appear
+    // on stderr.
     assert!(
         stderr.contains("config ="),
         "expected the 'config = ...' trace on stderr.\n--- stderr ---\n{stderr}\n--- stdout ---\n{stdout}"
