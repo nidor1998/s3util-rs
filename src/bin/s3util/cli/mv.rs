@@ -53,7 +53,7 @@ async fn apply_mv_decision_tree(config: Config, phase: CopyPhase) -> Result<Exit
             info!(
                 key = %phase.source_key,
                 version_id = %version_id_for_log,
-                "source delete completed."
+                "Source delete completed."
             );
             Ok(ExitStatus::Success)
         }

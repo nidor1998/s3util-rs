@@ -34,7 +34,10 @@ async fn main() -> Result<()> {
 
             let exit_code = match cli::run_cp(config).await {
                 Ok(status) => status.code(),
-                Err(_) => cli::EXIT_CODE_ERROR,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
             };
             std::process::exit(exit_code);
         }
@@ -54,7 +57,10 @@ async fn main() -> Result<()> {
 
             let exit_code = match cli::run_mv(config).await {
                 Ok(status) => status.code(),
-                Err(_) => cli::EXIT_CODE_ERROR,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
             };
             std::process::exit(exit_code);
         }
