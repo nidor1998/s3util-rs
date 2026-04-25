@@ -79,7 +79,7 @@ mod tests {
             String::from_utf8_lossy(&del_out.stderr)
         );
 
-        // get-bucket-tagging after delete — S3 returns NoSuchTagSet → exit 1
+        // get-bucket-tagging after delete — S3 returns NoSuchTagSet → exit 4 (NotFound)
         let get_after = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
@@ -90,26 +90,35 @@ mod tests {
             !get_after.status.success(),
             "get-bucket-tagging after delete should fail with NoSuchTagSet"
         );
-        assert_eq!(get_after.status.code(), Some(1));
+        assert_eq!(
+            get_after.status.code(),
+            Some(4),
+            "get-bucket-tagging after delete must exit 4 (NoSuchTagSet)"
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
     #[tokio::test]
-    async fn get_bucket_tagging_on_nonexistent_bucket_exits_1() {
-        let bucket_arg = "s3://s3util-e2e-nonexistent-bucket-xyz";
+    async fn get_bucket_tagging_on_nonexistent_bucket_exits_4() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
         let output = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
             "s3sync-e2e-test",
-            bucket_arg,
+            &bucket_arg,
         ]);
 
         assert!(
             !output.status.success(),
             "get-bucket-tagging on nonexistent bucket should fail"
         );
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "get-bucket-tagging on nonexistent bucket must exit 4 (NoSuchBucket)"
+        );
     }
 
     #[tokio::test]

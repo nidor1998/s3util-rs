@@ -65,8 +65,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn get_object_tagging_on_missing_key_exits_non_zero() {
-        let bucket = "s3util-e2e-nonexistent-bucket";
+    async fn get_object_tagging_on_missing_key_exits_4() {
+        let bucket = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let object_arg = format!("s3://{bucket}/nonexistent-key");
         let output = run_s3util(&[
             "get-object-tagging",
@@ -79,7 +79,11 @@ mod tests {
             !output.status.success(),
             "get-object-tagging on missing key should fail"
         );
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "get-object-tagging on missing key/bucket must exit 4 (NotFound)"
+        );
     }
 
     // ------------------------------------------------------------------
@@ -170,7 +174,7 @@ mod tests {
 
     #[tokio::test]
     async fn delete_object_tagging_on_missing_key_exits_non_zero() {
-        let bucket = "s3util-e2e-nonexistent-bucket";
+        let bucket = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let object_arg = format!("s3://{bucket}/nonexistent-key");
         let output = run_s3util(&[
             "delete-object-tagging",

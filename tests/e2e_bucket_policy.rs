@@ -123,7 +123,7 @@ mod tests {
             "delete-bucket-policy must produce no stdout"
         );
 
-        // 4. get-bucket-policy after delete — expect failure (NoSuchBucketPolicy)
+        // 4. get-bucket-policy after delete — expect NotFound (NoSuchBucketPolicy → exit 4)
         let get_after_del = run_s3util(&[
             "get-bucket-policy",
             "--target-profile",
@@ -134,7 +134,11 @@ mod tests {
             !get_after_del.status.success(),
             "get-bucket-policy after delete should fail"
         );
-        assert_eq!(get_after_del.status.code(), Some(1));
+        assert_eq!(
+            get_after_del.status.code(),
+            Some(4),
+            "get-bucket-policy after delete must exit 4 (NoSuchBucketPolicy)"
+        );
 
         helper.delete_bucket_with_cascade(&bucket).await;
         std::fs::remove_dir_all(&tmp_dir).ok();
@@ -191,9 +195,10 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
-    /// get-bucket-policy on a bucket with no policy should fail with exit code 1.
+    /// get-bucket-policy on a bucket with no policy attached should exit 4
+    /// (NoSuchBucketPolicy is treated as NotFound).
     #[tokio::test]
-    async fn get_policy_on_bucket_without_policy_exits_1() {
+    async fn get_policy_on_bucket_without_policy_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -214,7 +219,11 @@ mod tests {
             !out.status.success(),
             "get-bucket-policy on bucket without policy should fail"
         );
-        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "get-bucket-policy on bucket without policy must exit 4 (NoSuchBucketPolicy)"
+        );
     }
 
     /// put-bucket-policy on a non-existent bucket should fail with exit code 1.
