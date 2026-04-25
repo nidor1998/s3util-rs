@@ -1,5 +1,5 @@
 use crate::config::args::value_parser::url;
-use crate::config::{CLITimeoutConfig, ClientConfig, RetryConfig};
+use crate::config::{CLITimeoutConfig, ClientConfig, RetryConfig, TracingConfig};
 use crate::types::{AccessKeys, ClientConfigLocation, S3Credentials};
 use aws_sdk_s3::types::RequestPayer;
 use aws_smithy_types::checksum_config::RequestChecksumCalculation;
@@ -200,6 +200,21 @@ impl CommonClientArgs {
             parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
         }
     }
+
+    /// Build a `TracingConfig` from verbosity + tracing flags. Returns `None`
+    /// when verbosity is below Error so the global tracing subscriber is not
+    /// installed (matches cp/mv `-qqq` behaviour).
+    pub fn build_tracing_config(&self) -> Option<TracingConfig> {
+        self.verbosity
+            .log_level()
+            .map(|tracing_level| TracingConfig {
+                tracing_level,
+                json_tracing: self.json_tracing,
+                aws_sdk_tracing: self.aws_sdk_tracing,
+                span_events_tracing: self.span_events_tracing,
+                disable_color_tracing: self.disable_color_tracing,
+            })
+    }
 }
 
 #[cfg(test)]
@@ -304,5 +319,39 @@ mod tests {
             Some(aws_sdk_s3::types::RequestPayer::Requester)
         );
         assert!(cfg.accelerate);
+    }
+
+    #[test]
+    fn build_tracing_config_returns_some_at_default_verbosity() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        let cfg = cli.common.build_tracing_config();
+        assert!(cfg.is_some());
+        let cfg = cfg.unwrap();
+        assert_eq!(cfg.tracing_level, log::Level::Warn);
+        assert!(!cfg.json_tracing);
+    }
+
+    #[test]
+    fn build_tracing_config_returns_none_when_silenced() {
+        let cli = TestCli::try_parse_from(["test", "-qqq"]).unwrap();
+        let cfg = cli.common.build_tracing_config();
+        assert!(cfg.is_none(), "expected None when verbosity below Error");
+    }
+
+    #[test]
+    fn build_tracing_config_propagates_flags() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--json-tracing",
+            "--aws-sdk-tracing",
+            "--span-events-tracing",
+            "--disable-color-tracing",
+        ])
+        .unwrap();
+        let cfg = cli.common.build_tracing_config().unwrap();
+        assert!(cfg.json_tracing);
+        assert!(cfg.aws_sdk_tracing);
+        assert!(cfg.span_events_tracing);
+        assert!(cfg.disable_color_tracing);
     }
 }
