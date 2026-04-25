@@ -11,6 +11,7 @@ shadow!(build);
 pub mod common;
 pub mod common_client;
 pub mod cp;
+pub mod head_bucket;
 pub mod mv;
 pub mod value_parser;
 
@@ -18,6 +19,7 @@ pub mod value_parser;
 mod tests;
 
 pub use cp::CpArgs;
+pub use head_bucket::HeadBucketArgs;
 pub use mv::MvArgs;
 
 // Re-exports kept here so existing callers that reference
