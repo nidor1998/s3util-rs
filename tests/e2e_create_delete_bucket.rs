@@ -65,10 +65,21 @@ mod tests {
             String::from_utf8_lossy(&delete_output.stderr)
         );
 
-        // Confirm bucket no longer exists
+        // Confirm bucket no longer exists. S3 has eventual consistency for
+        // bucket deletion: HeadBucket may still succeed briefly after
+        // DeleteBucket returns 200. Poll for up to 30s (15 attempts × 2s)
+        // for the deletion to propagate.
+        let mut gone = false;
+        for _ in 0..15 {
+            if !helper.is_bucket_exist(&bucket).await {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
         assert!(
-            !helper.is_bucket_exist(&bucket).await,
-            "bucket should not exist after delete-bucket"
+            gone,
+            "bucket should not exist after delete-bucket (waited 30s for S3 eventual consistency)"
         );
     }
 
