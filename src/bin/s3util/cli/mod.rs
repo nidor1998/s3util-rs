@@ -17,17 +17,23 @@ use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancell
 
 pub mod cp;
 pub mod ctrl_c_handler;
+pub mod delete_object_tagging;
+pub mod get_object_tagging;
 pub mod head_bucket;
 pub mod head_object;
 pub mod indicator;
 pub mod mv;
+pub mod put_object_tagging;
 pub mod rm;
 pub mod ui_config;
 
 pub use cp::run_cp;
+pub use delete_object_tagging::run_delete_object_tagging;
+pub use get_object_tagging::run_get_object_tagging;
 pub use head_bucket::run_head_bucket;
 pub use head_object::run_head_object;
 pub use mv::run_mv;
+pub use put_object_tagging::run_put_object_tagging;
 pub use rm::run_rm;
 
 // Default refill interval is 100ms (= 10 refills per second).

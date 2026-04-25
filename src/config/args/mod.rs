@@ -11,9 +11,12 @@ shadow!(build);
 pub mod common;
 pub mod common_client;
 pub mod cp;
+pub mod delete_object_tagging;
+pub mod get_object_tagging;
 pub mod head_bucket;
 pub mod head_object;
 pub mod mv;
+pub mod put_object_tagging;
 pub mod rm;
 pub mod value_parser;
 
@@ -21,9 +24,12 @@ pub mod value_parser;
 mod tests;
 
 pub use cp::CpArgs;
+pub use delete_object_tagging::DeleteObjectTaggingArgs;
+pub use get_object_tagging::GetObjectTaggingArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
+pub use put_object_tagging::PutObjectTaggingArgs;
 pub use rm::RmArgs;
 
 // Re-exports kept here so existing callers that reference
@@ -56,14 +62,20 @@ pub struct Cli {
 pub enum Commands {
     /// Copy objects from/to S3
     Cp(CpArgs),
-    /// Move objects from/to S3 (copy then delete source)
-    Mv(MvArgs),
-    /// Delete a single S3 object
-    Rm(RmArgs),
-    /// Head an S3 object and print its metadata as JSON
-    HeadObject(HeadObjectArgs),
+    /// Delete all tags from an S3 object
+    DeleteObjectTagging(DeleteObjectTaggingArgs),
+    /// Retrieve the tags of an S3 object and print them as JSON
+    GetObjectTagging(GetObjectTaggingArgs),
     /// Head an S3 bucket and print its metadata as JSON
     HeadBucket(HeadBucketArgs),
+    /// Head an S3 object and print its metadata as JSON
+    HeadObject(HeadObjectArgs),
+    /// Move objects from/to S3 (copy then delete source)
+    Mv(MvArgs),
+    /// Replace all tags on an S3 object
+    PutObjectTagging(PutObjectTaggingArgs),
+    /// Delete a single S3 object
+    Rm(RmArgs),
 }
 
 pub fn parse_from_args<I, T>(args: I) -> Result<Cli, clap::Error>
@@ -82,18 +94,30 @@ where
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
-        Commands::Mv(mv_args) => Config::try_from(mv_args),
-        Commands::Rm(_) => {
-            Err("build_config_from_args is for cp/mv only; rm is dispatched in main.rs".to_string())
-        }
-        Commands::HeadObject(_) => Err(
-            "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+        Commands::DeleteObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; get-object-tagging is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::HeadBucket(_) => Err(
             "build_config_from_args is for cp/mv only; head-bucket is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::HeadObject(_) => Err(
+            "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::PutObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; put-object-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::Rm(_) => {
+            Err("build_config_from_args is for cp/mv only; rm is dispatched in main.rs".to_string())
+        }
     }
 }
 
