@@ -7,12 +7,13 @@ use leaky_bucket::RateLimiter;
 use tracing::{error, trace};
 
 use s3util_rs::Config;
+use s3util_rs::storage::Storage;
 use s3util_rs::storage::StorageFactory;
 use s3util_rs::storage::local::LocalStorageFactory;
 use s3util_rs::storage::s3::S3StorageFactory;
-use s3util_rs::transfer::{TransferDirection, detect_direction};
+use s3util_rs::transfer::{TransferDirection, TransferOutcome, detect_direction};
 use s3util_rs::types::StoragePath;
-use s3util_rs::types::token::create_pipeline_cancellation_token;
+use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancellation_token};
 
 pub mod ctrl_c_handler;
 pub mod indicator;
@@ -57,9 +58,29 @@ pub const EXIT_CODE_WARNING: i32 = 3;
 // Standard Unix convention for processes terminated by SIGINT (128 + 2).
 pub const EXIT_CODE_CANCELLED: i32 = 130;
 
+/// Intermediate state produced by [`run_copy_phase`].
 ///
-/// and `Err` for errors.
-pub async fn run_cp(config: Config) -> Result<ExitStatus> {
+/// [`run_cp`] (and, in the future, `run_mv`) translates this into an
+/// [`ExitStatus`] / cleanup decision. The clone of the source `Storage` is
+/// kept so callers can reuse the same factory-built instance for follow-up
+/// operations (e.g. `mv`'s post-transfer delete) without rebuilding it.
+// `source_storage`, `source_key`, and `cancellation_token` are unused by
+// today's `run_cp` wrapper. They exist for `run_mv`, which lands in a later
+// task and consumes them for its post-transfer delete logic.
+#[allow(dead_code)]
+pub struct CopyPhase {
+    pub transfer_result: Result<TransferOutcome>,
+    pub source_storage: Storage,
+    pub source_key: String,
+    pub cancellation_token: PipelineCancellationToken,
+    pub cancelled: bool,
+    pub has_warning: bool,
+}
+
+/// Run the copy pipeline (cancellation token, indicator, transfer dispatch,
+/// teardown). Returns enough state for callers (`run_cp`, `run_mv`) to decide
+/// what exit code to produce.
+pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
     let cancellation_token = create_pipeline_cancellation_token();
     ctrl_c_handler::spawn_ctrl_c_handler(cancellation_token.clone());
 
@@ -71,20 +92,11 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
 
     trace!(direction = ?direction, "detected transfer direction");
 
-    if let Err(e) = check_local_source_not_directory(&config.source, &direction) {
-        error!(error = format!("{e:#}"), "copy failed.");
-        return Err(e);
-    }
+    check_local_source_not_directory(&config.source, &direction)?;
 
     // For cp, the full path is always passed as the key to get_object/put_object.
     // Storage instances are created with an empty base path so that key = full path.
-    let (source_key, target_key) = match extract_keys(&config) {
-        Ok(keys) => keys,
-        Err(e) => {
-            error!(error = format!("{e:#}"), "copy failed.");
-            return Err(e);
-        }
-    };
+    let (source_key, target_key) = extract_keys(&config)?;
 
     // When `extract_keys` resolved the target to a different path than the user
     // typed (bare `s3://bucket`, S3 prefix ending in `/`, or a directory-style
@@ -109,7 +121,12 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let has_warning = Arc::new(AtomicBool::new(false));
     let rate_limit_bandwidth = build_rate_limiter(&config);
 
-    let result: Result<()> = match direction {
+    // Each direction builds the source `Storage` it consumes (for transfer)
+    // plus a sibling clone (`source_for_caller`) that survives so callers
+    // such as `run_mv` can reuse it for follow-up operations. Stdio sources
+    // never reach mv, but the type still requires *some* storage — a no-op
+    // LocalStorage placeholder fills that slot.
+    let (transfer_result, source_for_caller) = match direction {
         TransferDirection::LocalToS3 => {
             let target_request_payer = if config.target_request_payer {
                 Some(RequestPayer::Requester)
@@ -129,6 +146,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 None,
             )
             .await;
+            let source_for_caller = dyn_clone::clone_box(&*source);
 
             let target = S3StorageFactory::create(
                 config.clone(),
@@ -143,7 +161,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             )
             .await;
 
-            s3util_rs::transfer::local_to_s3::transfer(
+            let result = s3util_rs::transfer::local_to_s3::transfer(
                 &config,
                 source,
                 target,
@@ -152,8 +170,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
-            .await
-            .map(|_| ())
+            .await;
+            (result, source_for_caller)
         }
         TransferDirection::S3ToLocal => {
             let source_request_payer = if config.source_request_payer {
@@ -174,6 +192,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 None,
             )
             .await;
+            let source_for_caller = dyn_clone::clone_box(&*source);
 
             let target = LocalStorageFactory::create(
                 config.clone(),
@@ -188,7 +207,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             )
             .await;
 
-            s3util_rs::transfer::s3_to_local::transfer(
+            let result = s3util_rs::transfer::s3_to_local::transfer(
                 &config,
                 source,
                 target,
@@ -197,8 +216,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
-            .await
-            .map(|_| ())
+            .await;
+            (result, source_for_caller)
         }
         TransferDirection::S3ToS3 => {
             let source_request_payer = if config.source_request_payer {
@@ -224,6 +243,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 None,
             )
             .await;
+            let source_for_caller = dyn_clone::clone_box(&*source);
 
             let target = S3StorageFactory::create(
                 config.clone(),
@@ -238,7 +258,7 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             )
             .await;
 
-            s3util_rs::transfer::s3_to_s3::transfer(
+            let result = s3util_rs::transfer::s3_to_s3::transfer(
                 &config,
                 source,
                 target,
@@ -247,8 +267,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
-            .await
-            .map(|_| ())
+            .await;
+            (result, source_for_caller)
         }
         TransferDirection::StdioToS3 => {
             let target_request_payer = if config.target_request_payer {
@@ -270,7 +290,23 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
             )
             .await;
 
-            s3util_rs::transfer::stdio_to_s3::transfer(
+            // Stdio sources never reach run_mv (mv rejects stdio at config
+            // validation). Use a placeholder LocalStorage so CopyPhase always
+            // owns a valid Storage instance.
+            let source_for_caller = LocalStorageFactory::create(
+                config.clone(),
+                empty_local_storage_path(),
+                cancellation_token.clone(),
+                stats_sender.clone(),
+                None,
+                None,
+                rate_limit_bandwidth.clone(),
+                has_warning.clone(),
+                None,
+            )
+            .await;
+
+            let result = s3util_rs::transfer::stdio_to_s3::transfer(
                 &config,
                 target,
                 &target_key,
@@ -278,8 +314,8 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
-            .await
-            .map(|_| ())
+            .await;
+            (result, source_for_caller)
         }
         TransferDirection::S3ToStdio => {
             let source_request_payer = if config.source_request_payer {
@@ -300,8 +336,9 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 None,
             )
             .await;
+            let source_for_caller = dyn_clone::clone_box(&*source);
 
-            s3util_rs::transfer::s3_to_stdio::transfer(
+            let result = s3util_rs::transfer::s3_to_stdio::transfer(
                 &config,
                 source,
                 &source_key,
@@ -309,13 +346,13 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
                 cancellation_token.clone(),
                 stats_sender.clone(),
             )
-            .await
-            .map(|_| ())
+            .await;
+            (result, source_for_caller)
         }
     };
 
     // Send error stat if transfer failed, so indicator can suppress summary
-    if result.is_err() {
+    if transfer_result.is_err() {
         let _ = stats_sender
             .send(s3util_rs::types::SyncStatistics::SyncError { key: String::new() })
             .await;
@@ -328,25 +365,36 @@ pub async fn run_cp(config: Config) -> Result<ExitStatus> {
     let _ = indicator_handle.await;
 
     // ctrl_c_handler is the only code path that cancels this token, so an
-    // observed cancellation means SIGINT was received. Check the token first
-    // so early-exit branches in each transfer (which return `Ok(())` on
-    // cancellation) and the read-loop branch (which returns
-    // `Err(S3syncError::Cancelled)`) both land on exit 130. ctrl-c-handler
-    // already warned about shutdown, so suppress the "copy failed." log and
-    // any warning-stat that the interrupted transfer may have flipped.
-    if cancellation_token.is_cancelled() {
+    // observed cancellation means SIGINT was received. Snapshot the token
+    // here so callers (run_cp's wrapper, run_mv) see the same bool the
+    // pipeline did.
+    let cancelled = cancellation_token.is_cancelled();
+    let has_warning = has_warning.load(std::sync::atomic::Ordering::SeqCst);
+
+    Ok(CopyPhase {
+        transfer_result,
+        source_storage: source_for_caller,
+        source_key,
+        cancellation_token,
+        cancelled,
+        has_warning,
+    })
+}
+
+///
+/// and `Err` for errors.
+pub async fn run_cp(config: Config) -> Result<ExitStatus> {
+    let phase = run_copy_phase(config).await?;
+    if phase.cancelled {
         return Ok(ExitStatus::Cancelled);
     }
-
-    if let Err(e) = &result {
+    if let Err(e) = phase.transfer_result {
         error!(error = format!("{e:#}"), "copy failed.");
-        return Err(result.unwrap_err());
+        return Err(e);
     }
-
-    if has_warning.load(std::sync::atomic::Ordering::SeqCst) {
+    if phase.has_warning {
         return Ok(ExitStatus::Warning);
     }
-
     Ok(ExitStatus::Success)
 }
 
