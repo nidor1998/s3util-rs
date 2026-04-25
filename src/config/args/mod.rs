@@ -81,40 +81,58 @@ pub struct Cli {
 #[derive(Subcommand, Clone, Debug)]
 pub enum Commands {
     /// Copy objects from/to S3
+    #[command(display_order = 1)]
     Cp(CpArgs),
     /// Create an S3 bucket
+    #[command(display_order = 8)]
     CreateBucket(CreateBucketArgs),
     /// Delete an S3 bucket (must be empty)
+    #[command(display_order = 10)]
     DeleteBucket(DeleteBucketArgs),
     /// Delete the bucket policy from an S3 bucket
+    #[command(display_order = 13)]
     DeleteBucketPolicy(DeleteBucketPolicyArgs),
     /// Delete all tags from an S3 bucket
+    #[command(display_order = 16)]
     DeleteBucketTagging(DeleteBucketTaggingArgs),
     /// Delete all tags from an S3 object
+    #[command(display_order = 7)]
     DeleteObjectTagging(DeleteObjectTaggingArgs),
     /// Retrieve the bucket policy of an S3 bucket and print it as JSON
+    #[command(display_order = 12)]
     GetBucketPolicy(GetBucketPolicyArgs),
     /// Retrieve the tags of an S3 bucket and print them as JSON
+    #[command(display_order = 15)]
     GetBucketTagging(GetBucketTaggingArgs),
     /// Retrieve the versioning state of an S3 bucket and print it as JSON
+    #[command(display_order = 18)]
     GetBucketVersioning(GetBucketVersioningArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
+    #[command(display_order = 6)]
     GetObjectTagging(GetObjectTaggingArgs),
     /// Head an S3 bucket and print its metadata as JSON
+    #[command(display_order = 9)]
     HeadBucket(HeadBucketArgs),
     /// Head an S3 object and print its metadata as JSON
+    #[command(display_order = 4)]
     HeadObject(HeadObjectArgs),
     /// Move objects from/to S3 (copy then delete source)
+    #[command(display_order = 2)]
     Mv(MvArgs),
     /// Set the bucket policy on an S3 bucket
+    #[command(display_order = 11)]
     PutBucketPolicy(PutBucketPolicyArgs),
     /// Replace all tags on an S3 bucket
+    #[command(display_order = 14)]
     PutBucketTagging(PutBucketTaggingArgs),
     /// Set the versioning state of an S3 bucket (Enabled or Suspended)
+    #[command(display_order = 17)]
     PutBucketVersioning(PutBucketVersioningArgs),
     /// Replace all tags on an S3 object
+    #[command(display_order = 5)]
     PutObjectTagging(PutObjectTaggingArgs),
     /// Delete a single S3 object
+    #[command(display_order = 3)]
     Rm(RmArgs),
 }
 
