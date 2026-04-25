@@ -718,6 +718,24 @@ mod tests {
         );
     }
 
+    /// Pin the exact byte format of timestamp output to match
+    /// `aws s3api ... --output json` (AWS CLI v2): UTC, second precision,
+    /// `+00:00` offset. If chrono's RFC3339 default ever changes (e.g. to
+    /// `Z`), this test catches it before the format drift reaches users.
+    #[test]
+    fn head_object_last_modified_matches_aws_cli_v2_format() {
+        use aws_sdk_s3::primitives::DateTime;
+        // 1_700_000_000 epoch seconds == 2023-11-14T22:13:20Z
+        let dt = DateTime::from_secs(1_700_000_000);
+        let out = HeadObjectOutput::builder().last_modified(dt).build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["LastModified"],
+            Value::String("2023-11-14T22:13:20+00:00".into()),
+            "LastModified must match the AWS CLI v2 byte format"
+        );
+    }
+
     #[test]
     fn head_object_with_all_checksum_variants() {
         use aws_sdk_s3::types::ChecksumType;
