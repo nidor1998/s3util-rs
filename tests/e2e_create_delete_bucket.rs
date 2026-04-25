@@ -65,13 +65,23 @@ mod tests {
             String::from_utf8_lossy(&delete_output.stderr)
         );
 
-        // Confirm bucket no longer exists. S3 has eventual consistency for
-        // bucket deletion: HeadBucket may still succeed briefly after
-        // DeleteBucket returns 200. Poll for up to 30s (15 attempts × 2s)
-        // for the deletion to propagate.
+        // Confirm bucket no longer exists. S3 has eventual consistency on
+        // bucket deletion: HeadBucket may briefly return 301 PermanentRedirect
+        // or 403 (the bucket name stays reserved) before settling on 404.
+        // Use s3util's own head-bucket exit code as the check — it treats
+        // *any* HeadBucket error as "not accessible" (exit 1), which is
+        // what we actually care about. Poll for up to 60s (30 × 2s).
         let mut gone = false;
-        for _ in 0..15 {
-            if !helper.is_bucket_exist(&bucket).await {
+        for _ in 0..30 {
+            let head_out = run_s3util(&[
+                "head-bucket",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--target-region",
+                REGION,
+                &bucket_arg,
+            ]);
+            if !head_out.status.success() {
                 gone = true;
                 break;
             }
@@ -79,7 +89,7 @@ mod tests {
         }
         assert!(
             gone,
-            "bucket should not exist after delete-bucket (waited 30s for S3 eventual consistency)"
+            "bucket should not exist after delete-bucket (waited 60s for S3 eventual consistency)"
         );
     }
 
