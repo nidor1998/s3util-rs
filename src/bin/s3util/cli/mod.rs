@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Result, anyhow};
 use aws_sdk_s3::types::RequestPayer;
 use leaky_bucket::RateLimiter;
-use tracing::{error, trace};
+use tracing::trace;
 
 use s3util_rs::Config;
 use s3util_rs::storage::Storage;
@@ -15,9 +15,12 @@ use s3util_rs::transfer::{TransferDirection, TransferOutcome, detect_direction};
 use s3util_rs::types::StoragePath;
 use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancellation_token};
 
+pub mod cp;
 pub mod ctrl_c_handler;
 pub mod indicator;
 pub mod ui_config;
+
+pub use cp::run_cp;
 
 // Default refill interval is 100ms (= 10 refills per second).
 const REFILL_PER_INTERVAL_DIVIDER: usize = 10;
@@ -379,23 +382,6 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
         cancelled,
         has_warning,
     })
-}
-
-///
-/// and `Err` for errors.
-pub async fn run_cp(config: Config) -> Result<ExitStatus> {
-    let phase = run_copy_phase(config).await?;
-    if phase.cancelled {
-        return Ok(ExitStatus::Cancelled);
-    }
-    if let Err(e) = phase.transfer_result {
-        error!(error = format!("{e:#}"), "copy failed.");
-        return Err(e);
-    }
-    if phase.has_warning {
-        return Ok(ExitStatus::Warning);
-    }
-    Ok(ExitStatus::Success)
 }
 
 fn get_path_strings(source: &StoragePath, target: &StoragePath) -> (String, String) {
