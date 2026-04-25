@@ -23,8 +23,6 @@ pub mod mv;
 pub mod ui_config;
 
 pub use cp::run_cp;
-// TODO(task-10): remove allow once main.rs dispatches HeadBucket
-#[allow(unused_imports)]
 pub use head_bucket::run_head_bucket;
 pub use mv::run_mv;
 

@@ -10,8 +10,6 @@ use s3util_rs::storage::s3::api;
 /// Builds the SDK client from `client_config`, issues `HeadBucket`,
 /// and prints the response as AWS-CLI-shape pretty-printed JSON
 /// followed by a newline.
-// TODO(task-10): remove once main.rs dispatches HeadBucket
-#[allow(dead_code)]
 pub async fn run_head_bucket(args: HeadBucketArgs, client_config: ClientConfig) -> Result<()> {
     let bucket = args
         .bucket_name()
