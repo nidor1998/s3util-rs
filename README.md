@@ -18,8 +18,6 @@ Currently in **preview**.
 <summary>Click to expand to view table of contents</summary>
 
 - [Overview](#overview)
-    * [Why s3util?](#why-s3util)
-    * [How it works](#how-it-works)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
     * [Full multipart support](#full-multipart-support)
@@ -29,15 +27,11 @@ Currently in **preview**.
     * [Express One Zone support](#express-one-zone-support)
     * [SSE and SSE-C](#sse-and-sse-c)
     * [Metadata and tagging preservation](#metadata-and-tagging-preservation)
-    * [Robust retry and timeout controls](#robust-retry-and-timeout-controls)
     * [Rate limiting](#rate-limiting)
-    * [Ctrl-C safety](#ctrl-c-safety)
     * [Observability](#observability)
-    * [Library-first design](#library-first-design)
 - [Requirements](#requirements)
 - [Installation](#installation)
     * [Build from source](#build-from-source)
-    * [As a Rust library](#as-a-rust-library)
 - [Usage](#usage)
     * [Upload a local file](#upload-a-local-file)
     * [Download to local](#download-to-local)
@@ -51,17 +45,13 @@ Currently in **preview**.
     * [Specify credentials](#specify-credentials)
     * [Specify region](#specify-region)
 - [Detailed information](#detailed-information)
-    * [Transfer direction detection](#transfer-direction-detection)
     * [Path and target resolution](#path-and-target-resolution)
     * [ETag verification](#etag-verification)
     * [Additional checksum verification](#additional-checksum-verification-1)
-    * [Multipart upload detail](#multipart-upload-detail)
     * [Auto chunksize](#auto-chunksize)
     * [Server-side copy detail](#server-side-copy-detail)
     * [Stdin/stdout handling](#stdinstdout-handling)
-    * [mv command behavior](#mv-command-behavior)
     * [Express One Zone detail](#express-one-zone-detail)
-    * [Retry logic detail](#retry-logic-detail)
     * [S3 Permissions](#s3-permissions)
     * [CLI process exit codes](#cli-process-exit-codes)
 - [Advanced options](#advanced-options)
@@ -81,12 +71,10 @@ Currently in **preview**.
     * [--help](#--help)
 - [All command line options](#all-command-line-options)
 - [CI/CD Integration](#cicd-integration)
-- [Library API](#library-api)
 - [About testing](#about-testing)
 - [Fully AI-generated (human-verified) software](#fully-ai-generated-human-verified-software)
     * [Quality verification (by AI self-assessment)](#quality-verification-by-ai-self-assessment)
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
-- [Recommendation](#recommendation)
 - [License](#license)
 
 </details>
@@ -96,28 +84,6 @@ Currently in **preview**.
 `s3util` is a compact copy tool for Amazon S3, built as a companion to [s3sync](https://github.com/nidor1998/s3sync). Where `s3sync` is optimized for bulk, recursive synchronization, `s3util` is optimized for the single-object case: a single `cp` invocation that copies one object, verifies it, reports progress, and exits with a meaningful status code.
 
 All transfer, verification, and multipart code is shared in spirit with `s3sync` — but the CLI surface is deliberately narrow and the binary is a single file with no recursive/directory mode.
-
-### Why s3util?
-
-Single-object S3 copies are everywhere in real workflows — CI release uploads, one-off backups, pipes in shell scripts — but the options are surprisingly awkward:
-
-- **`aws s3 cp`** works, but mixes single-object and recursive modes behind the same command, and its checksum story is limited.
-- **S3 SDKs** are powerful but require a programming environment.
-- **`s3sync`** is recursive by design; for copying a single object it brings more mechanism than the task requires.
-
-`s3util` solves this by offering a single-file `cp` with end-to-end verification, a compact CLI, and exit codes suitable for scripting.
-
-### How it works
-
-```
-Source path ──> Direction detector ──> Client builder ──> Transfer engine ──> Verifier
-   (local /        (infers                 (per-endpoint            (multipart /          (ETag &
-    s3://URL /      Local↔S3,               AWS SDK for Rust         single-part,          additional
-    stdin/stdout)   S3↔S3, stdio)           clients, SSE,            parallel,             checksum)
-                                            credentials)             rate-limited)
-```
-
-`s3util` inspects the source/target combination, picks a transfer direction, configures per-endpoint AWS SDK for Rust clients, streams bytes between them, and verifies the result using the S3-reported ETag and (if requested) additional checksum. Multipart uploads are parallelized, and chunks can be matched to the source layout automatically with `--auto-chunksize`.
 
 ## Features
 
@@ -183,19 +149,9 @@ S3→S3 copies preserve both system metadata (Content-Type, Cache-Control, Expir
 
 Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrides, `--disable-tagging` clears.
 
-### Robust retry and timeout controls
-
-- AWS SDK retry tuning via `--aws-max-attempts` (default `10`) and `--initial-backoff-milliseconds` (default `100`).
-- Per-operation, per-attempt, connect, and read timeouts are all independently configurable.
-- `--disable-stalled-stream-protection` lets you opt out of the AWS SDK's stalled-stream detection when working behind proxies that legitimately pause streams.
-
 ### Rate limiting
 
 `--rate-limit-bandwidth <BYTES_PER_SEC>` caps throughput using a leaky-bucket algorithm. Accepts unit-suffixed values like `50MB`, `100MiB`, `1GB`.
-
-### Ctrl-C safety
-
-A ctrl-c handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting. The exit code is `130` for user cancellation (standard Unix SIGINT convention, 128 + 2), distinguishing it from normal success (`0`) and transfer errors (`1`/`3`).
 
 ### Observability
 
@@ -203,10 +159,6 @@ A ctrl-c handler cancels any in-flight multipart upload (issuing `AbortMultipart
 - Structured JSON tracing (`--json-tracing`) for log aggregation systems.
 - AWS SDK tracing (`--aws-sdk-tracing`) for deep troubleshooting.
 - Configurable verbosity (`-v`/`-vv`/`-vvv`, `-q`/`-qq`).
-
-### Library-first design
-
-`s3util` is a thin CLI over the `s3util-rs` library crate. All transfer, verification, and configuration logic is available programmatically — see [Library API](#library-api).
 
 ## Requirements
 
@@ -249,17 +201,6 @@ s3util cp --auto-complete-shell bash   > /etc/bash_completion.d/s3util
 s3util cp --auto-complete-shell zsh    > "${fpath[1]}/_s3util"
 s3util cp --auto-complete-shell fish   > ~/.config/fish/completions/s3util.fish
 ```
-
-### As a Rust library
-
-Add `s3util-rs` to your `Cargo.toml`:
-
-```toml
-[dependencies]
-s3util-rs = { git = "https://github.com/nidor1998/s3util-rs" }
-```
-
-See [Library API](#library-api) for usage examples.
 
 ## Usage
 
@@ -398,17 +339,6 @@ s3util cp --target-region us-west-2 ./file.bin s3://my-bucket/file.bin
 
 ## Detailed information
 
-### Transfer direction detection
-
-Direction is derived from the source/target pair at argument-parse time. Illegal combinations (e.g. local→local or stdin→local) are rejected before any network activity.
-
-Source-side hygiene rules:
-
-- A source S3 URL ending in `/` is rejected — `s3util cp` copies a single object, not a prefix.
-- A source S3 URL whose final path segment is `.` or `..` (e.g. `s3://bucket/foo/..`) is rejected at argument-parse time.
-- Targets may contain `..` — a user-chosen target like `../` or `../backup/` is honored and resolved by the OS in the usual way.
-- Directory sources are rejected. There is no recursive upload/download mode.
-
 ### Path and target resolution
 
 If the target is `s3://bucket`, `s3://bucket/dir/`, or a directory-style local path (an existing directory, or one ending in a path separator like `../`), the source basename is appended. The resolved write path is printed on a `-> <path>` line before the transfer summary.
@@ -429,18 +359,6 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 - `--enable-additional-checksum` on download tells S3 to return the additional checksum so `s3util` can verify it.
 - `--disable-additional-checksum-verify` uploads the additional checksum but skips local verification.
 
-### Multipart upload detail
-
-When the source size (or `--multipart-threshold`) triggers multipart, `s3util`:
-
-1. Initiates a multipart upload (`CreateMultipartUpload`).
-2. Reads/computes chunks in parallel up to `--max-parallel-uploads`.
-3. Uploads each part via `UploadPart` (or `UploadPartCopy` on server-side S3→S3 copy).
-4. Assembles with `CompleteMultipartUpload`.
-5. Verifies the composite ETag and any additional checksum against the upload-side computations.
-
-On ctrl-c or a fatal error, the in-flight multipart upload is aborted with `AbortMultipartUpload` so no orphaned multipart fragments accumulate.
-
 ### Auto chunksize
 
 `--auto-chunksize` issues additional `HeadObject` calls to discover the source's multipart layout and then mirrors it on the destination. This keeps the S3→S3 composite ETag and additional-checksum values identical end-to-end, at the cost of one extra `HeadObject` per part.
@@ -452,58 +370,41 @@ On ctrl-c or a fatal error, the in-flight multipart upload is aborted with `Abor
 ### Stdin/stdout handling
 
 - **Stdin → S3** streams bytes into a multipart upload once the threshold is crossed; below the threshold, stdin is buffered into a temp file first so a single-part PUT with a correct `Content-Length` can be issued.
-- **S3 → Stdout** streams bytes straight to stdout. Verification still happens on the streamed bytes where possible, but some verification options are not meaningful when no random access to the output is possible.
-
-### mv command behavior
-
-`mv` is implemented as `cp` followed by a `DeleteObject` (or local `remove_file`) on the source. The post-copy delete is gated by four checks, evaluated in order:
-
-1. **Cancellation observed during transfer.** If a SIGINT was received at any point during the copy, the source is preserved and `mv` exits with code 130.
-2. **Transfer error.** If the copy itself returns an error, the source is preserved and `mv` exits with code 1.
-3. **Verification warning.** If verification produced a warning (e.g. an S3↔S3 ETag mismatch caused by differing chunk layouts) and `--no-fail-on-verify-error` is not set, the source is preserved and `mv` exits with code 3.
-4. **Late cancellation.** A second cancellation-token check immediately before the delete catches a SIGINT that arrived while gates 2 and 3 were being evaluated.
-
-If all four gates clear, the source is deleted. If the delete itself fails, `mv` exits with code 1 — the destination object remains in place but the source has not been removed (so the operator can retry or investigate without losing data).
-
-By default, `mv` is **fail-closed on verification warnings**: any ETag, multipart, or additional-checksum mismatch aborts before the delete. Pass `--no-fail-on-verify-error` to opt into "warning-as-success" semantics (delete the source and exit 0 even on warning).
-
-`mv` rejects stdin/stdout (`-`) sources and targets at argument-parse time, since the deletion step is meaningless for those streams.
+- **S3 → Stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum.
 
 ### Express One Zone detail
 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
 
-### Retry logic detail
-
-Every S3 API call is automatically retried by the AWS SDK for Rust using its standard retry strategy with exponential backoff-and-jitter. Configure this with:
-
-- `--aws-max-attempts` (default `10`) — maximum attempts per API call.
-- `--initial-backoff-milliseconds` (default `100`) — initial backoff duration.
-
-Per-operation and per-attempt timeouts are layered on top via `--operation-timeout-milliseconds`, `--operation-attempt-timeout-milliseconds`, `--connect-timeout-milliseconds`, and `--read-timeout-milliseconds`.
-
 ### S3 Permissions
 
-Minimum permissions on the target bucket:
+Required permissions depend on the transfer direction. "Source" and "target" below refer to the source and target S3 buckets; for Local↔S3 only the relevant side applies.
 
-```
-"Action": [
-    "s3:PutObject",
-    "s3:GetObject",
-    "s3:AbortMultipartUpload",
-    "s3:ListBucket",
-    "s3express:CreateSession"
-]
-```
+**Source bucket** (any `cp`/`mv` reading from S3):
 
-Additional permissions depending on feature use:
+- `s3:GetObject` — always. Covers `GetObject`, `HeadObject`, and `GetObjectAttributes`.
+- `s3:GetObjectTagging` — when source tags are read. This is the default on S3→S3; suppressed by `--disable-tagging`.
+- `s3:GetObjectVersion` — when `--source-version-id` is used.
+- `s3:DeleteObject` — when running `mv` (the source is deleted on success).
+- `s3:DeleteObjectVersion` — when running `mv` with `--source-version-id`.
 
-- `s3:PutObjectAcl` — when `--acl` is set
-- `s3:PutObjectTagging` / `s3:GetObjectTagging` — when tagging is copied or set
-- `s3:GetObjectVersion` — when `--source-version-id` is used
-- `s3:DeleteObject` (on the source bucket) — when running `mv`
-- `s3:DeleteObjectVersion` (on the source bucket) — when running `mv` with `--source-version-id`
-- `kms:Encrypt` / `kms:Decrypt` / `kms:GenerateDataKey` — for KMS-backed SSE
+**Target bucket** (any `cp`/`mv` writing to S3):
+
+- `s3:PutObject` — always. Covers `PutObject`, `CreateMultipartUpload`, `UploadPart`, `CompleteMultipartUpload`, and on `--server-side-copy` also `CopyObject` / `UploadPartCopy`.
+- `s3:AbortMultipartUpload` — always (used to clean up on errors and ctrl-c).
+- `s3:PutObjectTagging` — when target tags are written. This is the default on S3→S3, and also applies when `--tagging` is set.
+- `s3:PutObjectAcl` — when `--acl` is set.
+
+**Express One Zone** (directory buckets, `--x-s3` suffix):
+
+- `s3express:CreateSession` — on each directory bucket the SDK opens a session for. Required in addition to the standard `s3:*` actions above.
+
+**KMS-backed SSE:**
+
+- `kms:Decrypt` — when reading SSE-KMS-encrypted source objects.
+- `kms:Encrypt` and `kms:GenerateDataKey` — when writing with `--sse aws:kms` or `--sse aws:kms:dsse`.
+
+SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permissions — the encryption key is supplied client-side and S3 does not store it.
 
 ### CLI process exit codes
 
@@ -790,65 +691,11 @@ fi
     AWS_DEFAULT_REGION: us-east-1
 ```
 
-## Library API
-
-`s3util` is built as a thin CLI over the `s3util-rs` library. All CLI functionality is available programmatically.
-
-### Basic usage
-
-```rust
-use s3util_rs::Config;
-use s3util_rs::transfer::{detect_direction, run_transfer};
-
-#[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Same arguments you would pass to the s3util CLI
-    let config = Config::try_parse_from([
-        "s3util", "cp",
-        "--additional-checksum-algorithm", "SHA256",
-        "./release.tar.gz",
-        "s3://my-bucket/releases/release.tar.gz",
-    ])?;
-
-    let direction = detect_direction(&config.source, &config.target)?;
-    let report = run_transfer(config, direction).await?;
-
-    println!(
-        "Transferred {} bytes in {:?}",
-        report.bytes_transferred, report.elapsed
-    );
-
-    Ok(())
-}
-```
-
-See `src/transfer/mod.rs` and `src/config/mod.rs` for the full public surface.
-
 ## About testing
 
 **Supported target: Amazon S3 only.**
 
 Support for S3-compatible storage is best-effort and may behave differently. `s3util` has been tested with Amazon S3 and Express One Zone directory buckets.
-
-### Running unit tests
-
-```bash
-cargo test --all-features
-```
-
-### Running E2E tests
-
-E2E tests run against live AWS S3 and are gated behind the `e2e_test` cfg.
-
-```bash
-# Run all E2E tests
-RUSTFLAGS="--cfg e2e_test" cargo test --all-features
-
-# Run a specific test file
-RUSTFLAGS="--cfg e2e_test" cargo test --test e2e_local_to_s3 --all-features
-```
-
-Available E2E test files include `e2e_local_to_s3`, `e2e_s3_to_local`, `e2e_s3_to_s3`, `e2e_stdio`, `e2e_integrity_check`, `e2e_multipart_integrity_check_*`, `e2e_roundtrip_*`, `e2e_express_one_zone`, `e2e_special_characters`, `e2e_cancel_test`, and `e2e_exit_codes`.
 
 ## Fully AI-generated (human-verified) software
 
@@ -935,10 +782,6 @@ E2E test verification against live AWS S3 covers, at minimum:
 This does not guarantee the absence of bugs, but it does mean the most dangerous categories of incorrect behavior (silent corruption, missed multipart cleanup, wrong exit codes) are actively tested against real infrastructure at each release.
 
 </details>
-
-## Recommendation
-
-We recommend trying `s3util` against a throwaway bucket (or a small prefix) with a handful of files before relying on it for production transfers. The preview is narrow by design, and a few minutes of live-testing in your specific configuration (endpoint, region, SSE setup) is the best way to confirm the defaults match your expectations.
 
 ## License
 
