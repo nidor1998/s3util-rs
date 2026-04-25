@@ -9,6 +9,7 @@
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
+use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::types::ChecksumMode;
@@ -61,6 +62,26 @@ pub async fn head_object(
     req.send()
         .await
         .with_context(|| format!("head-object on s3://{bucket}/{key}"))
+}
+
+/// Issue `DeleteObject` against `bucket`/`key`. Returns the SDK response on success.
+///
+/// If `version_id` is provided, only that specific version is deleted;
+/// otherwise a delete marker is created (versioned bucket) or the object is
+/// removed (non-versioned bucket).
+pub async fn delete_object(
+    client: &Client,
+    bucket: &str,
+    key: &str,
+    version_id: Option<&str>,
+) -> Result<DeleteObjectOutput> {
+    let mut req = client.delete_object().bucket(bucket).key(key);
+    if let Some(v) = version_id {
+        req = req.version_id(v);
+    }
+    req.send()
+        .await
+        .with_context(|| format!("rm s3://{bucket}/{key}"))
 }
 
 /// Issue `HeadBucket` against `bucket`. Returns the SDK response on success.
