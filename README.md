@@ -8,7 +8,7 @@
 
 `s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use.
 
-Today it implements the `cp` subcommand (Local↔S3, S3↔S3, and stdin/stdout streaming) with multipart, checksum, and metadata handling. Additional commands (`mv`, `rm`, …) are planned.
+Today it implements the `cp` and `mv` subcommands. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart, checksum, and metadata handling. Additional commands (`rm`, …) are planned.
 
 Currently in **preview**.
 
@@ -44,6 +44,7 @@ Currently in **preview**.
     * [S3 → S3 copy](#s3--s3-copy)
     * [Stdin → S3](#stdin--s3)
     * [S3 → Stdout](#s3--stdout)
+    * [Move with mv](#move-with-mv)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Custom endpoint (S3-compatible stores)](#custom-endpoint-s3-compatible-stores)
@@ -58,6 +59,7 @@ Currently in **preview**.
     * [Auto chunksize](#auto-chunksize)
     * [Server-side copy detail](#server-side-copy-detail)
     * [Stdin/stdout handling](#stdinstdout-handling)
+    * [mv command behavior](#mv-command-behavior)
     * [Express One Zone detail](#express-one-zone-detail)
     * [Retry logic detail](#retry-logic-detail)
     * [S3 Permissions](#s3-permissions)
@@ -322,6 +324,28 @@ With stdin as the source there is no basename, so the target key must be spelled
 s3util cp s3://my-bucket/backups/mydb-2026-04-19.sql - | psql mydb
 ```
 
+### Move with mv
+
+`mv` runs the same copy pipeline as `cp` and then deletes the source on success. Transfer, verification, multipart, metadata, tagging, SSE, server-side copy, rate limiting, and progress all behave identically — only the post-copy step differs.
+
+```bash
+# S3 → S3 move
+s3util mv s3://src-bucket/key s3://dst-bucket/key
+
+# Upload then delete the local file
+s3util mv ./release.tar.gz s3://my-bucket/releases/
+
+# Download then delete the source S3 object
+s3util mv s3://my-bucket/old-key ./local-copy
+```
+
+Differences from `cp`:
+
+- **Stdin/stdout is not supported.** A `-` source or target is rejected at argument-parse time.
+- **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code. See [mv command behavior](#mv-command-behavior) for the exact gating logic.
+- **`--no-fail-on-verify-error`** (mv only) treats a verification warning as success and proceeds to delete the source. Use only when you understand why your S3↔S3 chunksize layout produces an expected mismatch.
+- **`--source-version-id`** deletes the specific source version after the copy (rather than creating a delete marker on the latest version).
+
 ### Additional checksum verification
 
 ```bash
@@ -430,6 +454,21 @@ On ctrl-c or a fatal error, the in-flight multipart upload is aborted with `Abor
 - **Stdin → S3** streams bytes into a multipart upload once the threshold is crossed; below the threshold, stdin is buffered into a temp file first so a single-part PUT with a correct `Content-Length` can be issued.
 - **S3 → Stdout** streams bytes straight to stdout. Verification still happens on the streamed bytes where possible, but some verification options are not meaningful when no random access to the output is possible.
 
+### mv command behavior
+
+`mv` is implemented as `cp` followed by a `DeleteObject` (or local `remove_file`) on the source. The post-copy delete is gated by four checks, evaluated in order:
+
+1. **Cancellation observed during transfer.** If a SIGINT was received at any point during the copy, the source is preserved and `mv` exits with code 130.
+2. **Transfer error.** If the copy itself returns an error, the source is preserved and `mv` exits with code 1.
+3. **Verification warning.** If verification produced a warning (e.g. an S3↔S3 ETag mismatch caused by differing chunk layouts) and `--no-fail-on-verify-error` is not set, the source is preserved and `mv` exits with code 3.
+4. **Late cancellation.** A second cancellation-token check immediately before the delete catches a SIGINT that arrived while gates 2 and 3 were being evaluated.
+
+If all four gates clear, the source is deleted. If the delete itself fails, `mv` exits with code 1 — the destination object remains in place but the source has not been removed (so the operator can retry or investigate without losing data).
+
+By default, `mv` is **fail-closed on verification warnings**: any ETag, multipart, or additional-checksum mismatch aborts before the delete. Pass `--no-fail-on-verify-error` to opt into "warning-as-success" semantics (delete the source and exit 0 even on warning).
+
+`mv` rejects stdin/stdout (`-`) sources and targets at argument-parse time, since the deletion step is meaningless for those streams.
+
 ### Express One Zone detail
 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
@@ -462,6 +501,8 @@ Additional permissions depending on feature use:
 - `s3:PutObjectAcl` — when `--acl` is set
 - `s3:PutObjectTagging` / `s3:GetObjectTagging` — when tagging is copied or set
 - `s3:GetObjectVersion` — when `--source-version-id` is used
+- `s3:DeleteObject` (on the source bucket) — when running `mv`
+- `s3:DeleteObjectVersion` (on the source bucket) — when running `mv` with `--source-version-id`
 - `kms:Encrypt` / `kms:Decrypt` / `kms:GenerateDataKey` — for KMS-backed SSE
 
 ### CLI process exit codes
@@ -603,6 +644,7 @@ For the full option list, see `s3util cp --help`.
 | `--disable-multipart-verify`             | Skip ETag/additional-checksum verification for multipart uploads. |
 | `--disable-etag-verify`                  | Skip ETag verification entirely. |
 | `--disable-additional-checksum-verify`   | Do not verify additional checksum (still uploads it to S3 if configured). |
+| `--no-fail-on-verify-error` (mv only)    | Treat verification warnings as success: delete source and exit 0. |
 
 ### Performance
 
@@ -826,7 +868,7 @@ Human engineers authored the requirements, design specifications, and the s3sync
 | Formatting                     | 0 diffs (`cargo fmt --check`)                                 |
 | Code reuse from [s3sync](https://github.com/nidor1998/s3sync) | significant (transfer, verification, multipart engine)         |
 
-The codebase is built through spec-driven development with human review at every step. Coverage and test counts reflect the preview state and will grow alongside additional subcommands (`mv`, `rm`, …).
+The codebase is built through spec-driven development with human review at every step. Coverage and test counts reflect the preview state and will grow alongside additional subcommands (`rm`, …).
 
 ### AI assessment of safety and correctness (by Claude, Anthropic)
 
@@ -882,7 +924,7 @@ E2E test verification against live AWS S3 covers, at minimum:
 
 #### Known limitations
 
-- **Preview status.** Only the `cp` subcommand is wired up. Additional commands (`mv`, `rm`, …) will arrive in later releases.
+- **Preview status.** `cp` and `mv` are wired up; additional commands (`rm`, …) will arrive in later releases.
 - **Best-effort S3-compatible support.** The code is exercised against Amazon S3 (including Express One Zone). Non-AWS S3-compatible stores may behave differently — `--disable-multipart-verify` / `--disable-etag-verify` / `--disable-additional-checksum-verify` / `--target-force-path-style` are provided for these cases.
 - **Single-file, no recursion.** By design — users who need recursive semantics should use `s3sync`.
 
