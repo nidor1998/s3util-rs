@@ -8,7 +8,7 @@
 
 `s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
 
-Today it implements the `cp` and `mv` subcommands, which this README documents in detail. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. Additional subcommands will land in future releases — run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
+Today it implements the `cp`, `mv`, and `head-bucket` subcommands, which this README documents in detail. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). Useful for scripts that need to confirm a bucket exists or discover its region. Additional subcommands will land in future releases — run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
 
 Currently in **preview**.
 
@@ -291,6 +291,21 @@ Differences from `cp`:
 - **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code. See [mv command behavior](#mv-command-behavior) for the exact gating logic.
 - **`--no-fail-on-verify-error`** (mv only) treats a verification warning as success and proceeds to delete the source. Use only when you understand why your S3↔S3 chunksize layout produces an expected mismatch.
 - **`--source-version-id`** deletes the specific source version after the copy (rather than creating a delete marker on the latest version).
+
+### Head a bucket
+
+```bash
+s3util head-bucket s3://my-bucket
+```
+
+Prints the `HeadBucket` response as AWS-CLI-shape JSON:
+
+```json
+{
+  "BucketRegion": "us-east-1",
+  "AccessPointAlias": false
+}
+```
 
 ### Additional checksum verification
 
