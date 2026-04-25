@@ -1,0 +1,113 @@
+use base64::{Engine as _, engine::general_purpose};
+
+use crate::storage::checksum::Checksum;
+
+pub struct ChecksumCRC64NVMe {
+    digest: crc_fast::Digest,
+}
+
+impl Default for ChecksumCRC64NVMe {
+    fn default() -> Self {
+        ChecksumCRC64NVMe {
+            digest: crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc64Nvme),
+        }
+    }
+}
+
+impl Checksum for ChecksumCRC64NVMe {
+    fn new(_full_object_checksum: bool) -> Self {
+        ChecksumCRC64NVMe {
+            digest: crc_fast::Digest::new(crc_fast::CrcAlgorithm::Crc64Nvme),
+        }
+    }
+    fn update(&mut self, data: &[u8]) {
+        self.digest.update(data);
+    }
+
+    fn finalize(&mut self) -> String {
+        general_purpose::STANDARD.encode(self.digest.finalize().to_be_bytes().as_slice())
+    }
+
+    fn finalize_all(&mut self) -> String {
+        // AWS S3 CRC64NVME does not support composite checksum type. So this method always returns the same value as finalize().
+        general_purpose::STANDARD.encode(self.digest.finalize().to_be_bytes().as_slice())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use tokio::fs::File;
+    use tokio::io::AsyncReadExt;
+
+    use super::*;
+
+    const LARGE_FILE_PATH: &str = "./tests/fixtures/large_data/50MiB";
+    const LARGE_FILE_DIR: &str = "./tests/fixtures/large_data/";
+    const LARGE_FILE_SIZE: usize = 50 * 1024 * 1024;
+
+    const CHECKSUM_TOTAL: &str = "ZfX5vT9m/o8=";
+
+    #[tokio::test]
+    async fn checksum_crc64_nvme_test() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file().await;
+        let mut file = File::open(LARGE_FILE_PATH).await.unwrap();
+
+        let mut checksum = ChecksumCRC64NVMe::default();
+
+        let mut buffer = Vec::<u8>::with_capacity(LARGE_FILE_SIZE);
+        buffer.resize_with(LARGE_FILE_SIZE, Default::default);
+        file.read_exact(buffer.as_mut_slice()).await.unwrap();
+        checksum.update(buffer.as_slice());
+
+        assert_eq!(checksum.finalize(), CHECKSUM_TOTAL.to_string());
+        assert_eq!(checksum.finalize_all(), CHECKSUM_TOTAL.to_string());
+    }
+
+    #[tokio::test]
+    async fn checksum_crc64_nvme_test_with_new() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file().await;
+        let mut file = File::open(LARGE_FILE_PATH).await.unwrap();
+
+        let mut checksum = ChecksumCRC64NVMe::new(true);
+
+        let mut buffer = Vec::<u8>::with_capacity(LARGE_FILE_SIZE);
+        buffer.resize_with(LARGE_FILE_SIZE, Default::default);
+        file.read_exact(buffer.as_mut_slice()).await.unwrap();
+        checksum.update(buffer.as_slice());
+
+        assert_eq!(checksum.finalize(), CHECKSUM_TOTAL.to_string());
+        assert_eq!(checksum.finalize_all(), CHECKSUM_TOTAL.to_string());
+    }
+
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    async fn create_large_file() {
+        if PathBuf::from(LARGE_FILE_PATH).try_exists().unwrap() {
+            return;
+        }
+
+        tokio::fs::create_dir_all(LARGE_FILE_DIR).await.unwrap();
+
+        // Write to a unique temp path then atomically rename into place so
+        // parallel tests never observe a partially-written LARGE_FILE_PATH.
+        let tmp_path = tempfile::Builder::new()
+            .prefix("large_file_")
+            .tempfile_in(LARGE_FILE_DIR)
+            .unwrap()
+            .into_temp_path();
+        let data = vec![0_u8; LARGE_FILE_SIZE];
+        tokio::fs::write(&tmp_path, data.as_slice()).await.unwrap();
+        let _ = tmp_path.persist(LARGE_FILE_PATH);
+    }
+
+    fn init_dummy_tracing_subscriber() {
+        let _ = tracing_subscriber::fmt()
+            .with_env_filter("dummy=trace")
+            .try_init();
+    }
+}

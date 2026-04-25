@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! This crate is intended to be used as a binary crate (`s3util`) and is not
+//! intended for use as a library in any way. The public items below exist
+//! only to support the binary and integration tests; no API stability is
+//! provided and external consumers should not depend on them.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::unnecessary_unwrap)]
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub mod config;
+pub mod storage;
+pub mod transfer;
+pub mod types;
+
+pub use config::Config;
