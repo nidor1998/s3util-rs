@@ -1,11 +1,13 @@
 [target.x86_64-pc-windows-msvc]
 rustflags = [
-    "-C", "target-feature=+crt-static"
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/STACK:2000000"
 ]
 
 [target.aarch64-pc-windows-msvc]
 rustflags = [
-    "-C", "target-feature=+crt-static"
+    "-C", "target-feature=+crt-static",
+    "-C", "link-arg=/STACK:2000000"
 ]
 
 [target.x86_64-pc-windows-gnu]
