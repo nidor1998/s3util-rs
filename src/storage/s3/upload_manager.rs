@@ -2374,6 +2374,106 @@ mod tests {
         );
     }
 
+    #[test]
+    #[should_panic(expected = "unknown algorithm")]
+    fn get_additional_checksum_from_put_result_panics_on_unsupported_algorithm() {
+        // Defensive: any future ChecksumAlgorithm we don't recognize must
+        // surface as a panic, not silently return None — callers depend on
+        // each known algorithm being faithfully extracted.
+        let put = PutObjectOutput::builder().build();
+        let _ = get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Md5));
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown algorithm")]
+    fn get_additional_checksum_from_multipart_result_panics_on_unsupported_algorithm() {
+        let mp = CompleteMultipartUploadOutput::builder().build();
+        let _ =
+            get_additional_checksum_from_multipart_upload_result(&mp, Some(ChecksumAlgorithm::Md5));
+    }
+
+    #[test]
+    fn get_additional_checksum_from_multipart_result_returns_none_when_field_missing() {
+        let mp = CompleteMultipartUploadOutput::builder().build();
+        assert!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Sha256)
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn get_additional_checksum_from_multipart_result_extracts_sha1_crc32_crc32c() {
+        let mp = CompleteMultipartUploadOutput::builder()
+            .checksum_sha1("v-sha1")
+            .checksum_crc32("v-crc32")
+            .checksum_crc32_c("v-crc32c")
+            .build();
+        assert_eq!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Sha1)
+            )
+            .unwrap(),
+            "v-sha1"
+        );
+        assert_eq!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Crc32)
+            )
+            .unwrap(),
+            "v-crc32"
+        );
+        assert_eq!(
+            get_additional_checksum_from_multipart_upload_result(
+                &mp,
+                Some(ChecksumAlgorithm::Crc32C)
+            )
+            .unwrap(),
+            "v-crc32c"
+        );
+    }
+
+    #[test]
+    fn calculate_parts_count_below_threshold_is_zero() {
+        // Any size below the threshold means single-part path; multipart parts = 0.
+        assert_eq!(calculate_parts_count(100, 50, 99), 0);
+    }
+
+    #[test]
+    fn calculate_parts_count_exact_multiple_of_chunksize() {
+        // 200 / 50 = 4 with no remainder; should not bump to 5.
+        assert_eq!(calculate_parts_count(100, 50, 200), 4);
+    }
+
+    #[test]
+    fn calculate_parts_count_remainder_adds_one() {
+        // 201 / 50 = 4 + 1 = 5 (last part is a runt).
+        assert_eq!(calculate_parts_count(100, 50, 201), 5);
+    }
+
+    #[test]
+    fn modify_last_modified_metadata_overwrites_existing_origin_key() {
+        // If the source already had the origin-last-modified key, modify_last_modified_metadata
+        // should overwrite it with the current source last_modified value rather than skipping.
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .metadata(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY, "stale")
+            .build();
+        get_object_output = UploadManager::modify_last_modified_metadata(get_object_output);
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

@@ -195,6 +195,38 @@ mod tests {
 
     #[tokio::test]
     #[cfg(target_family = "unix")]
+    async fn create_temp_file_from_key_succeeds_when_dir_exists() {
+        // Exercises the success path of create_temp_file_from_key (the error path
+        // is covered above, but the Ok(file) branch was previously unexercised).
+        init_dummy_tracing_subscriber();
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = format!("{}/", temp.path().display());
+
+        // Pre-create the destination subdirectory so require_directory_for_key passes.
+        tokio::fs::create_dir_all(format!("{base}sub_dir"))
+            .await
+            .unwrap();
+
+        let file = create_temp_file_from_key(Path::new(&base), "sub_dir/filename")
+            .await
+            .unwrap();
+        assert!(file.path().exists());
+        // Temp file lives in the resolved subdirectory, not at the base path.
+        assert!(file.path().to_string_lossy().contains("sub_dir"));
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn is_key_a_directory_unix_only_treats_forward_slash() {
+        // On Unix, a trailing backslash must NOT be treated as a directory marker
+        // (cfg!(windows) is false). This locks in the platform contract.
+        assert!(!is_key_a_directory("dir\\"));
+        assert!(!is_key_a_directory("\\dir1\\dir2\\"));
+    }
+
+    #[tokio::test]
+    #[cfg(target_family = "unix")]
     async fn require_directory_for_key_unix() {
         init_dummy_tracing_subscriber();
 

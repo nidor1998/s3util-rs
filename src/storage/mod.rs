@@ -608,6 +608,231 @@ mod tests {
         assert!(parse_range_header_string("bytes=-55").is_none());
     }
 
+    #[test]
+    fn test_parse_range_header_string_returns_none_when_split_yields_wrong_count() {
+        // Not exactly two parts after splitting on '-' → falls through to the final None.
+        assert!(parse_range_header_string("bytes=0-50-100").is_none());
+        assert!(parse_range_header_string("bytes=0").is_none());
+        assert!(parse_range_header_string("").is_none());
+    }
+
+    #[test]
+    fn test_parse_range_header_invalid_when_dash_count_wrong() {
+        // Triple-dash range and zero-dash range both fail the parts.len() == 2 check.
+        assert!(parse_range_header("bytes=0-50-100").is_err());
+        assert!(parse_range_header("bytes=0").is_err());
+    }
+
+    #[test]
+    fn get_range_from_content_range_byte_range_split_wrong_returns_none() {
+        // byte_range with no dash or extra dashes should not satisfy len == 2.
+        let get_object_output = GetObjectOutput::builder()
+            .set_content_length(Some(67589))
+            .content_range("bytes 12345/67589")
+            .build();
+        assert_eq!(get_range_from_content_range(&get_object_output), None);
+
+        let get_object_output = GetObjectOutput::builder()
+            .set_content_length(Some(67589))
+            .content_range("bytes 0-50-100/67589")
+            .build();
+        assert_eq!(get_range_from_content_range(&get_object_output), None);
+    }
+
+    #[test]
+    fn get_range_from_content_range_no_content_range_returns_none() {
+        // content_range absent altogether — early ? returns None.
+        let get_object_output = GetObjectOutput::builder()
+            .set_content_length(Some(100))
+            .build();
+        assert_eq!(get_range_from_content_range(&get_object_output), None);
+    }
+
+    #[test]
+    fn convert_head_to_get_object_output_with_range_override_synthesizes_fields() {
+        use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+
+        let head = HeadObjectOutput::builder()
+            .e_tag("\"abc\"")
+            .content_length(1000)
+            .build();
+
+        // Range override overrides content_length and synthesizes content_range.
+        let got = convert_head_to_get_object_output(head, Some((100, 199, 1000)));
+        assert_eq!(got.content_length(), Some(100));
+        assert_eq!(got.content_range(), Some("bytes 100-199/1000"));
+        assert_eq!(got.e_tag(), Some("\"abc\""));
+    }
+
+    #[test]
+    fn convert_head_to_get_object_output_without_range_override_preserves_head_fields() {
+        use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+
+        let head = HeadObjectOutput::builder()
+            .e_tag("\"abc\"")
+            .content_length(1000)
+            .checksum_sha256("sha")
+            .checksum_crc32("crc32")
+            .build();
+
+        let got = convert_head_to_get_object_output(head, None);
+        assert_eq!(got.content_length(), Some(1000));
+        assert_eq!(got.content_range(), None);
+        assert_eq!(got.checksum_sha256(), Some("sha"));
+        assert_eq!(got.checksum_crc32(), Some("crc32"));
+    }
+
+    #[test]
+    fn parse_range_header_size_calculation_is_inclusive() {
+        // bytes=0-9 → 10 bytes, bytes=100-199 → 100 bytes.
+        let r = parse_range_header("bytes=0-9").unwrap();
+        assert_eq!(r.offset, 0);
+        assert_eq!(r.size, 10);
+        let r = parse_range_header("bytes=100-199").unwrap();
+        assert_eq!(r.offset, 100);
+        assert_eq!(r.size, 100);
+    }
+
+    #[tokio::test]
+    async fn put_object_stream_default_impl_returns_unsupported_error() {
+        // Verifies the default trait method body — any storage that doesn't
+        // override put_object_stream should propagate this error rather than
+        // silently succeed. Use a minimal stub so we exercise the default impl.
+        let storage: Box<dyn StorageTrait + Send + Sync> = Box::new(StubStorage);
+        let reader: Box<dyn tokio::io::AsyncRead + Send + Unpin> = Box::new(tokio::io::empty());
+        let result = storage
+            .put_object_stream("key", reader, None, None, None)
+            .await;
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+    }
+
+    #[derive(Clone)]
+    struct StubStorage;
+
+    #[async_trait::async_trait]
+    impl StorageTrait for StubStorage {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unreachable!("not used in default impl test")
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unreachable!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unreachable!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unreachable!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unreachable!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unreachable!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unreachable!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unreachable!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unreachable!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            unreachable!()
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {
+            unreachable!()
+        }
+        fn get_local_path(&self) -> PathBuf {
+            unreachable!()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unreachable!()
+        }
+        fn set_warning(&self) {
+            unreachable!()
+        }
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

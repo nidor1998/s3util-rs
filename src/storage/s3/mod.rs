@@ -640,4 +640,179 @@ mod tests {
             )
             .try_init();
     }
+
+    use crate::config::TransferConfig;
+    use crate::types::SseKmsKeyId;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use std::sync::atomic::Ordering;
+
+    fn s3_storage_for_test(bucket: &str) -> S3Storage {
+        let config = Config {
+            source: StoragePath::S3 {
+                bucket: bucket.to_string(),
+                prefix: String::new(),
+            },
+            target: StoragePath::S3 {
+                bucket: bucket.to_string(),
+                prefix: String::new(),
+            },
+            show_progress: false,
+            source_client_config: None,
+            target_client_config: None,
+            tracing_config: None,
+            transfer_config: TransferConfig {
+                multipart_threshold: 8 * 1024 * 1024,
+                multipart_chunksize: 8 * 1024 * 1024,
+                auto_chunksize: false,
+            },
+            disable_tagging: false,
+            server_side_copy: false,
+            no_guess_mime_type: false,
+            disable_multipart_verify: false,
+            disable_etag_verify: false,
+            disable_additional_checksum_verify: false,
+            storage_class: None,
+            sse: None,
+            sse_kms_key_id: SseKmsKeyId { id: None },
+            source_sse_c: None,
+            source_sse_c_key: SseCustomerKey { key: None },
+            source_sse_c_key_md5: None,
+            target_sse_c: None,
+            target_sse_c_key: SseCustomerKey { key: None },
+            target_sse_c_key_md5: None,
+            canned_acl: None,
+            additional_checksum_mode: None,
+            additional_checksum_algorithm: None,
+            cache_control: None,
+            content_disposition: None,
+            content_encoding: None,
+            content_language: None,
+            content_type: None,
+            expires: None,
+            metadata: None,
+            no_sync_system_metadata: false,
+            no_sync_user_defined_metadata: false,
+            website_redirect: None,
+            tagging: None,
+            put_last_modified_metadata: false,
+            disable_payload_signing: false,
+            disable_content_md5_header: false,
+            full_object_checksum: false,
+            source_accelerate: false,
+            target_accelerate: false,
+            source_request_payer: false,
+            target_request_payer: false,
+            if_none_match: false,
+            disable_stalled_stream_protection: false,
+            disable_express_one_zone_additional_checksum: false,
+            max_parallel_uploads: 1,
+            rate_limit_bandwidth: None,
+            version_id: None,
+            is_stdio_source: false,
+            is_stdio_target: false,
+            no_fail_on_verify_error: false,
+        };
+        let (sender, _receiver) = async_channel::unbounded();
+        S3Storage {
+            config,
+            bucket: bucket.to_string(),
+            cancellation_token: create_pipeline_cancellation_token(),
+            client: None,
+            request_payer: None,
+            stats_sender: sender,
+            rate_limit_bandwidth: None,
+            has_warning: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[test]
+    fn s3_storage_generate_copy_source_key_no_version_id() {
+        let storage = s3_storage_for_test("my-bucket");
+        let key = storage.generate_copy_source_key("path/with spaces/key.txt", None);
+        // Spaces and the slash in the key are URL-encoded by `urlencoding::encode`,
+        // and the bucket is prefixed with a slash separator.
+        assert!(key.starts_with("my-bucket/"));
+        assert!(key.contains("path%2Fwith%20spaces%2Fkey.txt"));
+        assert!(!key.contains("versionId="));
+    }
+
+    #[test]
+    fn s3_storage_generate_copy_source_key_with_version_id_appends_query() {
+        let storage = s3_storage_for_test("my-bucket");
+        let key = storage.generate_copy_source_key("k.txt", Some("ABC123".to_string()));
+        assert!(key.starts_with("my-bucket/"));
+        assert!(key.ends_with("?versionId=ABC123"));
+    }
+
+    #[test]
+    fn s3_storage_static_flags_for_regular_bucket() {
+        let storage = s3_storage_for_test("regular-bucket");
+        assert!(!storage.is_local_storage());
+        assert!(!storage.is_express_onezone_storage());
+        // No client set in test fixture.
+        assert!(storage.get_client().is_none());
+        assert!(storage.get_rate_limit_bandwidth().is_none());
+    }
+
+    #[test]
+    fn s3_storage_is_express_onezone_when_bucket_suffix_matches() {
+        let storage = s3_storage_for_test("zone-bucket--x-s3");
+        assert!(storage.is_express_onezone_storage());
+    }
+
+    #[test]
+    fn s3_storage_set_warning_flips_flag() {
+        let storage = s3_storage_for_test("b");
+        let flag = storage.has_warning.clone();
+        assert!(!flag.load(Ordering::SeqCst));
+        storage.set_warning();
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn s3_storage_send_stats_does_not_panic() {
+        let storage = s3_storage_for_test("b");
+        storage.send_stats(SyncStatistics::SyncBytes(123)).await;
+    }
+
+    #[test]
+    #[should_panic(expected = "not implemented")]
+    fn s3_storage_get_local_path_panics() {
+        let storage = s3_storage_for_test("b");
+        let _ = storage.get_local_path();
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "s3 path not found")]
+    async fn s3_storage_boxed_new_panics_for_local_path() {
+        let (sender, _receiver) = async_channel::unbounded();
+        let _ = S3Storage::boxed_new(
+            s3_storage_for_test("b").config,
+            StoragePath::Local("/tmp".into()),
+            create_pipeline_cancellation_token(),
+            sender,
+            None,
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "s3 path not found")]
+    async fn s3_storage_boxed_new_panics_for_stdio_path() {
+        let (sender, _receiver) = async_channel::unbounded();
+        let _ = S3Storage::boxed_new(
+            s3_storage_for_test("b").config,
+            StoragePath::Stdio,
+            create_pipeline_cancellation_token(),
+            sender,
+            None,
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+        )
+        .await;
+    }
 }

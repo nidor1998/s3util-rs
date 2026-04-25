@@ -545,4 +545,159 @@ mod tests {
             vec![("k".to_string(), Some("v".to_string()))]
         );
     }
+
+    #[test]
+    fn fake_source_storage_storage_type_flags_are_false() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        assert!(!fake.is_local_storage());
+        assert!(!fake.is_express_onezone_storage());
+    }
+
+    #[test]
+    fn fake_source_storage_simple_getters_return_defaults() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        assert!(fake.get_client().is_none());
+        assert!(fake.get_rate_limit_bandwidth().is_none());
+        assert_eq!(fake.get_local_path(), PathBuf::new());
+        // set_warning is a no-op on the fake; just confirm it doesn't panic.
+        fake.set_warning();
+    }
+
+    #[tokio::test]
+    async fn fake_source_storage_send_stats_does_not_panic() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        fake.send_stats(SyncStatistics::SyncBytes(0)).await;
+        // get_stats_sender returns a fresh unbounded channel — must not panic.
+        let _sender = fake.get_stats_sender();
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_get_object_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake
+            .get_object(
+                "k",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_get_object_tagging_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake.get_object_tagging("k", None).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_head_object_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake
+            .head_object(
+                "k",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_head_object_first_part_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake
+            .head_object_first_part("k", None, None, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_get_object_parts_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake
+            .get_object_parts("k", None, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_get_object_parts_attributes_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake
+            .get_object_parts_attributes("k", None, 0, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_put_object_tagging_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let tagging = Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap();
+        let _ = fake.put_object_tagging("k", None, tagging).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn fake_source_storage_put_object_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let inner = FakeSourceStorage::new(DeleteResult::Ok);
+        let storage: Storage = Box::new(inner);
+        let _ = fake
+            .put_object(
+                "k",
+                storage,
+                "src_k",
+                0,
+                None,
+                GetObjectOutput::builder().build(),
+                None,
+                None,
+                None,
+            )
+            .await;
+    }
+
+    #[test]
+    #[should_panic(expected = "not implemented")]
+    fn fake_source_storage_generate_copy_source_key_panics_unimplemented() {
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let _ = fake.generate_copy_source_key("k", None);
+    }
+
+    #[tokio::test]
+    async fn delete_call_records_explicit_version_id_value_passed_through() {
+        // Defense-in-depth: the test fake must record the *exact* version_id
+        // string handed to delete_object, not a normalized form.
+        let mut config = minimal_config();
+        config.version_id = Some("v123".to_string());
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let calls = fake.delete_calls.clone();
+        let token = create_pipeline_cancellation_token();
+        let phase = synth_phase(
+            Ok(TransferOutcome::default()),
+            false,
+            false,
+            Box::new(fake),
+            token,
+        );
+
+        let _ = apply_mv_decision_tree(config, phase).await.unwrap();
+        let recorded = calls.lock().unwrap().clone();
+        assert_eq!(recorded.len(), 1);
+        assert_eq!(recorded[0].1, Some("v123".to_string()));
+    }
 }

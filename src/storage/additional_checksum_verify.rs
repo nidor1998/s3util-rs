@@ -711,6 +711,114 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    #[should_panic(expected = "parts_size is empty")]
+    async fn generate_checksum_from_path_panics_on_empty_parts() {
+        // Empty object_parts is unreachable in normal flow but the helper
+        // panics defensively to surface caller bugs.
+        let _ = generate_checksum_from_path(
+            PathBuf::from("test_data/5byte.dat").as_path(),
+            ChecksumAlgorithm::Sha256,
+            vec![],
+            8 * 1024 * 1024,
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "parts_size is empty")]
+    async fn generate_checksum_from_path_for_check_panics_on_empty_parts() {
+        let _ = generate_checksum_from_path_for_check(
+            PathBuf::from("test_data/5byte.dat").as_path(),
+            ChecksumAlgorithm::Sha256,
+            false,
+            vec![],
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "multipart is false")]
+    async fn generate_checksum_from_path_for_check_panics_on_multi_parts_with_multipart_false() {
+        // multipart=false implies caller intends a single-part hash, so passing
+        // multiple parts is a programming error and must not be silently accepted.
+        let _ = generate_checksum_from_path_for_check(
+            PathBuf::from("test_data/5byte.dat").as_path(),
+            ChecksumAlgorithm::Sha256,
+            false,
+            vec![3, 2],
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_with_chunksize_below_threshold_returns_single_hash() {
+        // File smaller than multipart_threshold ⇒ single-shot path that returns
+        // the per-call finalize() rather than finalize_all(). 5-byte file with
+        // SHA-256 must produce the well-known fixed digest.
+        let checksum = generate_checksum_from_path_with_chunksize(
+            PathBuf::from("test_data/5byte.dat").as_path(),
+            ChecksumAlgorithm::Sha256,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(checksum, TEST_SHA256_BASE64_DIGEST.to_string());
+    }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_open_error_propagates() {
+        // Non-existent path → File::open fails, error bubbles out before any
+        // hashing happens.
+        let result = generate_checksum_from_path(
+            PathBuf::from("test_data/__never_exists__.bin").as_path(),
+            ChecksumAlgorithm::Sha256,
+            vec![1],
+            8 * 1024 * 1024,
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_for_check_open_error_propagates() {
+        let result = generate_checksum_from_path_for_check(
+            PathBuf::from("test_data/__never_exists__.bin").as_path(),
+            ChecksumAlgorithm::Sha256,
+            false,
+            vec![1],
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_with_chunksize_open_error_propagates() {
+        let result = generate_checksum_from_path_with_chunksize(
+            PathBuf::from("test_data/__never_exists__.bin").as_path(),
+            ChecksumAlgorithm::Sha256,
+            8 * 1024 * 1024,
+            8 * 1024 * 1024,
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+        assert!(result.is_err());
+    }
+
     #[cfg_attr(coverage_nightly, coverage(off))]
     async fn create_large_file() {
         if PathBuf::from(LARGE_FILE_PATH).try_exists().unwrap() {

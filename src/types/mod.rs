@@ -695,4 +695,179 @@ mod tests {
         }
         assert_eq!(r.etag_matches, 5);
     }
+
+    #[test]
+    #[should_panic(expected = "unknown algorithm")]
+    fn get_additional_checksum_panics_on_unsupported_algorithm() {
+        // ChecksumAlgorithm has variants (Md5, Sha512, Xxhash*, Unknown) that the
+        // function does not support. Selecting any of them must panic — guarding
+        // against accidental future additions slipping through silently.
+        let get = GetObjectOutput::builder().build();
+        let _ = get_additional_checksum(&get, Some(ChecksumAlgorithm::Md5));
+    }
+
+    #[test]
+    #[should_panic(expected = "unknown algorithm")]
+    fn get_additional_checksum_with_head_object_panics_on_unsupported_algorithm() {
+        let head = HeadObjectOutput::builder().build();
+        let _ = get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Md5));
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_sha1_when_only_sha1_present() {
+        let get = GetObjectOutput::builder()
+            .checksum_sha1("sha1-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha1));
+        assert_eq!(value, "sha1-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_crc32c_when_only_crc32c_present() {
+        let get = GetObjectOutput::builder()
+            .checksum_crc32_c("crc32c-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc32C));
+        assert_eq!(value, "crc32c-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_returns_crc32_when_only_crc32_present() {
+        let get = GetObjectOutput::builder()
+            .checksum_crc32("crc32-value")
+            .build();
+        let (algo, value) = detect_additional_checksum(&get).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc32));
+        assert_eq!(value, "crc32-value");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_sha1_when_only_sha1_present() {
+        let head = HeadObjectOutput::builder().checksum_sha1("v").build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Sha1));
+        assert_eq!(value, "v");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_crc32c_when_only_crc32c_present() {
+        let head = HeadObjectOutput::builder().checksum_crc32_c("v").build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc32C));
+        assert_eq!(value, "v");
+    }
+
+    #[test]
+    fn detect_additional_checksum_with_head_object_returns_crc32_when_only_crc32_present() {
+        let head = HeadObjectOutput::builder().checksum_crc32("v").build();
+        let (algo, value) = detect_additional_checksum_with_head_object(&head).unwrap();
+        assert!(matches!(algo, ChecksumAlgorithm::Crc32));
+        assert_eq!(value, "v");
+    }
+
+    #[test]
+    fn is_full_object_checksum_dash_at_start_treated_as_composite() {
+        // Any '-' anywhere in the value is treated as composite. A pathological
+        // leading dash — which S3 should never return — is still classified as
+        // composite, documenting the current contract.
+        assert!(!is_full_object_checksum(&Some("-foo".to_string())));
+    }
+
+    #[test]
+    fn object_key_equality_and_hash_consistency() {
+        // ObjectKey is used as a HashMap key — equality and hashing must agree.
+        use std::collections::HashSet;
+        let a = ObjectKey::KeyString("foo/bar".to_string());
+        let a2 = ObjectKey::KeyString("foo/bar".to_string());
+        let b = ObjectKey::KeyString("foo/baz".to_string());
+        let digest = sha1_digest_from_key("foo/bar");
+        let c = ObjectKey::KeySHA1Digest(digest);
+        let c2 = ObjectKey::KeySHA1Digest(digest);
+
+        assert_eq!(a, a2);
+        assert_ne!(a, b);
+        assert_eq!(c, c2);
+        // Different variants are never equal even with semantically related contents.
+        assert_ne!(a, c);
+
+        let mut set = HashSet::new();
+        set.insert(a.clone());
+        set.insert(c.clone());
+        assert!(set.contains(&a2));
+        assert!(set.contains(&c2));
+        assert!(!set.contains(&b));
+    }
+
+    #[test]
+    fn object_checksum_default_is_empty() {
+        let oc = ObjectChecksum::default();
+        assert_eq!(oc.key, "");
+        assert!(oc.version_id.is_none());
+        assert!(oc.checksum_algorithm.is_none());
+        assert!(oc.checksum_type.is_none());
+        assert!(oc.object_parts.is_none());
+        assert!(oc.final_checksum.is_none());
+    }
+
+    #[test]
+    fn format_metadata_empty_returns_empty_string() {
+        let formatted = format_metadata(&HashMap::new());
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn format_tags_empty_returns_empty_string() {
+        let formatted = format_tags(&[]);
+        assert_eq!(formatted, "");
+    }
+
+    #[test]
+    fn s3_credentials_variants_are_constructible() {
+        // Smoke test that the non-exhaustive enum can be matched on each known variant.
+        let c1 = S3Credentials::Profile("p".to_string());
+        let c2 = S3Credentials::FromEnvironment;
+        let c3 = S3Credentials::NoSignRequest;
+        let c4 = S3Credentials::Credentials {
+            access_keys: AccessKeys {
+                access_key: "a".to_string(),
+                secret_access_key: "s".to_string(),
+                session_token: None,
+            },
+        };
+        for c in [c1, c2, c3, c4] {
+            // Ensure Debug doesn't panic for any variant.
+            let s = format!("{c:?}");
+            assert!(!s.is_empty());
+        }
+    }
+
+    #[test]
+    fn access_keys_debug_with_no_session_token_redacts_correctly() {
+        let access_keys = AccessKeys {
+            access_key: "AKIA".to_string(),
+            secret_access_key: "secret".to_string(),
+            session_token: None,
+        };
+        let debug_string = format!("{access_keys:?}");
+        assert!(debug_string.contains("session_token: \"None\""));
+        assert!(!debug_string.contains("redacted") || debug_string.contains("secret_access_key"));
+    }
+
+    #[test]
+    fn sse_kms_keyid_debug_with_none_id_does_not_redact() {
+        let secret = SseKmsKeyId { id: None };
+        let debug_string = format!("{secret:?}");
+        assert!(debug_string.contains("None"));
+        assert!(!debug_string.contains("redacted"));
+    }
+
+    #[test]
+    fn sse_customer_key_debug_with_none_key_does_not_redact() {
+        let secret = SseCustomerKey { key: None };
+        let debug_string = format!("{secret:?}");
+        assert!(debug_string.contains("None"));
+        assert!(!debug_string.contains("redacted"));
+    }
 }

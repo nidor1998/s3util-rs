@@ -561,4 +561,192 @@ mod tests {
 
         assert_eq!(outcome.source_version_id, None);
     }
+
+    #[tokio::test]
+    async fn transfer_returns_default_outcome_when_cancelled_before_head() {
+        // Pre-cancelled token: transfer should bail out before any HEAD/GET/PUT.
+        let config = minimal_config();
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id, None);
+    }
+
+    /// MockSource that returns an error from head_object — used to verify the
+    /// `translate_source_head_object_error` plumbing surfaces the failure.
+    #[derive(Clone)]
+    struct FailingHeadSource;
+
+    #[async_trait]
+    impl StorageTrait for FailingHeadSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unreachable!("get_object called after head_object failed")
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            Err(anyhow!("simulated HEAD failure"))
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    #[tokio::test]
+    async fn transfer_propagates_error_when_head_object_fails() {
+        let config = minimal_config();
+        let source: Storage = Box::new(FailingHeadSource);
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let result = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await;
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("simulated HEAD failure"));
+    }
+
+    #[tokio::test]
+    async fn transfer_emits_sync_complete_stat_on_success() {
+        // The success path must emit a SyncComplete stat with target_key.
+        let config = minimal_config();
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        // Drain the receiver and look for the SyncComplete event.
+        let mut found = false;
+        while let Ok(stat) = stats_rx.try_recv() {
+            if let SyncStatistics::SyncComplete { key } = stat {
+                assert_eq!(key, "dst/key");
+                found = true;
+            }
+        }
+        assert!(
+            found,
+            "expected SyncComplete stat to be emitted with target key"
+        );
+    }
 }

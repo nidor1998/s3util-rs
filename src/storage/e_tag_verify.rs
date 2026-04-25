@@ -777,6 +777,120 @@ mod tests {
         );
     }
 
+    #[test]
+    fn verify_e_tag_returns_none_when_source_e_tag_missing() {
+        // E-tag absent on either side ⇒ verification cannot proceed; expect None.
+        let target_e_tag = Some("\"abc\"".to_string());
+        assert_eq!(
+            verify_e_tag(true, &None, &None, &None, &None, &None, &target_e_tag),
+            None
+        );
+    }
+
+    #[test]
+    fn verify_e_tag_returns_none_when_target_e_tag_missing() {
+        let source_e_tag = Some("\"abc\"".to_string());
+        assert_eq!(
+            verify_e_tag(true, &None, &None, &None, &source_e_tag, &None, &None),
+            None
+        );
+    }
+
+    #[test]
+    fn verify_e_tag_returns_none_when_source_sse_c_present() {
+        // SSE-C makes the e-tag opaque; we can't compare it.
+        let source_e_tag = Some("\"abc\"".to_string());
+        let target_e_tag = Some("\"abc\"".to_string());
+        let source_sse_c = Some("AES256".to_string());
+        assert_eq!(
+            verify_e_tag(
+                true,
+                &source_sse_c,
+                &None,
+                &None,
+                &source_e_tag,
+                &None,
+                &target_e_tag
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn verify_e_tag_returns_none_when_target_sse_c_present() {
+        let source_e_tag = Some("\"abc\"".to_string());
+        let target_e_tag = Some("\"abc\"".to_string());
+        let target_sse_c = Some("AES256".to_string());
+        assert_eq!(
+            verify_e_tag(
+                true,
+                &None,
+                &target_sse_c,
+                &None,
+                &source_e_tag,
+                &None,
+                &target_e_tag
+            ),
+            None
+        );
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "object_parts is empty")]
+    async fn generate_e_tag_hash_from_path_with_auto_chunksize_panics_when_parts_empty() {
+        // Empty object_parts is unreachable under normal flow but the helper
+        // panics defensively. Lock that contract in.
+        create_large_file().await;
+        let _ = generate_e_tag_hash_from_path_with_auto_chunksize(
+            &PathBuf::from(LARGE_FILE_PATH),
+            vec![],
+            create_pipeline_cancellation_token(),
+        )
+        .await;
+    }
+
+    #[test]
+    fn generate_e_tag_hash_zero_parts_yields_lowercase_hex_md5() {
+        // parts_count == 0: returns the MD5 hex of the input as a quoted hex
+        // string. Verifies the literal format used for single-part S3 ETags.
+        let input = b"hello";
+        let s = generate_e_tag_hash(input, 0);
+        // The function uses {:?} on a hex string ⇒ wrapped in quotes.
+        assert!(s.starts_with('"'));
+        assert!(s.ends_with('"'));
+        // 5 bytes encoded as hex = 10 chars + 2 quotes.
+        assert_eq!(s.len(), 12);
+    }
+
+    #[test]
+    fn generate_e_tag_hash_with_parts_yields_md5_of_md5s_with_partcount_suffix() {
+        // The composite ETag form is "<md5>-<parts>". Exact bytes don't matter
+        // here — verify the format.
+        let input = b"sixteen byte_str";
+        let s = generate_e_tag_hash(input, 2);
+        assert!(s.starts_with('"'));
+        assert!(s.ends_with("-2\""));
+    }
+
+    #[test]
+    fn is_multipart_upload_e_tag_unquoted_with_dash() {
+        // An unquoted ETag with a dash should still be detected as multipart.
+        assert!(is_multipart_upload_e_tag(&Some("abc-1".to_string())));
+    }
+
+    #[test]
+    fn normalize_e_tag_preserves_unquoted_input() {
+        let etag = Some("abc".to_string());
+        assert_eq!(normalize_e_tag(&etag), Some("abc".to_string()));
+    }
+
+    #[test]
+    fn normalize_e_tag_strips_only_double_quotes() {
+        // Single-quotes and other characters should be left intact.
+        let etag = Some("'abc'\"".to_string());
+        assert_eq!(normalize_e_tag(&etag), Some("'abc'".to_string()));
+    }
+
     #[cfg_attr(coverage_nightly, coverage(off))]
     async fn create_large_file() {
         if PathBuf::from(LARGE_FILE_PATH).try_exists().unwrap() {

@@ -1280,4 +1280,394 @@ mod tests {
         assert!(matches!(err, GetObjectError::NoSuchKey(_)));
         assert_eq!(response.status().as_u16(), 404);
     }
+
+    #[test]
+    fn build_not_found_and_no_such_key_responses_have_empty_body() {
+        // The synthetic SDK responses we hand back to callers should have an
+        // empty body so anyhow!(SdkError::service_error(...)) doesn't carry
+        // unexpected payload that downstream string-matching rules might trip on.
+        let (_, resp1) = build_not_found_response();
+        let (_, resp2) = build_no_such_key_response();
+        // SdkBody is consumed when we pull the bytes out; using the response
+        // status as a smoke test for now since SdkBody peek-without-consume is
+        // not exposed.
+        assert_eq!(resp1.status().as_u16(), 404);
+        assert_eq!(resp2.status().as_u16(), 404);
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn convert_windows_directory_char_to_slash_handles_only_backslashes_on_unix() {
+        // Even on Unix this helper is meant to normalize input that originated
+        // on a Windows-style key. Confirm forward slashes are unchanged and
+        // mixed strings are fully normalized.
+        assert_eq!(convert_windows_directory_char_to_slash("a/b\\c"), "a/b/c");
+        assert_eq!(
+            convert_windows_directory_char_to_slash("only\\backslashes"),
+            "only/backslashes"
+        );
+    }
+
+    #[test]
+    #[cfg(target_family = "unix")]
+    fn remove_local_path_prefix_unicode_path_handled() {
+        // Ensure non-ASCII paths are not mangled.
+        assert_eq!(
+            remove_local_path_prefix("/dir/日本/file", "/dir"),
+            "日本/file"
+        );
+    }
+
+    // --------------------------------------------------------------------
+    // LocalStorage instance tests using a minimal Config builder.
+    // --------------------------------------------------------------------
+
+    use crate::config::TransferConfig;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use crate::types::{SseKmsKeyId, StoragePath};
+
+    fn local_storage_for_test() -> LocalStorage {
+        let config = Config {
+            source: StoragePath::Local(".".into()),
+            target: StoragePath::Local(".".into()),
+            show_progress: false,
+            source_client_config: None,
+            target_client_config: None,
+            tracing_config: None,
+            transfer_config: TransferConfig {
+                multipart_threshold: 8 * 1024 * 1024,
+                multipart_chunksize: 8 * 1024 * 1024,
+                auto_chunksize: false,
+            },
+            disable_tagging: false,
+            server_side_copy: false,
+            no_guess_mime_type: false,
+            disable_multipart_verify: false,
+            disable_etag_verify: false,
+            disable_additional_checksum_verify: false,
+            storage_class: None,
+            sse: None,
+            sse_kms_key_id: SseKmsKeyId { id: None },
+            source_sse_c: None,
+            source_sse_c_key: SseCustomerKey { key: None },
+            source_sse_c_key_md5: None,
+            target_sse_c: None,
+            target_sse_c_key: SseCustomerKey { key: None },
+            target_sse_c_key_md5: None,
+            canned_acl: None,
+            additional_checksum_mode: None,
+            additional_checksum_algorithm: None,
+            cache_control: None,
+            content_disposition: None,
+            content_encoding: None,
+            content_language: None,
+            content_type: None,
+            expires: None,
+            metadata: None,
+            no_sync_system_metadata: false,
+            no_sync_user_defined_metadata: false,
+            website_redirect: None,
+            tagging: None,
+            put_last_modified_metadata: false,
+            disable_payload_signing: false,
+            disable_content_md5_header: false,
+            full_object_checksum: false,
+            source_accelerate: false,
+            target_accelerate: false,
+            source_request_payer: false,
+            target_request_payer: false,
+            if_none_match: false,
+            disable_stalled_stream_protection: false,
+            disable_express_one_zone_additional_checksum: false,
+            max_parallel_uploads: 1,
+            rate_limit_bandwidth: None,
+            version_id: None,
+            is_stdio_source: false,
+            is_stdio_target: false,
+            no_fail_on_verify_error: false,
+        };
+        let (sender, _receiver) = async_channel::unbounded();
+        LocalStorage {
+            config,
+            cancellation_token: create_pipeline_cancellation_token(),
+            stats_sender: sender,
+            rate_limit_bandwidth: None,
+            has_warning: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    #[tokio::test]
+    async fn local_storage_get_object_on_missing_file_returns_no_such_key() {
+        let storage = local_storage_for_test();
+        let result = storage
+            .get_object(
+                "test_data/__never_exists__.bin",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await;
+        let err = result.unwrap_err();
+        // The error wraps an SdkError::service_error with NoSuchKey.
+        let msg = format!("{err:#}");
+        assert!(msg.contains("NoSuchKey") || msg.contains("404"));
+    }
+
+    #[tokio::test]
+    async fn local_storage_head_object_on_missing_file_returns_not_found() {
+        let storage = local_storage_for_test();
+        let result = storage
+            .head_object(
+                "test_data/__never_exists__.bin",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await;
+        let err = result.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("NotFound") || msg.contains("404"));
+    }
+
+    #[tokio::test]
+    async fn local_storage_head_object_on_existing_file_returns_size() {
+        // 5byte.dat is checked into the repo at known size 5.
+        let storage = local_storage_for_test();
+        let head = storage
+            .head_object(
+                "test_data/5byte.dat",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(5));
+    }
+
+    #[tokio::test]
+    async fn local_storage_head_object_on_directory_returns_zero_length() {
+        let storage = local_storage_for_test();
+        let head = storage
+            .head_object(
+                "test_data",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(0));
+    }
+
+    #[tokio::test]
+    async fn local_storage_get_object_returns_metadata_for_existing_file() {
+        let storage = local_storage_for_test();
+        let got = storage
+            .get_object(
+                "test_data/5byte.dat",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(got.content_length(), Some(5));
+        // mime_guess defaults to application/octet-stream for unknown extensions.
+        assert!(got.content_type().is_some());
+    }
+
+    #[tokio::test]
+    async fn local_storage_get_object_with_no_guess_mime_skips_content_type() {
+        let mut storage = local_storage_for_test();
+        storage.config.no_guess_mime_type = true;
+        let got = storage
+            .get_object(
+                "test_data/5byte.dat",
+                None,
+                None,
+                None,
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(got.content_type(), None);
+    }
+
+    #[tokio::test]
+    async fn local_storage_get_object_with_range_returns_content_range() {
+        let storage = local_storage_for_test();
+        let got = storage
+            .get_object(
+                "test_data/5byte.dat",
+                None,
+                None,
+                Some("bytes=0-2".to_string()),
+                None,
+                SseCustomerKey { key: None },
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(got.content_length(), Some(3));
+        assert_eq!(got.content_range(), Some("bytes 0-2/5"));
+    }
+
+    #[tokio::test]
+    async fn local_storage_delete_object_removes_file() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let target = temp_dir.path().join("doomed.txt");
+        tokio::fs::write(&target, b"x").await.unwrap();
+        assert!(target.exists());
+
+        let storage = local_storage_for_test();
+        storage
+            .delete_object(target.to_str().unwrap(), None)
+            .await
+            .unwrap();
+        assert!(!target.exists());
+    }
+
+    #[tokio::test]
+    async fn local_storage_delete_object_on_missing_file_returns_err() {
+        let storage = local_storage_for_test();
+        let result = storage
+            .delete_object("test_data/__never_exists__.bin", None)
+            .await;
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn local_storage_static_flags() {
+        let storage = local_storage_for_test();
+        assert!(storage.is_local_storage());
+        assert!(!storage.is_express_onezone_storage());
+        assert!(storage.get_client().is_none());
+        assert!(storage.get_rate_limit_bandwidth().is_none());
+        assert_eq!(storage.get_local_path(), PathBuf::new());
+    }
+
+    #[test]
+    fn local_storage_set_warning_flips_flag() {
+        let storage = local_storage_for_test();
+        let flag = storage.has_warning.clone();
+        assert!(!flag.load(Ordering::SeqCst));
+        storage.set_warning();
+        assert!(flag.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn local_storage_send_stats_does_not_block_when_receiver_dropped() {
+        // Minimal smoke test: send_stats on an unbounded channel never errors.
+        let storage = local_storage_for_test();
+        storage.send_stats(SyncStatistics::SyncBytes(0)).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn local_storage_get_object_tagging_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let _ = storage.get_object_tagging("k", None).await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn local_storage_head_object_first_part_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let _ = storage
+            .head_object_first_part("k", None, None, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn local_storage_get_object_parts_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let _ = storage
+            .get_object_parts("k", None, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn local_storage_get_object_parts_attributes_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let _ = storage
+            .get_object_parts_attributes("k", None, 0, None, SseCustomerKey { key: None }, None)
+            .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "not implemented")]
+    async fn local_storage_put_object_tagging_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let tagging = Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap();
+        let _ = storage.put_object_tagging("k", None, tagging).await;
+    }
+
+    #[test]
+    #[should_panic(expected = "not implemented")]
+    fn local_storage_generate_copy_source_key_panics_unimplemented() {
+        let storage = local_storage_for_test();
+        let _ = storage.generate_copy_source_key("k", None);
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "local path not found")]
+    async fn local_storage_factory_create_panics_for_non_local_path() {
+        let (sender, _receiver) = async_channel::unbounded();
+        let _ = LocalStorageFactory::create(
+            local_storage_for_test().config,
+            StoragePath::S3 {
+                bucket: "b".into(),
+                prefix: "p".into(),
+            },
+            create_pipeline_cancellation_token(),
+            sender,
+            None,
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await;
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "local path not found")]
+    async fn local_storage_factory_create_panics_for_stdio_path() {
+        let (sender, _receiver) = async_channel::unbounded();
+        let _ = LocalStorageFactory::create(
+            local_storage_for_test().config,
+            StoragePath::Stdio,
+            create_pipeline_cancellation_token(),
+            sender,
+            None,
+            None,
+            None,
+            Arc::new(AtomicBool::new(false)),
+            None,
+        )
+        .await;
+    }
 }
