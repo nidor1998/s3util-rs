@@ -1,9 +1,15 @@
 use crate::config::args::value_parser::url;
+use crate::config::{CLITimeoutConfig, ClientConfig, RetryConfig};
+use crate::types::{AccessKeys, ClientConfigLocation, S3Credentials};
+use aws_sdk_s3::types::RequestPayer;
+use aws_smithy_types::checksum_config::RequestChecksumCalculation;
 use clap::Parser;
 use clap::builder::NonEmptyStringValueParser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use std::path::PathBuf;
 use std::str::FromStr;
+use std::sync::Arc;
+use tokio::sync::Semaphore;
 
 use super::common::{
     DEFAULT_ACCELERATE, DEFAULT_AWS_MAX_ATTEMPTS, DEFAULT_AWS_SDK_TRACING,
@@ -136,6 +142,66 @@ Valid choices: bash, fish, zsh, powershell, elvish."#
     pub auto_complete_shell: Option<clap_complete::shells::Shell>,
 }
 
+impl CommonClientArgs {
+    /// Translate the parsed flags into the existing `ClientConfig` used by
+    /// `storage::s3::client_builder`. Single endpoint (target), so no source/target
+    /// dichotomy. The parallel-upload semaphore is unused by thin-wrapper commands
+    /// but must be present because `ClientConfig` requires it.
+    pub fn build_client_config(&self) -> ClientConfig {
+        let credential = if self.target_no_sign_request {
+            S3Credentials::NoSignRequest
+        } else if let Some(profile) = self.target_profile.clone() {
+            S3Credentials::Profile(profile)
+        } else if let Some(access_key) = self.target_access_key.clone() {
+            S3Credentials::Credentials {
+                access_keys: AccessKeys {
+                    access_key,
+                    secret_access_key: self.target_secret_access_key.clone().expect(
+                        "clap requires --target-secret-access-key alongside --target-access-key",
+                    ),
+                    session_token: self.target_session_token.clone(),
+                },
+            }
+        } else {
+            S3Credentials::FromEnvironment
+        };
+
+        let request_payer = if self.target_request_payer {
+            Some(RequestPayer::Requester)
+        } else {
+            None
+        };
+
+        ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: self.aws_config_file.clone(),
+                aws_shared_credentials_file: self.aws_shared_credentials_file.clone(),
+            },
+            credential,
+            region: self.target_region.clone(),
+            endpoint_url: self.target_endpoint_url.clone(),
+            force_path_style: self.target_force_path_style,
+            accelerate: self.target_accelerate,
+            request_payer,
+            retry_config: RetryConfig {
+                aws_max_attempts: self.aws_max_attempts,
+                initial_backoff_milliseconds: self.initial_backoff_milliseconds,
+            },
+            cli_timeout_config: CLITimeoutConfig {
+                operation_timeout_milliseconds: self.operation_timeout_milliseconds,
+                operation_attempt_timeout_milliseconds: self.operation_attempt_timeout_milliseconds,
+                connect_timeout_milliseconds: self.connect_timeout_milliseconds,
+                read_timeout_milliseconds: self.read_timeout_milliseconds,
+            },
+            disable_stalled_stream_protection: self.disable_stalled_stream_protection,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            // Thin-wrapper commands don't multipart-upload, but ClientConfig
+            // demands a semaphore. A 1-permit semaphore is harmless.
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -176,5 +242,67 @@ mod tests {
     fn target_region_rejects_empty() {
         let res = TestCli::try_parse_from(["test", "--target-region", ""]);
         assert!(res.is_err(), "empty region must be rejected");
+    }
+
+    #[test]
+    fn build_client_config_uses_environment_credentials_by_default() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        let cfg = cli.common.build_client_config();
+        assert!(matches!(
+            cfg.credential,
+            crate::types::S3Credentials::FromEnvironment
+        ));
+        assert_eq!(cfg.retry_config.aws_max_attempts, DEFAULT_AWS_MAX_ATTEMPTS);
+        assert!(!cfg.disable_stalled_stream_protection);
+    }
+
+    #[test]
+    fn build_client_config_uses_no_sign_request_when_set() {
+        let cli = TestCli::try_parse_from(["test", "--target-no-sign-request"]).unwrap();
+        let cfg = cli.common.build_client_config();
+        assert!(matches!(
+            cfg.credential,
+            crate::types::S3Credentials::NoSignRequest
+        ));
+    }
+
+    #[test]
+    fn build_client_config_uses_explicit_keys() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--target-access-key",
+            "AKIA",
+            "--target-secret-access-key",
+            "secret",
+        ])
+        .unwrap();
+        let cfg = cli.common.build_client_config();
+        assert!(matches!(
+            cfg.credential,
+            crate::types::S3Credentials::Credentials { .. }
+        ));
+    }
+
+    #[test]
+    fn build_client_config_uses_profile_when_set() {
+        let cli = TestCli::try_parse_from(["test", "--target-profile", "prod"]).unwrap();
+        let cfg = cli.common.build_client_config();
+        match cfg.credential {
+            crate::types::S3Credentials::Profile(name) => assert_eq!(name, "prod"),
+            other => panic!("expected Profile, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn build_client_config_propagates_request_payer_and_accelerate() {
+        let cli =
+            TestCli::try_parse_from(["test", "--target-request-payer", "--target-accelerate"])
+                .unwrap();
+        let cfg = cli.common.build_client_config();
+        assert_eq!(
+            cfg.request_payer,
+            Some(aws_sdk_s3::types::RequestPayer::Requester)
+        );
+        assert!(cfg.accelerate);
     }
 }
