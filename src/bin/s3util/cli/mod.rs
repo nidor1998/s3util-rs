@@ -17,11 +17,15 @@ use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancell
 
 pub mod cp;
 pub mod ctrl_c_handler;
+pub mod head_bucket;
 pub mod indicator;
 pub mod mv;
 pub mod ui_config;
 
 pub use cp::run_cp;
+// TODO(task-10): remove allow once main.rs dispatches HeadBucket
+#[allow(unused_imports)]
+pub use head_bucket::run_head_bucket;
 pub use mv::run_mv;
 
 // Default refill interval is 100ms (= 10 refills per second).
