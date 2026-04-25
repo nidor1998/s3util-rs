@@ -30,9 +30,11 @@ use aws_sdk_s3::types::{
     Tagging, VersioningConfiguration,
 };
 
-/// Error type for the head-* wrappers. Distinguishes the "target does not
-/// exist" case (so the runtime can map it to a dedicated exit code) from
-/// every other failure mode (network, auth, region mismatch, etc.).
+/// Error type for read wrappers that distinguish a 404 NotFound condition
+/// from every other failure mode (network, auth, region mismatch, etc.).
+/// Used by `head_object`, `head_bucket`, `get_object_tagging`,
+/// `get_bucket_policy`, and `get_bucket_tagging` so the runtime can map
+/// NotFound to a dedicated exit code (4).
 #[derive(Debug, thiserror::Error)]
 pub enum HeadError {
     #[error("target does not exist")]
@@ -40,6 +42,17 @@ pub enum HeadError {
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
+
+/// S3 error codes that `get-object-tagging` treats as 404 NotFound.
+const GET_OBJECT_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchBucket", "NoSuchVersion"];
+/// S3 error codes that `get-bucket-policy` treats as 404 NotFound.
+/// `NoSuchBucketPolicy` covers the case where the bucket exists but no
+/// policy is attached.
+const GET_BUCKET_POLICY_NOT_FOUND_CODES: &[&str] = &["NoSuchBucket", "NoSuchBucketPolicy"];
+/// S3 error codes that `get-bucket-tagging` treats as 404 NotFound.
+/// `NoSuchTagSet` covers the case where the bucket exists but no tags
+/// are configured.
+const GET_BUCKET_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchBucket", "NoSuchTagSet"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -119,7 +132,10 @@ pub async fn delete_object(
         .with_context(|| format!("rm s3://{bucket}/{key}"))
 }
 
-/// Issue `GetObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
+/// Issue `GetObjectTagging` against `bucket`/`key`. Returns the SDK response
+/// on success, `HeadError::NotFound` when S3 returns one of the 404 codes
+/// (`NoSuchKey`, `NoSuchBucket`, `NoSuchVersion`), and `HeadError::Other`
+/// for any other failure.
 ///
 /// If `version_id` is provided, tags for that specific object version are fetched.
 pub async fn get_object_tagging(
@@ -127,14 +143,28 @@ pub async fn get_object_tagging(
     bucket: &str,
     key: &str,
     version_id: Option<&str>,
-) -> Result<GetObjectTaggingOutput> {
+) -> Result<GetObjectTaggingOutput, HeadError> {
     let mut req = client.get_object_tagging().bucket(bucket).key(key);
     if let Some(v) = version_id {
         req = req.version_id(v);
     }
-    req.send()
-        .await
-        .with_context(|| format!("get-object-tagging on s3://{bucket}/{key}"))
+    req.send().await.map_err(|e| {
+        if matches_not_found_code(
+            e.as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
+            GET_OBJECT_TAGGING_NOT_FOUND_CODES,
+        ) {
+            HeadError::NotFound
+        } else {
+            HeadError::Other(
+                anyhow::Error::new(e).context(format!("get-object-tagging on s3://{bucket}/{key}")),
+            )
+        }
+    })
+}
+
+fn matches_not_found_code(code: Option<&str>, candidates: &[&str]) -> bool {
+    code.is_some_and(|c| candidates.contains(&c))
 }
 
 /// Issue `PutObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
@@ -259,17 +289,32 @@ pub async fn put_bucket_tagging(
         .with_context(|| format!("put-bucket-tagging on s3://{bucket}"))
 }
 
-/// Issue `GetBucketTagging` for `bucket`. Returns the SDK response on success.
-///
-/// S3 returns `404 NoSuchTagSet` when no tags are configured on the bucket;
-/// this is surfaced as an error with the original context.
-pub async fn get_bucket_tagging(client: &Client, bucket: &str) -> Result<GetBucketTaggingOutput> {
+/// Issue `GetBucketTagging` for `bucket`. Returns the SDK response on success,
+/// `HeadError::NotFound` when S3 returns `NoSuchBucket` (the bucket itself
+/// is missing) or `NoSuchTagSet` (no tags are configured on the bucket),
+/// and `HeadError::Other` for any other failure.
+pub async fn get_bucket_tagging(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketTaggingOutput, HeadError> {
     client
         .get_bucket_tagging()
         .bucket(bucket)
         .send()
         .await
-        .with_context(|| format!("get-bucket-tagging on s3://{bucket}"))
+        .map_err(|e| {
+            if matches_not_found_code(
+                e.as_service_error()
+                    .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
+                GET_BUCKET_TAGGING_NOT_FOUND_CODES,
+            ) {
+                HeadError::NotFound
+            } else {
+                HeadError::Other(
+                    anyhow::Error::new(e).context(format!("get-bucket-tagging on s3://{bucket}")),
+                )
+            }
+        })
 }
 
 /// Issue `DeleteBucketTagging` for `bucket`. Returns the SDK response on success.
@@ -341,17 +386,32 @@ pub async fn put_bucket_policy(
         .with_context(|| format!("put-bucket-policy on s3://{bucket}"))
 }
 
-/// Issue `GetBucketPolicy` for `bucket`. Returns the SDK response on success.
-///
-/// S3 returns `404 NoSuchBucketPolicy` when no policy is attached; this is
-/// surfaced as an error with the original context.
-pub async fn get_bucket_policy(client: &Client, bucket: &str) -> Result<GetBucketPolicyOutput> {
+/// Issue `GetBucketPolicy` for `bucket`. Returns the SDK response on success,
+/// `HeadError::NotFound` when S3 returns `NoSuchBucket` (the bucket itself
+/// is missing) or `NoSuchBucketPolicy` (no policy is attached), and
+/// `HeadError::Other` for any other failure.
+pub async fn get_bucket_policy(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketPolicyOutput, HeadError> {
     client
         .get_bucket_policy()
         .bucket(bucket)
         .send()
         .await
-        .with_context(|| format!("get-bucket-policy on s3://{bucket}"))
+        .map_err(|e| {
+            if matches_not_found_code(
+                e.as_service_error()
+                    .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
+                GET_BUCKET_POLICY_NOT_FOUND_CODES,
+            ) {
+                HeadError::NotFound
+            } else {
+                HeadError::Other(
+                    anyhow::Error::new(e).context(format!("get-bucket-policy on s3://{bucket}")),
+                )
+            }
+        })
 }
 
 /// Issue `DeleteBucketPolicy` for `bucket`. Returns the SDK response on success.
@@ -367,4 +427,75 @@ pub async fn delete_bucket_policy(
         .send()
         .await
         .with_context(|| format!("delete-bucket-policy on s3://{bucket}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn matches_not_found_code_returns_false_for_none() {
+        assert!(!matches_not_found_code(None, &["NoSuchKey"]));
+    }
+
+    #[test]
+    fn matches_not_found_code_returns_false_for_empty_candidates() {
+        assert!(!matches_not_found_code(Some("NoSuchKey"), &[]));
+    }
+
+    #[test]
+    fn matches_not_found_code_returns_false_for_unrelated_code() {
+        assert!(!matches_not_found_code(
+            Some("AccessDenied"),
+            &["NoSuchKey", "NoSuchBucket"]
+        ));
+    }
+
+    #[test]
+    fn matches_not_found_code_returns_true_for_matching_code() {
+        assert!(matches_not_found_code(
+            Some("NoSuchKey"),
+            &["NoSuchKey", "NoSuchBucket"]
+        ));
+        assert!(matches_not_found_code(
+            Some("NoSuchBucket"),
+            &["NoSuchKey", "NoSuchBucket"]
+        ));
+    }
+
+    #[test]
+    fn matches_not_found_code_is_case_sensitive() {
+        // S3 error codes use exact PascalCase; a case-folded comparison
+        // would mask SDK changes.
+        assert!(!matches_not_found_code(
+            Some("nosuchkey"),
+            &["NoSuchKey", "NoSuchBucket"]
+        ));
+    }
+
+    /// Pin the candidate set so a typo or accidental edit shows up as a
+    /// test failure rather than a behavioural regression at e2e time.
+    #[test]
+    fn get_object_tagging_not_found_codes_pinned() {
+        assert_eq!(
+            GET_OBJECT_TAGGING_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchBucket", "NoSuchVersion"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_policy_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_POLICY_NOT_FOUND_CODES,
+            &["NoSuchBucket", "NoSuchBucketPolicy"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_tagging_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_TAGGING_NOT_FOUND_CODES,
+            &["NoSuchBucket", "NoSuchTagSet"]
+        );
+    }
 }
