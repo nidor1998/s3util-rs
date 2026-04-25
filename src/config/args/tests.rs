@@ -2,7 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::config::Config;
-    use crate::config::args::{Commands, build_config_from_args, parse_from_args};
+    use crate::config::args::{Cli, Commands, build_config_from_args, parse_from_args};
     use crate::types::{S3Credentials, StoragePath};
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
@@ -973,5 +973,12 @@ mod tests {
         };
         let err = Config::try_from(mv_args).unwrap_err();
         assert!(err.contains("--storage-class"));
+    }
+
+    #[test]
+    fn parses_head_bucket_subcommand() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["s3util", "head-bucket", "s3://my-bucket"]).unwrap();
+        assert!(matches!(cli.command, Commands::HeadBucket(_)));
     }
 }

@@ -64,6 +64,9 @@ async fn main() -> Result<()> {
             };
             std::process::exit(exit_code);
         }
+        Commands::HeadBucket(_) => {
+            todo!("head-bucket dispatch implemented in Task 10")
+        }
     }
 }
 

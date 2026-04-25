@@ -54,6 +54,8 @@ pub enum Commands {
     Cp(CpArgs),
     /// Move objects from/to S3 (copy then delete source)
     Mv(MvArgs),
+    /// Head an S3 bucket and print its metadata as JSON
+    HeadBucket(HeadBucketArgs),
 }
 
 pub fn parse_from_args<I, T>(args: I) -> Result<Cli, clap::Error>
@@ -73,6 +75,10 @@ where
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::HeadBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; head-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
     }
 }
 
