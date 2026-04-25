@@ -39,9 +39,13 @@ mod tests {
     }
 
     fn sample_policy(bucket: &str) -> String {
+        // Use a Deny statement so the policy is not classified as "public"
+        // by AWS Block Public Access (BlockPublicPolicy is on by default since
+        // 2023, which would reject Allow + "*" Principal). This is the standard
+        // "require TLS" pattern — a real-world useful policy that round-trips
+        // through put/get/delete cleanly.
         format!(
-            r#"{{"Version":"2012-10-17","Statement":[{{"Sid":"TestReadPolicy","Effect":"Allow","Principal":{{"AWS":"*"}},"Action":"s3:GetObject","Resource":"arn:aws:s3:::{}/*"}}]}}"#,
-            bucket
+            r#"{{"Version":"2012-10-17","Statement":[{{"Sid":"DenyInsecureTransport","Effect":"Deny","Principal":"*","Action":"s3:*","Resource":["arn:aws:s3:::{bucket}","arn:aws:s3:::{bucket}/*"],"Condition":{{"Bool":{{"aws:SecureTransport":"false"}}}}}}]}}"#
         )
     }
 
