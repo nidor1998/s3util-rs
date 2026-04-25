@@ -3,3 +3,5 @@ s3sync
 .idea
 /playground
 tests/fixtures/large_data/
+.serena/
+lcov.info
