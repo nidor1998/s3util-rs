@@ -45,6 +45,7 @@ mod tests {
     /// Clap argument errors exit 2 (mapped by `clap::Error::exit`).
     const EXIT_CODE_SUCCESS: i32 = 0;
     const EXIT_CODE_ERROR: i32 = 1;
+    #[cfg(unix)]
     const EXIT_CODE_CANCELLED: i32 = 130;
     const EXIT_CODE_CLAP_ARG_ERROR: i32 = 2;
 
