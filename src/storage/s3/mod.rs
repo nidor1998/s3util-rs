@@ -15,7 +15,7 @@ use leaky_bucket::RateLimiter;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 use crate::Config;
 use crate::config::ClientConfig;
@@ -543,11 +543,11 @@ impl StorageTrait for S3Storage {
             .await
             .context("aws_sdk_s3::client::delete_object() failed.")?;
 
-        info!(
+        trace!(
             key = key,
             target_version_id = version_id_str,
             target_key = target_key,
-            "delete completed.",
+            "Delete completed.",
         );
 
         Ok(result)

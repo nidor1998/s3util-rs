@@ -31,7 +31,7 @@ use tokio::io::BufReader;
 use tokio::io::{AsyncBufReadExt, AsyncSeekExt, AsyncWriteExt};
 use tokio::task;
 use tokio::task::JoinHandle;
-use tracing::{debug, info, warn};
+use tracing::{debug, trace, warn};
 
 use crate::config::ClientConfig;
 use crate::storage::additional_checksum_verify::{
@@ -1150,7 +1150,7 @@ impl StorageTrait for LocalStorage {
 
         tokio::fs::remove_file(&file_to_delete).await?;
 
-        info!(key = key, real_path = lossy_path, "delete completed.",);
+        trace!(key = key, real_path = lossy_path, "Delete completed.",);
 
         Ok(DeleteObjectOutput::builder().build())
     }
