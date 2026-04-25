@@ -662,40 +662,6 @@ Suppress info-level output for cleaner CI logs:
 s3util cp -q ./artifact.tar.gz s3://my-bucket/artifacts/
 ```
 
-### Example CI script
-
-```bash
-#!/bin/bash
-set -e
-
-s3util cp \
-  --additional-checksum-algorithm SHA256 \
-  --json-tracing \
-  "./dist/release-$(git rev-parse --short HEAD).tar.gz" \
-  "s3://my-bucket/releases/"
-
-exit_code=$?
-if [ $exit_code -eq 3 ]; then
-  echo "Warning: transfer completed with a non-fatal warning"
-fi
-```
-
-### Example GitHub Actions
-
-```yaml
-- name: Upload release artifact
-  run: |
-    s3util cp \
-      --additional-checksum-algorithm SHA256 \
-      --json-tracing \
-      ./dist/release.tar.gz \
-      s3://releases-bucket/${{ github.sha }}/release.tar.gz
-  env:
-    AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-    AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-    AWS_DEFAULT_REGION: us-east-1
-```
-
 ## About testing
 
 **Supported target: Amazon S3 only.**
