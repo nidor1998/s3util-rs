@@ -8,7 +8,7 @@
 
 `s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
 
-Today it implements the `cp`, `mv`, and `head-bucket` subcommands, which this README documents in detail. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). Useful for scripts that need to confirm a bucket exists or discover its region. Additional subcommands will land in future releases — run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
+Today it implements the `cp`, `mv`, and `head-bucket` subcommands (documented in detail below), plus twelve thin S3 API wrappers: `head-object`, `rm`, `create-bucket`, `delete-bucket`, `put-bucket-versioning`, `get-bucket-versioning`, `put-bucket-policy`, `get-bucket-policy`, `delete-bucket-policy`, `get-object-tagging`, `put-object-tagging`, and `delete-object-tagging`. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). The thin wrappers each map to a single S3 API call, produce no output on success (or JSON where noted), and exit with a non-zero code on error. Run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
 
 Currently in **preview**.
 
@@ -89,6 +89,25 @@ All transfer, verification, and multipart code is shared in spirit with `s3sync`
 ### Scope
 
 s3util is a single-object copy/move tool. It is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — examples include the AWS CLI (`aws s3 cp` / `aws s3 mv`) and `s5cmd`, but the same applies to any S3 transfer tool. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified. If you need recursive/bulk synchronization use [s3sync](https://github.com/nidor1998/s3sync); for any other S3 functionality or compatibility with a specific tool's flag set, use that tool.
+
+### Thin S3 API wrappers
+
+Beyond `cp`/`mv`, `s3util` ships a set of single-call wrappers that mirror `aws s3api` subcommands with a simpler, script-friendly interface:
+
+| Subcommand               | What it does                                                                                   |
+|--------------------------|-----------------------------------------------------------------------------------------------|
+| `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
+| `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
+| `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
+| `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
+| `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
+| `create-bucket`          | Creates a bucket; region from `--target-region`; optional `--tagging`; exit 3 if tagging step fails after create |
+| `delete-bucket`          | Deletes an empty bucket; silent on success                                                    |
+| `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
+| `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}` or `{}`); silent on unset            |
+| `put-bucket-policy`      | Sets bucket policy from a file path or `-` (stdin); body sent verbatim, no client-side validation; silent |
+| `get-bucket-policy`      | Prints policy as JSON (`{"Policy": "<escaped-JSON-string>"}`, matching `aws s3api`)            |
+| `delete-bucket-policy`   | Removes bucket policy; silent on success                                                      |
 
 ## Features
 
@@ -305,6 +324,138 @@ Prints the `HeadBucket` response as AWS-CLI-shape JSON:
   "BucketRegion": "us-east-1",
   "AccessPointAlias": false
 }
+```
+
+### Head an object
+
+```bash
+s3util head-object s3://my-bucket/path/to/key
+```
+
+Prints the `HeadObject` response as JSON. Use `--source-version-id` to head a specific version. SSE-C-encrypted objects can be read by supplying `--source-sse-c AES256 --source-sse-c-key <base64-key>`.
+
+To request and verify an additional checksum alongside the metadata:
+
+```bash
+s3util head-object --enable-additional-checksum s3://my-bucket/path/to/key
+```
+
+### Delete an object (rm)
+
+```bash
+s3util rm s3://my-bucket/path/to/key
+```
+
+Deletes a single S3 object. Silent on success. To delete a specific version:
+
+```bash
+s3util rm --source-version-id <version-id> s3://my-bucket/path/to/key
+```
+
+### Manage object tagging
+
+Retrieve tags:
+
+```bash
+s3util get-object-tagging s3://my-bucket/path/to/key
+```
+
+```json
+{
+  "TagSet": [
+    { "Key": "env", "Value": "prod" }
+  ],
+  "VersionId": "abc123"
+}
+```
+
+Replace all tags (URL-encoded query-string format):
+
+```bash
+s3util put-object-tagging --tagging "env=prod&team=platform" s3://my-bucket/path/to/key
+```
+
+Remove all tags:
+
+```bash
+s3util delete-object-tagging s3://my-bucket/path/to/key
+```
+
+All three support `--source-version-id` to target a specific object version.
+
+### Manage a bucket (create / delete)
+
+Create a bucket (LocationConstraint is inferred from `--target-region`; `us-east-1` is handled as the AWS default):
+
+```bash
+s3util create-bucket --target-region us-west-2 s3://my-new-bucket
+
+# With initial tags
+s3util create-bucket --target-region us-west-2 --tagging "project=myapp&env=prod" s3://my-new-bucket
+```
+
+If `CreateBucket` succeeds but the subsequent `PutBucketTagging` call fails, `s3util` exits with code 3 and prints a warning. The bucket will exist but untagged — there is no automatic rollback.
+
+Delete an empty bucket:
+
+```bash
+s3util delete-bucket s3://my-empty-bucket
+```
+
+### Bucket versioning
+
+Enable versioning:
+
+```bash
+s3util put-bucket-versioning --enabled s3://my-bucket
+```
+
+Suspend versioning:
+
+```bash
+s3util put-bucket-versioning --suspended s3://my-bucket
+```
+
+`--enabled` and `--suspended` are mutually exclusive. Retrieve the current state:
+
+```bash
+s3util get-bucket-versioning s3://my-bucket
+```
+
+```json
+{ "Status": "Enabled" }
+```
+
+Returns `{}` if versioning has never been configured on the bucket.
+
+### Bucket policy
+
+Upload a policy from a file:
+
+```bash
+s3util put-bucket-policy s3://my-bucket policy.json
+```
+
+Or pipe from stdin:
+
+```bash
+cat policy.json | s3util put-bucket-policy s3://my-bucket -
+```
+
+The policy body is sent verbatim — no client-side validation. Retrieve the current policy:
+
+```bash
+s3util get-bucket-policy s3://my-bucket
+```
+
+```json
+{ "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[...]}" }
+```
+
+Remove the policy:
+
+```bash
+s3util delete-bucket-policy s3://my-bucket
 ```
 
 ### Additional checksum verification
