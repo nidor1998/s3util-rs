@@ -8,7 +8,7 @@
 
 `s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
 
-Today it implements the `cp`, `mv`, and `head-bucket` subcommands (documented in detail below), plus twelve thin S3 API wrappers: `head-object`, `rm`, `create-bucket`, `delete-bucket`, `put-bucket-versioning`, `get-bucket-versioning`, `put-bucket-policy`, `get-bucket-policy`, `delete-bucket-policy`, `get-object-tagging`, `put-object-tagging`, and `delete-object-tagging`. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). The thin wrappers each map to a single S3 API call, produce no output on success (or JSON where noted), and exit with a non-zero code on error. Run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
+Today it implements the `cp`, `mv`, and `head-bucket` subcommands (documented in detail below), plus fifteen thin S3 API wrappers: `head-object`, `rm`, `create-bucket`, `delete-bucket`, `put-bucket-versioning`, `get-bucket-versioning`, `put-bucket-policy`, `get-bucket-policy`, `delete-bucket-policy`, `get-bucket-tagging`, `put-bucket-tagging`, `delete-bucket-tagging`, `get-object-tagging`, `put-object-tagging`, and `delete-object-tagging`. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). The thin wrappers each map to a single S3 API call, produce no output on success (or JSON where noted), and exit with a non-zero code on error. Run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
 
 Currently in **preview**.
 
@@ -98,6 +98,9 @@ Beyond `cp`/`mv`, `s3util` ships a set of single-call wrappers that mirror `aws 
 |--------------------------|-----------------------------------------------------------------------------------------------|
 | `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
+| `get-bucket-tagging`     | Prints bucket tags as JSON (`{"TagSet": [...]}`); exits 1 with error on `NoSuchTagSet`        |
+| `put-bucket-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent on success                            |
+| `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
 | `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
 | `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
@@ -382,6 +385,36 @@ s3util delete-object-tagging s3://my-bucket/path/to/key
 ```
 
 All three support `--source-version-id` to target a specific object version.
+
+### Bucket tagging
+
+Retrieve tags on a bucket:
+
+```bash
+s3util get-bucket-tagging s3://my-bucket
+```
+
+```json
+{
+  "TagSet": [
+    { "Key": "env", "Value": "prod" }
+  ]
+}
+```
+
+If the bucket has no tags configured, S3 returns `NoSuchTagSet` and s3util exits 1 with an error message.
+
+Replace all tags (URL-encoded query-string format):
+
+```bash
+s3util put-bucket-tagging --tagging "env=prod&team=platform" s3://my-bucket
+```
+
+Remove all tags:
+
+```bash
+s3util delete-bucket-tagging s3://my-bucket
+```
 
 ### Manage a bucket (create / delete)
 
