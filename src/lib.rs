@@ -8,6 +8,7 @@
 #![allow(clippy::unnecessary_unwrap)]
 
 pub mod config;
+pub mod output;
 pub mod storage;
 pub mod transfer;
 pub mod types;
