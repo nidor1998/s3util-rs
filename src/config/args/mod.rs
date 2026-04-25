@@ -9,6 +9,7 @@ use shadow_rs::shadow;
 shadow!(build);
 
 pub mod common;
+pub mod common_client;
 pub mod cp;
 pub mod mv;
 pub mod value_parser;
