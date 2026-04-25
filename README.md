@@ -6,9 +6,9 @@
 
 ## Safe, verifiable single-object copy for Amazon S3
 
-`s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use.
+`s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
 
-Today it implements the `cp` and `mv` subcommands. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart, checksum, and metadata handling. Additional commands (`rm`, …) are planned.
+Today it implements the `cp` and `mv` subcommands, which this README documents in detail. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. Additional subcommands will land in future releases — run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
 
 Currently in **preview**.
 
