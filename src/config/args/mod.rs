@@ -12,6 +12,7 @@ pub mod common;
 pub mod common_client;
 pub mod cp;
 pub mod head_bucket;
+pub mod head_object;
 pub mod mv;
 pub mod value_parser;
 
@@ -20,6 +21,7 @@ mod tests;
 
 pub use cp::CpArgs;
 pub use head_bucket::HeadBucketArgs;
+pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
 
 // Re-exports kept here so existing callers that reference
@@ -54,6 +56,8 @@ pub enum Commands {
     Cp(CpArgs),
     /// Move objects from/to S3 (copy then delete source)
     Mv(MvArgs),
+    /// Head an S3 object and print its metadata as JSON
+    HeadObject(HeadObjectArgs),
     /// Head an S3 bucket and print its metadata as JSON
     HeadBucket(HeadBucketArgs),
 }
@@ -75,6 +79,10 @@ where
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::HeadObject(_) => Err(
+            "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::HeadBucket(_) => Err(
             "build_config_from_args is for cp/mv only; head-bucket is dispatched in main.rs"
                 .to_string(),

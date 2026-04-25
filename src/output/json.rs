@@ -6,7 +6,177 @@
 //! double-encoded `Policy`, etc.).
 
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
+use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
+
+/// Serialise a `HeadObjectOutput` to AWS CLI v2 `--output json` shape.
+///
+/// Optional fields are omitted when absent; timestamps are RFC3339 strings.
+pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
+    let mut map = Map::new();
+
+    if let Some(v) = out.e_tag() {
+        map.insert("ETag".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.last_modified() {
+        if let Ok(dt) = v.to_chrono_utc() {
+            map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
+        }
+    }
+    if let Some(v) = out.content_length() {
+        map.insert(
+            "ContentLength".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.content_type() {
+        map.insert("ContentType".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.content_encoding() {
+        map.insert("ContentEncoding".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.content_disposition() {
+        map.insert(
+            "ContentDisposition".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.content_language() {
+        map.insert("ContentLanguage".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.cache_control() {
+        map.insert("CacheControl".to_string(), Value::String(v.to_string()));
+    }
+    // Use the string variant to avoid the deprecated DateTime getter.
+    if let Some(v) = out.expires_string.as_deref() {
+        map.insert("Expires".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.version_id() {
+        map.insert("VersionId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(meta) = out.metadata() {
+        if !meta.is_empty() {
+            let obj: Map<String, Value> = meta
+                .iter()
+                .map(|(k, v)| (k.clone(), Value::String(v.clone())))
+                .collect();
+            map.insert("Metadata".to_string(), Value::Object(obj));
+        }
+    }
+    if let Some(v) = out.server_side_encryption() {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.ssekms_key_id() {
+        map.insert("SSEKMSKeyId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.bucket_key_enabled() {
+        map.insert("BucketKeyEnabled".to_string(), Value::Bool(v));
+    }
+    if let Some(v) = out.storage_class() {
+        map.insert(
+            "StorageClass".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.parts_count() {
+        map.insert(
+            "PartsCount".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.archive_status() {
+        map.insert(
+            "ArchiveStatus".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.restore() {
+        map.insert("Restore".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.object_lock_mode() {
+        map.insert(
+            "ObjectLockMode".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.object_lock_retain_until_date() {
+        if let Ok(dt) = v.to_chrono_utc() {
+            map.insert(
+                "ObjectLockRetainUntilDate".to_string(),
+                Value::String(dt.to_rfc3339()),
+            );
+        }
+    }
+    if let Some(v) = out.object_lock_legal_hold_status() {
+        map.insert(
+            "ObjectLockLegalHoldStatus".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_sha256() {
+        map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_sha1() {
+        map.insert("ChecksumSHA1".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32() {
+        map.insert("ChecksumCRC32".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32_c() {
+        map.insert("ChecksumCRC32C".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc64_nvme() {
+        map.insert(
+            "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_type() {
+        map.insert(
+            "ChecksumType".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.accept_ranges() {
+        map.insert("AcceptRanges".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.replication_status() {
+        map.insert(
+            "ReplicationStatus".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.website_redirect_location() {
+        map.insert(
+            "WebsiteRedirectLocation".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.expiration() {
+        map.insert("Expiration".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.missing_meta() {
+        map.insert(
+            "MissingMeta".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.delete_marker() {
+        map.insert("DeleteMarker".to_string(), Value::Bool(v));
+    }
+
+    Value::Object(map)
+}
 
 /// Serialise a `HeadBucketOutput` to AWS CLI v2 `--output json` shape.
 ///
@@ -42,6 +212,73 @@ pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+
+    // ----- head_object_to_json tests -----
+
+    #[test]
+    fn head_object_empty_output_yields_empty_object() {
+        let out = HeadObjectOutput::builder().build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn head_object_with_etag_only() {
+        let out = HeadObjectOutput::builder().e_tag("\"abc123\"").build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["ETag"], Value::String("\"abc123\"".into()));
+        assert!(json.get("ContentLength").is_none());
+        assert!(json.get("LastModified").is_none());
+    }
+
+    #[test]
+    fn head_object_with_common_fields() {
+        let out = HeadObjectOutput::builder()
+            .e_tag("\"deadbeef\"")
+            .content_length(1024)
+            .content_type("application/octet-stream")
+            .content_encoding("gzip")
+            .content_language("en-US")
+            .cache_control("no-cache")
+            .version_id("v1")
+            .accept_ranges("bytes")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["ETag"], Value::String("\"deadbeef\"".into()));
+        assert_eq!(json["ContentLength"], Value::Number(1024i64.into()));
+        assert_eq!(
+            json["ContentType"],
+            Value::String("application/octet-stream".into())
+        );
+        assert_eq!(json["ContentEncoding"], Value::String("gzip".into()));
+        assert_eq!(json["ContentLanguage"], Value::String("en-US".into()));
+        assert_eq!(json["CacheControl"], Value::String("no-cache".into()));
+        assert_eq!(json["VersionId"], Value::String("v1".into()));
+        assert_eq!(json["AcceptRanges"], Value::String("bytes".into()));
+    }
+
+    #[test]
+    fn head_object_sse_kms_fields() {
+        use aws_sdk_s3::types::ServerSideEncryption;
+        let out = HeadObjectOutput::builder()
+            .server_side_encryption(ServerSideEncryption::AwsKms)
+            .ssekms_key_id("arn:aws:kms:us-east-1:123456789012:key/abc")
+            .bucket_key_enabled(true)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ServerSideEncryption"],
+            Value::String("aws:kms".into())
+        );
+        assert_eq!(
+            json["SSEKMSKeyId"],
+            Value::String("arn:aws:kms:us-east-1:123456789012:key/abc".into())
+        );
+        assert_eq!(json["BucketKeyEnabled"], Value::Bool(true));
+    }
+
+    // ----- head_bucket_to_json tests -----
 
     #[test]
     fn head_bucket_with_region_only() {
