@@ -41,10 +41,12 @@ mod tests {
             Commands::CreateBucket(_)
             | Commands::DeleteBucket(_)
             | Commands::DeleteObjectTagging(_)
+            | Commands::GetBucketVersioning(_)
             | Commands::GetObjectTagging(_)
             | Commands::HeadBucket(_)
             | Commands::HeadObject(_)
             | Commands::Mv(_)
+            | Commands::PutBucketVersioning(_)
             | Commands::PutObjectTagging(_)
             | Commands::Rm(_) => {
                 panic!("expected Cp variant")

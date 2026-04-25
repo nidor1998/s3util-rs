@@ -5,11 +5,35 @@
 //! `aws s3api --output json` surface 1-to-1 (PascalCase, omission semantics,
 //! double-encoded `Policy`, etc.).
 
+use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
+
+/// Serialise a `GetBucketVersioningOutput` to AWS CLI v2 `--output json` shape.
+///
+/// When versioning has never been configured, S3 returns no `Status` element
+/// and the SDK populates neither `status()` nor `mfa_delete()` → emits `{}`.
+/// Otherwise emits `{"Status": "Enabled"|"Suspended"}` and optionally
+/// `{"MFADelete": "Enabled"|"Disabled"}` when present.
+pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(status) = out.status() {
+        map.insert(
+            "Status".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+    }
+    if let Some(mfa) = out.mfa_delete() {
+        map.insert(
+            "MFADelete".to_string(),
+            Value::String(mfa.as_str().to_string()),
+        );
+    }
+    Value::Object(map)
+}
 
 /// Serialise a `GetObjectTaggingOutput` to AWS CLI v2 `--output json` shape.
 ///
@@ -239,9 +263,51 @@ pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
     use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
     use aws_sdk_s3::operation::head_object::HeadObjectOutput;
-    use aws_sdk_s3::types::Tag;
+    use aws_sdk_s3::types::{BucketVersioningStatus, MfaDeleteStatus, Tag};
+
+    // ----- get_bucket_versioning_to_json tests -----
+
+    #[test]
+    fn get_bucket_versioning_never_configured_yields_empty_object() {
+        // S3 returns no Status element when versioning has never been configured.
+        let out = GetBucketVersioningOutput::builder().build();
+        let json = get_bucket_versioning_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_versioning_enabled_status() {
+        let out = GetBucketVersioningOutput::builder()
+            .status(BucketVersioningStatus::Enabled)
+            .build();
+        let json = get_bucket_versioning_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Enabled".into()));
+        assert!(json.get("MFADelete").is_none());
+    }
+
+    #[test]
+    fn get_bucket_versioning_suspended_status() {
+        let out = GetBucketVersioningOutput::builder()
+            .status(BucketVersioningStatus::Suspended)
+            .build();
+        let json = get_bucket_versioning_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Suspended".into()));
+        assert!(json.get("MFADelete").is_none());
+    }
+
+    #[test]
+    fn get_bucket_versioning_with_mfa_delete() {
+        let out = GetBucketVersioningOutput::builder()
+            .status(BucketVersioningStatus::Enabled)
+            .mfa_delete(MfaDeleteStatus::Enabled)
+            .build();
+        let json = get_bucket_versioning_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Enabled".into()));
+        assert_eq!(json["MFADelete"], Value::String("Enabled".into()));
+    }
 
     // ----- get_object_tagging_to_json tests -----
 

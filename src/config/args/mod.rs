@@ -14,10 +14,12 @@ pub mod cp;
 pub mod create_bucket;
 pub mod delete_bucket;
 pub mod delete_object_tagging;
+pub mod get_bucket_versioning;
 pub mod get_object_tagging;
 pub mod head_bucket;
 pub mod head_object;
 pub mod mv;
+pub mod put_bucket_versioning;
 pub mod put_object_tagging;
 pub mod rm;
 pub mod value_parser;
@@ -29,10 +31,12 @@ pub use cp::CpArgs;
 pub use create_bucket::CreateBucketArgs;
 pub use delete_bucket::DeleteBucketArgs;
 pub use delete_object_tagging::DeleteObjectTaggingArgs;
+pub use get_bucket_versioning::GetBucketVersioningArgs;
 pub use get_object_tagging::GetObjectTaggingArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
+pub use put_bucket_versioning::PutBucketVersioningArgs;
 pub use put_object_tagging::PutObjectTaggingArgs;
 pub use rm::RmArgs;
 
@@ -72,6 +76,8 @@ pub enum Commands {
     DeleteBucket(DeleteBucketArgs),
     /// Delete all tags from an S3 object
     DeleteObjectTagging(DeleteObjectTaggingArgs),
+    /// Retrieve the versioning state of an S3 bucket and print it as JSON
+    GetBucketVersioning(GetBucketVersioningArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
     GetObjectTagging(GetObjectTaggingArgs),
     /// Head an S3 bucket and print its metadata as JSON
@@ -80,6 +86,8 @@ pub enum Commands {
     HeadObject(HeadObjectArgs),
     /// Move objects from/to S3 (copy then delete source)
     Mv(MvArgs),
+    /// Set the versioning state of an S3 bucket (Enabled or Suspended)
+    PutBucketVersioning(PutBucketVersioningArgs),
     /// Replace all tags on an S3 object
     PutObjectTagging(PutObjectTaggingArgs),
     /// Delete a single S3 object
@@ -114,6 +122,10 @@ where
             "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::GetBucketVersioning(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-versioning is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::GetObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; get-object-tagging is dispatched in main.rs"
                 .to_string(),
@@ -127,6 +139,10 @@ where
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::PutBucketVersioning(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-versioning is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::PutObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; put-object-tagging is dispatched in main.rs"
                 .to_string(),

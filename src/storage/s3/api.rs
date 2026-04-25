@@ -13,13 +13,16 @@ use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
 use aws_sdk_s3::operation::delete_bucket::DeleteBucketOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
+use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
+use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::types::{
-    BucketLocationConstraint, ChecksumMode, CreateBucketConfiguration, Tagging,
+    BucketLocationConstraint, BucketVersioningStatus, ChecksumMode, CreateBucketConfiguration,
+    Tagging, VersioningConfiguration,
 };
 
 /// Options controlling `head_object` behaviour.
@@ -220,4 +223,40 @@ pub async fn put_bucket_tagging(
         .send()
         .await
         .with_context(|| format!("put-bucket-tagging on s3://{bucket}"))
+}
+
+/// Issue `PutBucketVersioning` for `bucket` with the given `status`.
+///
+/// Sets the versioning state to `Enabled` or `Suspended`.
+/// MFA-delete is intentionally not exposed in v0.2.0.
+pub async fn put_bucket_versioning(
+    client: &Client,
+    bucket: &str,
+    status: BucketVersioningStatus,
+) -> Result<PutBucketVersioningOutput> {
+    let versioning_config = VersioningConfiguration::builder().status(status).build();
+    client
+        .put_bucket_versioning()
+        .bucket(bucket)
+        .versioning_configuration(versioning_config)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-versioning on s3://{bucket}"))
+}
+
+/// Issue `GetBucketVersioning` for `bucket`. Returns the SDK response on success.
+///
+/// When versioning has never been configured, S3 returns an empty response
+/// (no `Status` element). The caller (`get_bucket_versioning_to_json`) maps
+/// this to `{}`.
+pub async fn get_bucket_versioning(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketVersioningOutput> {
+    client
+        .get_bucket_versioning()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("get-bucket-versioning on s3://{bucket}"))
 }
