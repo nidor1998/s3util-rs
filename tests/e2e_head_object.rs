@@ -62,7 +62,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn head_object_on_missing_key_exits_non_zero() {
+    async fn head_object_on_missing_key_exits_4() {
         let bucket = "s3util-e2e-nonexistent-bucket";
         let object_arg = format!("s3://{bucket}/nonexistent-key");
         let output = run_s3util(&[
@@ -76,6 +76,10 @@ mod tests {
             !output.status.success(),
             "head-object on missing key should fail"
         );
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "head-object on missing key/bucket must exit 4 (NotFound)"
+        );
     }
 }

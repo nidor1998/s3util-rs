@@ -3,14 +3,21 @@ use anyhow::Result;
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::head_object::HeadObjectArgs;
 use s3util_rs::output::json::head_object_to_json;
-use s3util_rs::storage::s3::api::{self, HeadObjectOpts};
+use s3util_rs::storage::s3::api::{self, HeadError, HeadObjectOpts};
+
+use super::ExitStatus;
 
 /// Runtime entry for `s3util head-object s3://<BUCKET>/<KEY>`.
 ///
-/// Builds the SDK client from `client_config`, issues `HeadObject`,
-/// and prints the response as AWS-CLI-shape pretty-printed JSON
-/// followed by a newline.
-pub async fn run_head_object(args: HeadObjectArgs, client_config: ClientConfig) -> Result<()> {
+/// Builds the SDK client from `client_config`, issues `HeadObject`, prints
+/// the response as AWS-CLI-shape pretty-printed JSON, and returns the exit
+/// status. Returns `ExitStatus::NotFound` (exit code 4) when the object
+/// (or its bucket / version) does not exist; bubbles up any other error
+/// via `anyhow`.
+pub async fn run_head_object(
+    args: HeadObjectArgs,
+    client_config: ClientConfig,
+) -> Result<ExitStatus> {
     let (bucket, key) = args
         .bucket_key()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
@@ -25,9 +32,17 @@ pub async fn run_head_object(args: HeadObjectArgs, client_config: ClientConfig) 
         enable_additional_checksum: args.enable_additional_checksum,
     };
 
-    let out = api::head_object(&client, &bucket, &key, opts).await?;
-    let json = head_object_to_json(&out);
-    let pretty = serde_json::to_string_pretty(&json)?;
-    println!("{pretty}");
-    Ok(())
+    match api::head_object(&client, &bucket, &key, opts).await {
+        Ok(out) => {
+            let json = head_object_to_json(&out);
+            let pretty = serde_json::to_string_pretty(&json)?;
+            println!("{pretty}");
+            Ok(ExitStatus::Success)
+        }
+        Err(HeadError::NotFound) => {
+            tracing::error!("object s3://{bucket}/{key} not found");
+            Ok(ExitStatus::NotFound)
+        }
+        Err(HeadError::Other(e)) => Err(e),
+    }
 }

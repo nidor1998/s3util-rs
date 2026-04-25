@@ -30,6 +30,17 @@ use aws_sdk_s3::types::{
     Tagging, VersioningConfiguration,
 };
 
+/// Error type for the head-* wrappers. Distinguishes the "target does not
+/// exist" case (so the runtime can map it to a dedicated exit code) from
+/// every other failure mode (network, auth, region mismatch, etc.).
+#[derive(Debug, thiserror::Error)]
+pub enum HeadError {
+    #[error("target does not exist")]
+    NotFound,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
     /// Version ID to target a specific object version.
@@ -47,16 +58,15 @@ pub struct HeadObjectOpts {
 }
 
 /// Issue `HeadObject` against `bucket`/`key`. Returns the SDK response on
-/// success.
-///
-/// Errors are wrapped with `anyhow::Context` describing the operation; callers
-/// pretty-print the chain via `format!("{e:#}")`.
+/// success, `HeadError::NotFound` if the SDK reports the object does not
+/// exist (404), and `HeadError::Other` for any other failure (the original
+/// SDK error is preserved with `anyhow::Context` describing the operation).
 pub async fn head_object(
     client: &Client,
     bucket: &str,
     key: &str,
     opts: HeadObjectOpts,
-) -> Result<HeadObjectOutput> {
+) -> Result<HeadObjectOutput, HeadError> {
     let mut req = client.head_object().bucket(bucket).key(key);
 
     if let Some(vid) = opts.version_id {
@@ -75,9 +85,18 @@ pub async fn head_object(
         req = req.checksum_mode(ChecksumMode::Enabled);
     }
 
-    req.send()
-        .await
-        .with_context(|| format!("head-object on s3://{bucket}/{key}"))
+    req.send().await.map_err(|e| {
+        if e.as_service_error()
+            .map(|s| s.is_not_found())
+            .unwrap_or(false)
+        {
+            HeadError::NotFound
+        } else {
+            HeadError::Other(
+                anyhow::Error::new(e).context(format!("head-object on s3://{bucket}/{key}")),
+            )
+        }
+    })
 }
 
 /// Issue `DeleteObject` against `bucket`/`key`. Returns the SDK response on success.
@@ -159,17 +178,27 @@ pub async fn delete_object_tagging(
         .with_context(|| format!("delete-object-tagging on s3://{bucket}/{key}"))
 }
 
-/// Issue `HeadBucket` against `bucket`. Returns the SDK response on success.
-///
-/// Errors are wrapped with `anyhow::Context` describing the operation; callers
-/// pretty-print the chain via `format!("{e:#}")`.
-pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutput> {
+/// Issue `HeadBucket` against `bucket`. Returns the SDK response on success,
+/// `HeadError::NotFound` if the SDK reports the bucket does not exist (404),
+/// and `HeadError::Other` for any other failure.
+pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutput, HeadError> {
     client
         .head_bucket()
         .bucket(bucket)
         .send()
         .await
-        .with_context(|| format!("head-bucket on s3://{bucket}"))
+        .map_err(|e| {
+            if e.as_service_error()
+                .map(|s| s.is_not_found())
+                .unwrap_or(false)
+            {
+                HeadError::NotFound
+            } else {
+                HeadError::Other(
+                    anyhow::Error::new(e).context(format!("head-bucket on s3://{bucket}")),
+                )
+            }
+        })
 }
 
 /// Issue `CreateBucket` for `bucket` in the given `region`.

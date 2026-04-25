@@ -54,7 +54,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn head_bucket_on_missing_bucket_exits_non_zero() {
+    async fn head_bucket_on_missing_bucket_exits_4() {
         let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let bucket_arg = format!("s3://{nonexistent}");
         let output = run_s3util(&[
@@ -68,6 +68,10 @@ mod tests {
             !output.status.success(),
             "head-bucket on missing bucket should fail"
         );
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "head-bucket on missing bucket must exit 4 (NotFound)"
+        );
     }
 }
