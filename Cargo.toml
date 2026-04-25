@@ -6,6 +6,12 @@ authors = ["nidor1998 <nidor1998@gmail.com>"]
 description = "S3 utility commands (cp, mv, rm, etc.)"
 license = "Apache-2.0"
 rust-version = "1.91.1"
+repository = "https://github.com/nidor1998/s3util-rs"
+homepage = "https://github.com/nidor1998/s3util-rs"
+documentation = "https://docs.rs/s3util-rs"
+readme = "README.md"
+keywords = ["AWS", "Amazon", "S3", "cli"]
+categories = ["command-line-utilities", "filesystem", "asynchronous", "concurrency"]
 
 [[bin]]
 name = "s3util"
