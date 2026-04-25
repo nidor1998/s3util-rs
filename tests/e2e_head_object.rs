@@ -63,7 +63,7 @@ mod tests {
 
     #[tokio::test]
     async fn head_object_on_missing_key_exits_4() {
-        let bucket = "s3util-e2e-nonexistent-bucket";
+        let bucket = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let object_arg = format!("s3://{bucket}/nonexistent-key");
         let output = run_s3util(&[
             "head-object",

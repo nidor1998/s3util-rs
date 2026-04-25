@@ -17,6 +17,11 @@ pub struct GetBucketPolicyArgs {
     )]
     pub target: Option<String>,
 
+    /// Print only the policy itself (pretty-printed JSON), not the
+    /// `{"Policy": "<escaped JSON>"}` wrapper that AWS CLI emits.
+    #[arg(long, env, default_value_t = false, help_heading = "Bucket Options")]
+    pub policy_only: bool,
+
     #[command(flatten)]
     pub common: CommonClientArgs,
 }
@@ -91,5 +96,22 @@ mod tests {
         let a = parse(&["test", "get-bucket-policy", "--auto-complete-shell", "bash"]);
         assert!(a.target.is_none());
         assert!(a.auto_complete_shell().is_some());
+    }
+
+    #[test]
+    fn policy_only_defaults_to_false() {
+        let a = parse(&["test", "get-bucket-policy", "s3://my-bucket"]);
+        assert!(!a.policy_only);
+    }
+
+    #[test]
+    fn policy_only_flag_sets_true() {
+        let a = parse(&[
+            "test",
+            "get-bucket-policy",
+            "--policy-only",
+            "s3://my-bucket",
+        ]);
+        assert!(a.policy_only);
     }
 }

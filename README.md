@@ -98,7 +98,7 @@ Beyond `cp`/`mv`, `s3util` ships a set of single-call wrappers that mirror `aws 
 |--------------------------|-----------------------------------------------------------------------------------------------|
 | `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
-| `get-bucket-tagging`     | Prints bucket tags as JSON (`{"TagSet": [...]}`); exits 1 with error on `NoSuchTagSet`        |
+| `get-bucket-tagging`     | Prints bucket tags as JSON (`{"TagSet": [...]}`); exits 4 on `NoSuchTagSet` / `NoSuchBucket`  |
 | `put-bucket-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent on success                            |
 | `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
 | `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
@@ -618,7 +618,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — emitted by clap when an argument is unknown, missing, or has an invalid value              |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
-| 4    | Not found — `head-bucket` / `head-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-tagging` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet)  |
+| 4    | Not found — `head-bucket` / `head-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-tagging` / `get-bucket-versioning` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet)  |
 | 101  | Abnormal termination (internal panic)                                                                               |
 | 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 

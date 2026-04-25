@@ -40,6 +40,8 @@ mod tests {
         let object_arg = format!("s3://{bucket}/{key}");
         let output = run_s3util(&["rm", "--target-profile", "s3sync-e2e-test", &object_arg]);
 
+        let still_exists = helper.is_object_exist(&bucket, key, None).await;
+
         helper.delete_bucket_with_cascade(&bucket).await;
 
         assert!(
@@ -51,6 +53,7 @@ mod tests {
         // Silent on success — stdout must be empty
         let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(stdout.is_empty(), "rm stdout must be silent; got: {stdout}");
+        assert!(!still_exists, "object must not exist after rm exits 0");
     }
 
     #[tokio::test]

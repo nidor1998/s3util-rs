@@ -10,13 +10,15 @@ use super::ExitStatus;
 /// Runtime entry for `s3util get-bucket-policy s3://<BUCKET>`.
 ///
 /// Builds the SDK client from `client_config`, issues `GetBucketPolicy`,
-/// and prints the response as AWS-CLI-shape pretty-printed JSON followed by
-/// a newline. Mirrors `aws s3api get-bucket-policy --output json`:
+/// and prints the response as pretty-printed JSON followed by a newline.
+/// Default output mirrors `aws s3api get-bucket-policy --output json`:
 /// `{"Policy": "<escaped-JSON-string>"}` where `Policy` is the raw policy
-/// JSON double-encoded as a JSON string.
+/// JSON double-encoded as a JSON string. With `--policy-only`, prints just
+/// the policy JSON itself (parsed and re-pretty-printed).
 ///
 /// Returns `ExitStatus::NotFound` (exit code 4) when S3 reports
-/// `NoSuchBucket` (bucket missing) or `NoSuchBucketPolicy` (no policy attached).
+/// `NoSuchBucket` (logged as "bucket … not found") or `NoSuchBucketPolicy`
+/// (logged as "policy for … not found").
 pub async fn run_get_bucket_policy(
     args: GetBucketPolicyArgs,
     client_config: ClientConfig,
@@ -27,15 +29,66 @@ pub async fn run_get_bucket_policy(
     let client = client_config.create_client().await;
     match api::get_bucket_policy(&client, &bucket).await {
         Ok(out) => {
-            let json = get_bucket_policy_to_json(&out);
-            let pretty = serde_json::to_string_pretty(&json)?;
+            let pretty = if args.policy_only {
+                render_policy_only(out.policy())?
+            } else {
+                serde_json::to_string_pretty(&get_bucket_policy_to_json(&out))?
+            };
             println!("{pretty}");
             Ok(ExitStatus::Success)
+        }
+        Err(HeadError::BucketNotFound) => {
+            tracing::error!("bucket s3://{bucket} not found");
+            Ok(ExitStatus::NotFound)
         }
         Err(HeadError::NotFound) => {
             tracing::error!("policy for s3://{bucket} not found");
             Ok(ExitStatus::NotFound)
         }
         Err(HeadError::Other(e)) => Err(e),
+    }
+}
+
+/// Render the inner policy for `--policy-only`. Parses the policy string as
+/// JSON and pretty-prints it; falls back to the raw string verbatim if S3
+/// somehow returned non-JSON. Returns `{}` when no policy field is present
+/// (a 200-OK with empty body — should not occur in practice; S3 returns
+/// `NoSuchBucketPolicy` instead, which the caller maps to NotFound).
+fn render_policy_only(policy: Option<&str>) -> Result<String> {
+    let Some(policy) = policy else {
+        return Ok("{}".to_string());
+    };
+    match serde_json::from_str::<serde_json::Value>(policy) {
+        Ok(v) => Ok(serde_json::to_string_pretty(&v)?),
+        Err(_) => Ok(policy.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn render_policy_only_pretty_prints_valid_json() {
+        let raw = r#"{"Version":"2012-10-17","Statement":[]}"#;
+        let got = render_policy_only(Some(raw)).unwrap();
+        // Must be pretty-printed (newlines, indentation), and re-parse identically.
+        assert!(got.contains('\n'), "expected pretty-printed output: {got}");
+        let reparsed: serde_json::Value = serde_json::from_str(&got).unwrap();
+        let original: serde_json::Value = serde_json::from_str(raw).unwrap();
+        assert_eq!(reparsed, original);
+    }
+
+    #[test]
+    fn render_policy_only_falls_back_to_raw_for_invalid_json() {
+        let raw = "not-json";
+        let got = render_policy_only(Some(raw)).unwrap();
+        assert_eq!(got, "not-json");
+    }
+
+    #[test]
+    fn render_policy_only_emits_empty_object_when_policy_missing() {
+        let got = render_policy_only(None).unwrap();
+        assert_eq!(got, "{}");
     }
 }

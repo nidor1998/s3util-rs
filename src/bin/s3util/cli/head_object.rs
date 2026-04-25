@@ -39,7 +39,7 @@ pub async fn run_head_object(
             println!("{pretty}");
             Ok(ExitStatus::Success)
         }
-        Err(HeadError::NotFound) => {
+        Err(HeadError::BucketNotFound) | Err(HeadError::NotFound) => {
             tracing::error!("object s3://{bucket}/{key} not found");
             Ok(ExitStatus::NotFound)
         }

@@ -35,6 +35,7 @@ pub mod put_bucket_tagging;
 pub mod put_bucket_versioning;
 pub mod put_object_tagging;
 pub mod rm;
+pub mod tagging;
 pub mod ui_config;
 
 pub use cp::run_cp;

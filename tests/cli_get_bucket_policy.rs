@@ -31,6 +31,10 @@ fn help_succeeds_and_lists_option_groups() {
     assert!(stdout.contains("AWS Configuration"));
     assert!(stdout.contains("Retry Options"));
     assert!(stdout.contains("Timeout Options"));
+    assert!(
+        stdout.contains("--policy-only"),
+        "expected --policy-only in --help output; got: {stdout}"
+    );
 }
 
 #[test]
@@ -57,19 +61,18 @@ fn auto_complete_shell_short_circuits_without_target() {
 }
 
 #[test]
-fn target_with_key_component_fails_gracefully() {
-    // The bucket_name() helper rejects paths with a key — this exercises
-    // that path at the parse-assertion level (exit 1, not exit 2).
-    let (ok, _stdout, _stderr, code) =
-        run(s3util().args(["get-bucket-policy", "s3://example/key"]));
-    // key-bearing paths are accepted by clap but rejected by bucket_name().
-    // We only assert it does not exit 2 (parse error) — the runtime (exit 1)
-    // failure is expected without real credentials.
-    assert!(
-        code != Some(2),
-        "key-bearing path must not trigger a clap parse error; code={code:?}"
+fn bucket_with_key_exits_1() {
+    let (ok, _stdout, stderr, code) = run(s3util().args(["get-bucket-policy", "s3://example/key"]));
+    assert!(!ok);
+    assert_eq!(
+        code,
+        Some(1),
+        "bucket path with key should exit 1 (validation)"
     );
-    let _ = ok;
+    assert!(
+        !stderr.is_empty(),
+        "should have an error message on stderr; got empty"
+    );
 }
 
 #[test]

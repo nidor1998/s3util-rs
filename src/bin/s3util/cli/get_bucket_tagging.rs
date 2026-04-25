@@ -10,9 +10,10 @@ use super::ExitStatus;
 /// Runtime entry for `s3util get-bucket-tagging s3://<BUCKET>`.
 ///
 /// Builds the SDK client from `client_config`, issues `GetBucketTagging`,
-/// and prints the response as AWS-CLI-shape pretty-printed JSON
-/// followed by a newline. Returns `ExitStatus::NotFound` (exit code 4) when
-/// S3 reports `NoSuchBucket` (bucket missing) or `NoSuchTagSet` (no tags configured).
+/// and prints the response as AWS-CLI-shape pretty-printed JSON followed by
+/// a newline. Returns `ExitStatus::NotFound` (exit code 4) when S3 reports
+/// `NoSuchBucket` (logged as "bucket … not found") or `NoSuchTagSet`
+/// (logged as "tags for … not found").
 pub async fn run_get_bucket_tagging(
     args: GetBucketTaggingArgs,
     client_config: ClientConfig,
@@ -29,6 +30,10 @@ pub async fn run_get_bucket_tagging(
             let pretty = serde_json::to_string_pretty(&json)?;
             println!("{pretty}");
             Ok(ExitStatus::Success)
+        }
+        Err(HeadError::BucketNotFound) => {
+            tracing::error!("bucket s3://{bucket} not found");
+            Ok(ExitStatus::NotFound)
         }
         Err(HeadError::NotFound) => {
             tracing::error!("tags for s3://{bucket} not found");

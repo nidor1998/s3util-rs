@@ -33,26 +33,41 @@ use aws_sdk_s3::types::{
 /// Error type for read wrappers that distinguish a 404 NotFound condition
 /// from every other failure mode (network, auth, region mismatch, etc.).
 /// Used by `head_object`, `head_bucket`, `get_object_tagging`,
-/// `get_bucket_policy`, and `get_bucket_tagging` so the runtime can map
-/// NotFound to a dedicated exit code (4).
+/// `get_bucket_policy`, `get_bucket_tagging`, and `get_bucket_versioning`
+/// so the runtime can map NotFound to a dedicated exit code (4) and emit
+/// an accurate "bucket missing" vs "subresource missing" message.
 #[derive(Debug, thiserror::Error)]
 pub enum HeadError {
+    /// S3 reported the bucket itself does not exist (`NoSuchBucket`).
+    /// Distinct from `NotFound` so callers can say "bucket … not found"
+    /// rather than the misleading "tags/policy … not found".
+    #[error("bucket does not exist")]
+    BucketNotFound,
+    /// The addressed resource (key, version, tag set, policy) does not
+    /// exist. Bucket existence is not implied by this variant.
     #[error("target does not exist")]
     NotFound,
     #[error(transparent)]
     Other(#[from] anyhow::Error),
 }
 
-/// S3 error codes that `get-object-tagging` treats as 404 NotFound.
-const GET_OBJECT_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchBucket", "NoSuchVersion"];
-/// S3 error codes that `get-bucket-policy` treats as 404 NotFound.
+/// S3 error codes that `get-object-tagging` treats as a subresource
+/// NotFound. `NoSuchBucket` is handled separately by `classify_not_found`
+/// and mapped to `HeadError::BucketNotFound`.
+const GET_OBJECT_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `get-bucket-policy` treats as a subresource NotFound.
 /// `NoSuchBucketPolicy` covers the case where the bucket exists but no
-/// policy is attached.
-const GET_BUCKET_POLICY_NOT_FOUND_CODES: &[&str] = &["NoSuchBucket", "NoSuchBucketPolicy"];
-/// S3 error codes that `get-bucket-tagging` treats as 404 NotFound.
+/// policy is attached. `NoSuchBucket` is handled separately.
+const GET_BUCKET_POLICY_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"];
+/// S3 error codes that `get-bucket-tagging` treats as a subresource NotFound.
 /// `NoSuchTagSet` covers the case where the bucket exists but no tags
-/// are configured.
-const GET_BUCKET_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchBucket", "NoSuchTagSet"];
+/// are configured. `NoSuchBucket` is handled separately.
+const GET_BUCKET_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchTagSet"];
+/// S3 error codes that `get-bucket-versioning` treats as a subresource
+/// NotFound. `GetBucketVersioning` returns an empty body (not an error)
+/// when versioning has never been configured, so the only NotFound case
+/// is `NoSuchBucket`, which `classify_not_found` handles separately.
+const GET_BUCKET_VERSIONING_NOT_FOUND_CODES: &[&str] = &[];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -133,9 +148,9 @@ pub async fn delete_object(
 }
 
 /// Issue `GetObjectTagging` against `bucket`/`key`. Returns the SDK response
-/// on success, `HeadError::NotFound` when S3 returns one of the 404 codes
-/// (`NoSuchKey`, `NoSuchBucket`, `NoSuchVersion`), and `HeadError::Other`
-/// for any other failure.
+/// on success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchKey` or `NoSuchVersion`,
+/// and `HeadError::Other` for any other failure.
 ///
 /// If `version_id` is provided, tags for that specific object version are fetched.
 pub async fn get_object_tagging(
@@ -149,22 +164,34 @@ pub async fn get_object_tagging(
         req = req.version_id(v);
     }
     req.send().await.map_err(|e| {
-        if matches_not_found_code(
-            e.as_service_error()
-                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
-            GET_OBJECT_TAGGING_NOT_FOUND_CODES,
-        ) {
-            HeadError::NotFound
-        } else {
-            HeadError::Other(
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, GET_OBJECT_TAGGING_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(
                 anyhow::Error::new(e).context(format!("get-object-tagging on s3://{bucket}/{key}")),
-            )
+            ),
         }
     })
 }
 
 fn matches_not_found_code(code: Option<&str>, candidates: &[&str]) -> bool {
     code.is_some_and(|c| candidates.contains(&c))
+}
+
+/// Classify an SDK error code into a `HeadError` for `get-*` wrappers.
+/// `NoSuchBucket` is always mapped to `BucketNotFound`. Any code in
+/// `subresource_codes` is mapped to `NotFound`. Anything else returns
+/// `None`, signalling the caller should wrap the error as `Other`.
+fn classify_not_found(code: Option<&str>, subresource_codes: &[&str]) -> Option<HeadError> {
+    if code == Some("NoSuchBucket") {
+        return Some(HeadError::BucketNotFound);
+    }
+    if matches_not_found_code(code, subresource_codes) {
+        return Some(HeadError::NotFound);
+    }
+    None
 }
 
 /// Issue `PutObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
@@ -209,8 +236,8 @@ pub async fn delete_object_tagging(
 }
 
 /// Issue `HeadBucket` against `bucket`. Returns the SDK response on success,
-/// `HeadError::NotFound` if the SDK reports the bucket does not exist (404),
-/// and `HeadError::Other` for any other failure.
+/// `HeadError::BucketNotFound` if the SDK reports the bucket does not exist
+/// (404), and `HeadError::Other` for any other failure.
 pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutput, HeadError> {
     client
         .head_bucket()
@@ -222,7 +249,7 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
                 .map(|s| s.is_not_found())
                 .unwrap_or(false)
             {
-                HeadError::NotFound
+                HeadError::BucketNotFound
             } else {
                 HeadError::Other(
                     anyhow::Error::new(e).context(format!("head-bucket on s3://{bucket}")),
@@ -287,9 +314,9 @@ pub async fn put_bucket_tagging(
 }
 
 /// Issue `GetBucketTagging` for `bucket`. Returns the SDK response on success,
-/// `HeadError::NotFound` when S3 returns `NoSuchBucket` (the bucket itself
-/// is missing) or `NoSuchTagSet` (no tags are configured on the bucket),
-/// and `HeadError::Other` for any other failure.
+/// `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchTagSet` (the bucket exists
+/// but no tags are configured), and `HeadError::Other` for any other failure.
 pub async fn get_bucket_tagging(
     client: &Client,
     bucket: &str,
@@ -300,16 +327,14 @@ pub async fn get_bucket_tagging(
         .send()
         .await
         .map_err(|e| {
-            if matches_not_found_code(
-                e.as_service_error()
-                    .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
-                GET_BUCKET_TAGGING_NOT_FOUND_CODES,
-            ) {
-                HeadError::NotFound
-            } else {
-                HeadError::Other(
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_TAGGING_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
                     anyhow::Error::new(e).context(format!("get-bucket-tagging on s3://{bucket}")),
-                )
+                ),
             }
         })
 }
@@ -348,21 +373,34 @@ pub async fn put_bucket_versioning(
         .with_context(|| format!("put-bucket-versioning on s3://{bucket}"))
 }
 
-/// Issue `GetBucketVersioning` for `bucket`. Returns the SDK response on success.
+/// Issue `GetBucketVersioning` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// and `HeadError::Other` for any other failure.
 ///
 /// When versioning has never been configured, S3 returns an empty response
-/// (no `Status` element). The caller (`get_bucket_versioning_to_json`) maps
-/// this to `{}`.
+/// (no `Status` element) — that is `Ok`, not NotFound. The caller
+/// (`get_bucket_versioning_to_json`) maps the empty payload to `{}`.
 pub async fn get_bucket_versioning(
     client: &Client,
     bucket: &str,
-) -> Result<GetBucketVersioningOutput> {
+) -> Result<GetBucketVersioningOutput, HeadError> {
     client
         .get_bucket_versioning()
         .bucket(bucket)
         .send()
         .await
-        .with_context(|| format!("get-bucket-versioning on s3://{bucket}"))
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_VERSIONING_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-bucket-versioning on s3://{bucket}")),
+                ),
+            }
+        })
 }
 
 /// Issue `PutBucketPolicy` for `bucket` with the given `policy` JSON string.
@@ -384,9 +422,10 @@ pub async fn put_bucket_policy(
 }
 
 /// Issue `GetBucketPolicy` for `bucket`. Returns the SDK response on success,
-/// `HeadError::NotFound` when S3 returns `NoSuchBucket` (the bucket itself
-/// is missing) or `NoSuchBucketPolicy` (no policy is attached), and
-/// `HeadError::Other` for any other failure.
+/// `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchBucketPolicy` (the bucket
+/// exists but no policy is attached), and `HeadError::Other` for any other
+/// failure.
 pub async fn get_bucket_policy(
     client: &Client,
     bucket: &str,
@@ -397,16 +436,14 @@ pub async fn get_bucket_policy(
         .send()
         .await
         .map_err(|e| {
-            if matches_not_found_code(
-                e.as_service_error()
-                    .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code),
-                GET_BUCKET_POLICY_NOT_FOUND_CODES,
-            ) {
-                HeadError::NotFound
-            } else {
-                HeadError::Other(
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_POLICY_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
                     anyhow::Error::new(e).context(format!("get-bucket-policy on s3://{bucket}")),
-                )
+                ),
             }
         })
 }
@@ -472,27 +509,55 @@ mod tests {
 
     /// Pin the candidate set so a typo or accidental edit shows up as a
     /// test failure rather than a behavioural regression at e2e time.
+    /// The constants no longer include `NoSuchBucket` — that is handled
+    /// uniformly by `classify_not_found` and mapped to `BucketNotFound`.
     #[test]
     fn get_object_tagging_not_found_codes_pinned() {
         assert_eq!(
             GET_OBJECT_TAGGING_NOT_FOUND_CODES,
-            &["NoSuchKey", "NoSuchBucket", "NoSuchVersion"]
+            &["NoSuchKey", "NoSuchVersion"]
         );
     }
 
     #[test]
     fn get_bucket_policy_not_found_codes_pinned() {
-        assert_eq!(
-            GET_BUCKET_POLICY_NOT_FOUND_CODES,
-            &["NoSuchBucket", "NoSuchBucketPolicy"]
-        );
+        assert_eq!(GET_BUCKET_POLICY_NOT_FOUND_CODES, &["NoSuchBucketPolicy"]);
     }
 
     #[test]
     fn get_bucket_tagging_not_found_codes_pinned() {
-        assert_eq!(
-            GET_BUCKET_TAGGING_NOT_FOUND_CODES,
-            &["NoSuchBucket", "NoSuchTagSet"]
-        );
+        assert_eq!(GET_BUCKET_TAGGING_NOT_FOUND_CODES, &["NoSuchTagSet"]);
+    }
+
+    #[test]
+    fn get_bucket_versioning_not_found_codes_pinned() {
+        let empty: &[&str] = &[];
+        assert_eq!(GET_BUCKET_VERSIONING_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn classify_not_found_routes_no_such_bucket_to_bucket_not_found() {
+        let got = classify_not_found(Some("NoSuchBucket"), &["NoSuchTagSet"]);
+        assert!(matches!(got, Some(HeadError::BucketNotFound)));
+    }
+
+    #[test]
+    fn classify_not_found_routes_subresource_code_to_not_found() {
+        let got = classify_not_found(Some("NoSuchTagSet"), &["NoSuchTagSet"]);
+        assert!(matches!(got, Some(HeadError::NotFound)));
+    }
+
+    #[test]
+    fn classify_not_found_returns_none_for_unrelated_code() {
+        assert!(classify_not_found(Some("AccessDenied"), &["NoSuchTagSet"]).is_none());
+        assert!(classify_not_found(None, &["NoSuchTagSet"]).is_none());
+    }
+
+    #[test]
+    fn classify_not_found_no_such_bucket_takes_priority_over_subresource_list() {
+        // `NoSuchBucket` must always become `BucketNotFound` even if a
+        // caller mistakenly leaves it in the subresource list.
+        let got = classify_not_found(Some("NoSuchBucket"), &["NoSuchBucket", "NoSuchTagSet"]);
+        assert!(matches!(got, Some(HeadError::BucketNotFound)));
     }
 }

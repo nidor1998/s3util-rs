@@ -386,7 +386,7 @@ async fn main() -> Result<()> {
             let client_config = args.common.build_client_config();
 
             let exit_code = match cli::run_get_bucket_versioning(args, client_config).await {
-                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Ok(status) => status.code(),
                 Err(e) => {
                     tracing::error!(error = format!("{e:#}"));
                     cli::EXIT_CODE_ERROR

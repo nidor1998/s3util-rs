@@ -125,7 +125,44 @@ mod tests {
         // Verify exit code is 0 (not 3/Warning)
         assert_eq!(output.status.code(), Some(0));
 
+        // Verify tags were actually applied by reading them back.
+        let get_out = run_s3util(&[
+            "get-bucket-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+        let get_ok = get_out.status.success();
+        let get_stderr = String::from_utf8_lossy(&get_out.stderr).to_string();
+        let get_stdout = String::from_utf8_lossy(&get_out.stdout).to_string();
+
         helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            get_ok,
+            "get-bucket-tagging after create should succeed; stderr: {get_stderr}"
+        );
+        let json: serde_json::Value =
+            serde_json::from_str(&get_stdout).expect("get-bucket-tagging stdout must be JSON");
+        let tag_set = json["TagSet"].as_array().expect("TagSet must be an array");
+        assert_eq!(
+            tag_set.len(),
+            2,
+            "expected 2 tags applied by create-bucket --tagging; got: {get_stdout}"
+        );
+        let pairs: std::collections::HashMap<String, String> = tag_set
+            .iter()
+            .map(|t| {
+                (
+                    t["Key"].as_str().unwrap_or("").to_string(),
+                    t["Value"].as_str().unwrap_or("").to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(pairs.get("env").map(String::as_str), Some("test"));
+        assert_eq!(pairs.get("team").map(String::as_str), Some("sre"));
     }
 
     /// delete-bucket on a non-empty bucket exits non-zero (BucketNotEmpty).

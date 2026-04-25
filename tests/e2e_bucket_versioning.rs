@@ -162,9 +162,9 @@ mod tests {
         assert_eq!(output.status.code(), Some(1));
     }
 
-    /// get-bucket-versioning on a non-existent bucket should fail with exit code 1.
+    /// get-bucket-versioning on a non-existent bucket should exit 4 (NotFound).
     #[tokio::test]
-    async fn get_versioning_on_missing_bucket_exits_non_zero() {
+    async fn get_versioning_on_missing_bucket_exits_4() {
         let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let bucket_arg = format!("s3://{nonexistent}");
         let output = run_s3util(&[
@@ -178,6 +178,10 @@ mod tests {
             !output.status.success(),
             "get-bucket-versioning on missing bucket should fail"
         );
-        assert_eq!(output.status.code(), Some(1));
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "get-bucket-versioning on missing bucket must exit 4 (NoSuchBucket)"
+        );
     }
 }
