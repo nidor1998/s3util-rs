@@ -18,6 +18,7 @@ Currently in **preview**.
 <summary>Click to expand to view table of contents</summary>
 
 - [Overview](#overview)
+    * [Scope](#scope)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
     * [Full multipart support](#full-multipart-support)
@@ -84,6 +85,10 @@ Currently in **preview**.
 `s3util` is a compact copy tool for Amazon S3, built as a companion to [s3sync](https://github.com/nidor1998/s3sync). Where `s3sync` is optimized for bulk, recursive synchronization, `s3util` is optimized for the single-object case: a single `cp` invocation that copies one object, verifies it, reports progress, and exits with a meaningful status code.
 
 All transfer, verification, and multipart code is shared in spirit with `s3sync` — but the CLI surface is deliberately narrow and the binary is a single file with no recursive/directory mode.
+
+### Scope
+
+s3util is a single-object copy/move tool. It is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — examples include the AWS CLI (`aws s3 cp` / `aws s3 mv`) and `s5cmd`, but the same applies to any S3 transfer tool. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified. If you need recursive/bulk synchronization use [s3sync](https://github.com/nidor1998/s3sync); for any other S3 functionality or compatibility with a specific tool's flag set, use that tool.
 
 ## Features
 
