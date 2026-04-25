@@ -51,10 +51,12 @@ async fn main() -> Result<()> {
             };
             start_tracing_if_necessary(&config);
             tracing::trace!("config = {:?}", config);
-            // Runner added in Task 7. For now, return error so the binary still
-            // compiles and `cargo build` is green.
-            eprintln!("s3util mv: not yet implemented");
-            std::process::exit(cli::EXIT_CODE_ERROR);
+
+            let exit_code = match cli::run_mv(config).await {
+                Ok(status) => status.code(),
+                Err(_) => cli::EXIT_CODE_ERROR,
+            };
+            std::process::exit(exit_code);
         }
     }
 }

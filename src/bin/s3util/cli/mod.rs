@@ -18,9 +18,11 @@ use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancell
 pub mod cp;
 pub mod ctrl_c_handler;
 pub mod indicator;
+pub mod mv;
 pub mod ui_config;
 
 pub use cp::run_cp;
+pub use mv::run_mv;
 
 // Default refill interval is 100ms (= 10 refills per second).
 const REFILL_PER_INTERVAL_DIVIDER: usize = 10;
@@ -39,6 +41,7 @@ fn build_rate_limiter(config: &Config) -> Option<Arc<RateLimiter>> {
     })
 }
 
+#[derive(Debug)]
 pub enum ExitStatus {
     Success,
     Warning,
@@ -63,14 +66,10 @@ pub const EXIT_CODE_CANCELLED: i32 = 130;
 
 /// Intermediate state produced by [`run_copy_phase`].
 ///
-/// [`run_cp`] (and, in the future, `run_mv`) translates this into an
-/// [`ExitStatus`] / cleanup decision. The clone of the source `Storage` is
-/// kept so callers can reuse the same factory-built instance for follow-up
-/// operations (e.g. `mv`'s post-transfer delete) without rebuilding it.
-// `source_storage`, `source_key`, and `cancellation_token` are unused by
-// today's `run_cp` wrapper. They exist for `run_mv`, which lands in a later
-// task and consumes them for its post-transfer delete logic.
-#[allow(dead_code)]
+/// [`run_cp`] and [`run_mv`] translate this into an [`ExitStatus`] / cleanup
+/// decision. The clone of the source `Storage` is kept so callers can reuse
+/// the same factory-built instance for follow-up operations (e.g. `mv`'s
+/// post-transfer delete) without rebuilding it.
 pub struct CopyPhase {
     pub transfer_result: Result<TransferOutcome>,
     pub source_storage: Storage,
