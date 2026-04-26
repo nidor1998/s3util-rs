@@ -15,6 +15,7 @@
 
 - [Overview](#overview)
     * [Scope](#scope)
+    * [Non-Goals](#non-goals)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
     * [Full multipart support](#full-multipart-support)
@@ -80,15 +81,27 @@
 
 `s3util` is a collection of tools for managing objects and buckets on Amazon S3, built as a companion to [s3sync](https://github.com/nidor1998/s3sync). Where `s3sync` is optimized for bulk, recursive synchronization, `s3util` is optimized for single-object transfers and direct S3 API operations: each invocation operates on one object or one bucket, verifies the result where applicable, and exits with a meaningful status code.
 
-The transfer, verification, and multipart engine is shared in spirit with `s3sync` — but each subcommand has a deliberately narrow surface, and the binary is a single file with no recursive/directory mode.
+`s3util` follows the same design principles as `s3sync` for transfer, verification, and multipart handling — but each subcommand has a deliberately narrow surface, and the binary is a single file with no recursive/directory mode.
 
 For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
 
 ### Scope
 
-s3util is designed to cover roughly **70–80% of typical object-storage operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
+s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
 The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3 cp` / `aws s3 mv` / `aws s3api`) and `s5cmd`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified.
+
+### Non-Goals
+
+The following are explicitly out of scope and will not be added, regardless of demand:
+
+- Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
+- Glob or wildcard expansion in S3 keys. For pattern-based matching, use s3sync, which supports regular expressions.
+- Multiple source or destination arguments to `cp` / `mv`. Each invocation transfers exactly one object.
+- Behavioral or flag compatibility with `aws s3`, `aws s3api`, `s5cmd`, `rclone`, or any other S3 client.
+- A plugin or extension mechanism.
+
+Issues and pull requests requesting any of the above will be closed.
 
 ### Subcommands
 
