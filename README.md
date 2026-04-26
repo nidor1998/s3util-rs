@@ -89,7 +89,7 @@ For object transfers in particular, `s3util` emphasizes high reliability, high p
 
 s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
-The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3 cp` / `aws s3 mv` / `aws s3api`) and `s5cmd`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified.
+The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified.
 
 ### Non-Goals
 
@@ -99,6 +99,7 @@ The following are explicitly out of scope and will not be added, regardless of d
 - Glob or wildcard expansion in S3 keys. For pattern-based matching, use s3sync, which supports regular expressions.
 - Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
 - Behavioral or flag compatibility with `aws s3`, `aws s3api`, `s5cmd`, `rclone`, or any other S3 client.
+- Feature parity with other S3 clients. The presence of a feature in `aws s3`, `aws s3api`, `s5cmd`, `rclone`, `s3cmd`, or any other S3 tool is not, by itself, a reason to add it to s3util. Each feature request is evaluated only against s3util's own scope and design principles.
 - A plugin or extension mechanism.
 
 Issues and pull requests requesting any of the above will be closed.
