@@ -97,7 +97,7 @@ The following are explicitly out of scope and will not be added, regardless of d
 
 - Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
 - Glob or wildcard expansion in S3 keys. For pattern-based matching, use s3sync, which supports regular expressions.
-- Multiple source or destination arguments to `cp` / `mv`. Each invocation transfers exactly one object.
+- Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
 - Behavioral or flag compatibility with `aws s3`, `aws s3api`, `s5cmd`, `rclone`, or any other S3 client.
 - A plugin or extension mechanism.
 
