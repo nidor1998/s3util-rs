@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::put_bucket_policy::PutBucketPolicyArgs;
@@ -34,5 +35,6 @@ pub async fn run_put_bucket_policy(
 
     let client = client_config.create_client().await;
     api::put_bucket_policy(&client, &bucket, &policy_body).await?;
+    info!(bucket = %bucket, "Bucket policy set.");
     Ok(())
 }

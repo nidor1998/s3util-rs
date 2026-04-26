@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use aws_sdk_s3::types::Tagging;
 use s3util_rs::config::ClientConfig;
@@ -25,6 +26,7 @@ pub async fn run_create_bucket(
     let client = client_config.create_client().await;
 
     api::create_bucket(&client, &bucket).await?;
+    info!(bucket = %bucket, "Bucket created.");
 
     if let Some(raw_tagging) = args.tagging.as_deref() {
         let tags = parse_tagging_to_tags(raw_tagging)?;
@@ -37,6 +39,7 @@ pub async fn run_create_bucket(
             );
             return Ok(ExitStatus::Warning);
         }
+        info!(bucket = %bucket, "Bucket tagging set.");
     }
 
     Ok(ExitStatus::Success)

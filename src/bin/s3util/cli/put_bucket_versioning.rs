@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::put_bucket_versioning::PutBucketVersioningArgs;
@@ -22,6 +23,7 @@ pub async fn run_put_bucket_versioning(
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let status = args.versioning_status();
     let client = client_config.create_client().await;
-    api::put_bucket_versioning(&client, &bucket, status).await?;
+    api::put_bucket_versioning(&client, &bucket, status.clone()).await?;
+    info!(bucket = %bucket, status = %status.as_str(), "Bucket versioning set.");
     Ok(())
 }

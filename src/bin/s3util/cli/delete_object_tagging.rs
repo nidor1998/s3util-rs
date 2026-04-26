@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::delete_object_tagging::DeleteObjectTaggingArgs;
@@ -19,5 +20,11 @@ pub async fn run_delete_object_tagging(
     let client = client_config.create_client().await;
 
     api::delete_object_tagging(&client, &bucket, &key, args.source_version_id.as_deref()).await?;
+    info!(
+        bucket = %bucket,
+        key = %key,
+        version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+        "Object tagging deleted."
+    );
     Ok(())
 }

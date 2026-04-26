@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::rm::RmArgs;
@@ -16,5 +17,11 @@ pub async fn run_rm(args: RmArgs, client_config: ClientConfig) -> Result<()> {
     let client = client_config.create_client().await;
 
     api::delete_object(&client, &bucket, &key, args.source_version_id.as_deref()).await?;
+    info!(
+        bucket = %bucket,
+        key = %key,
+        version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+        "Object deleted."
+    );
     Ok(())
 }

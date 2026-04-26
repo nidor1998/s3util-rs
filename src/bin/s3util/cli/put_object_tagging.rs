@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use aws_sdk_s3::types::Tagging;
 use s3util_rs::config::ClientConfig;
@@ -33,5 +34,11 @@ pub async fn run_put_object_tagging(
         tagging,
     )
     .await?;
+    info!(
+        bucket = %bucket,
+        key = %key,
+        version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+        "Object tagging set."
+    );
     Ok(())
 }

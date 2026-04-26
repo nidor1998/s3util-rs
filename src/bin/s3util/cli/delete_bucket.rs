@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::delete_bucket::DeleteBucketArgs;
@@ -15,5 +16,6 @@ pub async fn run_delete_bucket(args: DeleteBucketArgs, client_config: ClientConf
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
     api::delete_bucket(&client, &bucket).await?;
+    info!(bucket = %bucket, "Bucket deleted.");
     Ok(())
 }

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use aws_sdk_s3::types::Tagging;
 use s3util_rs::config::ClientConfig;
@@ -26,5 +27,6 @@ pub async fn run_put_bucket_tagging(
     let client = client_config.create_client().await;
 
     api::put_bucket_tagging(&client, &bucket, tagging).await?;
+    info!(bucket = %bucket, "Bucket tagging set.");
     Ok(())
 }

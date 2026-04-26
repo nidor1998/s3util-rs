@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::delete_bucket_tagging::DeleteBucketTaggingArgs;
@@ -19,5 +20,6 @@ pub async fn run_delete_bucket_tagging(
     let client = client_config.create_client().await;
 
     api::delete_bucket_tagging(&client, &bucket).await?;
+    info!(bucket = %bucket, "Bucket tagging deleted.");
     Ok(())
 }

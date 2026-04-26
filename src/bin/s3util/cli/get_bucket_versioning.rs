@@ -1,4 +1,5 @@
 use anyhow::Result;
+use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::get_bucket_versioning::GetBucketVersioningArgs;
@@ -28,7 +29,9 @@ pub async fn run_get_bucket_versioning(
     match api::get_bucket_versioning(&client, &bucket).await {
         Ok(out) => {
             let json = get_bucket_versioning_to_json(&out);
-            if !json.as_object().is_some_and(|m| m.is_empty()) {
+            if json.as_object().is_some_and(|m| m.is_empty()) {
+                info!(bucket = %bucket, "Bucket versioning not configured.");
+            } else {
                 let pretty = serde_json::to_string_pretty(&json)?;
                 println!("{pretty}");
             }
