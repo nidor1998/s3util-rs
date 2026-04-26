@@ -26,8 +26,9 @@ use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::types::{
-    BucketLocationConstraint, BucketVersioningStatus, ChecksumMode, CreateBucketConfiguration,
-    Tagging, VersioningConfiguration,
+    BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
+    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Tagging,
+    VersioningConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
@@ -258,17 +259,38 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
         })
 }
 
-/// Issue `CreateBucket` for `bucket`. The `LocationConstraint` is derived
-/// from the SDK client's resolved region (which honours `--target-region`,
-/// `AWS_REGION`, and the active profile's region in that order).
+/// Issue `CreateBucket` for `bucket`.
 ///
-/// The `us-east-1` quirk: S3 rejects a `LocationConstraint` of `us-east-1`
-/// (the API was designed before that region existed), so the constraint is
-/// omitted there. It is also omitted when the client has no resolved region.
+/// **Directory buckets (S3 Express One Zone, `--x-s3` suffix)** require a
+/// different `CreateBucketConfiguration` (`Location` + `Bucket`) than
+/// general-purpose buckets (`LocationConstraint`). The bucket name itself
+/// encodes the zone ID — the segment between the last `--` and the
+/// `--x-s3` suffix — so we parse it from the name and switch shapes.
+///
+/// **General-purpose buckets**: the `LocationConstraint` is derived from
+/// the SDK client's resolved region (which honours `--target-region`,
+/// `AWS_REGION`, and the active profile's region in that order). S3 rejects
+/// a `LocationConstraint` of `us-east-1` (the API was designed before that
+/// region existed), so the constraint is omitted there. It is also omitted
+/// when the client has no resolved region.
 pub async fn create_bucket(client: &Client, bucket: &str) -> Result<CreateBucketOutput> {
     let mut req = client.create_bucket().bucket(bucket);
 
-    if let Some(region) = client.config().region().map(|r| r.as_ref())
+    if let Some(loc) = parse_directory_bucket_zone(bucket) {
+        let location = LocationInfo::builder()
+            .r#type(loc.location_type)
+            .name(loc.zone_id)
+            .build();
+        let bucket_info = BucketInfo::builder()
+            .r#type(BucketType::Directory)
+            .data_redundancy(loc.data_redundancy)
+            .build();
+        let cfg = CreateBucketConfiguration::builder()
+            .location(location)
+            .bucket(bucket_info)
+            .build();
+        req = req.create_bucket_configuration(cfg);
+    } else if let Some(region) = client.config().region().map(|r| r.as_ref())
         && !region.is_empty()
         && region != "us-east-1"
     {
@@ -282,6 +304,44 @@ pub async fn create_bucket(client: &Client, bucket: &str) -> Result<CreateBucket
     req.send()
         .await
         .with_context(|| format!("create-bucket on s3://{bucket}"))
+}
+
+/// Parsed zone information for an S3 Express One Zone directory bucket
+/// name. Returned by [`parse_directory_bucket_zone`].
+struct DirectoryBucketZone {
+    zone_id: String,
+    location_type: LocationType,
+    data_redundancy: DataRedundancy,
+}
+
+/// Parse the zone ID and zone type from a directory-bucket name.
+///
+/// Directory bucket names follow `<base>--<zone-id>--x-s3`. Returns `None`
+/// for any name that does not match this shape (including names that end
+/// in `--x-s3` but lack a zone segment — S3 will reject those itself).
+///
+/// Zone type is inferred from the zone-ID shape:
+/// - one hyphen (e.g. `apne1-az4`) → Availability Zone
+/// - two or more hyphens (e.g. `usw2-lax1-az1`) → Local Zone
+fn parse_directory_bucket_zone(bucket: &str) -> Option<DirectoryBucketZone> {
+    let stripped = bucket.strip_suffix("--x-s3")?;
+    let (_, zone_id) = stripped.rsplit_once("--")?;
+    if zone_id.is_empty() {
+        return None;
+    }
+    let (location_type, data_redundancy) = if zone_id.matches('-').count() <= 1 {
+        (
+            LocationType::AvailabilityZone,
+            DataRedundancy::SingleAvailabilityZone,
+        )
+    } else {
+        (LocationType::LocalZone, DataRedundancy::SingleLocalZone)
+    };
+    Some(DirectoryBucketZone {
+        zone_id: zone_id.to_string(),
+        location_type,
+        data_redundancy,
+    })
 }
 
 /// Issue `DeleteBucket` for `bucket`. Returns the SDK response on success.
@@ -559,5 +619,52 @@ mod tests {
         // caller mistakenly leaves it in the subresource list.
         let got = classify_not_found(Some("NoSuchBucket"), &["NoSuchBucket", "NoSuchTagSet"]);
         assert!(matches!(got, Some(HeadError::BucketNotFound)));
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_returns_none_for_general_purpose_name() {
+        assert!(parse_directory_bucket_zone("my-bucket").is_none());
+        assert!(parse_directory_bucket_zone("my-bucket--with-dashes").is_none());
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_parses_availability_zone_id() {
+        let z = parse_directory_bucket_zone("test-s3rm-e2e-0e1932b0b372--apne1-az4--x-s3")
+            .expect("expected directory-bucket parse");
+        assert_eq!(z.zone_id, "apne1-az4");
+        assert_eq!(z.location_type, LocationType::AvailabilityZone);
+        assert_eq!(z.data_redundancy, DataRedundancy::SingleAvailabilityZone);
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_parses_local_zone_id() {
+        let z = parse_directory_bucket_zone("mybucket--usw2-lax1-az1--x-s3")
+            .expect("expected directory-bucket parse");
+        assert_eq!(z.zone_id, "usw2-lax1-az1");
+        assert_eq!(z.location_type, LocationType::LocalZone);
+        assert_eq!(z.data_redundancy, DataRedundancy::SingleLocalZone);
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_handles_base_with_embedded_double_dash() {
+        // The base part can itself contain `--`; only the final `--<zone>--x-s3`
+        // segment matters.
+        let z = parse_directory_bucket_zone("my--weird--base--apne1-az4--x-s3")
+            .expect("expected directory-bucket parse");
+        assert_eq!(z.zone_id, "apne1-az4");
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_rejects_missing_zone_segment() {
+        // `bucket--x-s3` has no `--<zone>--` separator before the suffix.
+        assert!(parse_directory_bucket_zone("bucket--x-s3").is_none());
+        // Only the suffix, no base or zone.
+        assert!(parse_directory_bucket_zone("--x-s3").is_none());
+    }
+
+    #[test]
+    fn parse_directory_bucket_zone_rejects_empty_zone_id() {
+        // `<base>----x-s3` parses to an empty zone-id segment.
+        assert!(parse_directory_bucket_zone("base----x-s3").is_none());
     }
 }
