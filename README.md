@@ -6,7 +6,7 @@
 
 ## Tools for managing Amazon S3 objects and buckets
 
-`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
+`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s7cmd` toolkit.
 
 ## Table of contents
 
