@@ -4,13 +4,9 @@
 ![MSRV](https://img.shields.io/badge/msrv-1.91.1-red)
 [![codecov](https://codecov.io/gh/nidor1998/s3util-rs/graph/badge.svg)](https://codecov.io/gh/nidor1998/s3util-rs)
 
-## Safe, verifiable single-object copy for Amazon S3
+## Tools for managing Amazon S3 objects and buckets
 
-`s3util` is a single-object copy tool for Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
-
-Today it implements the `cp`, `mv`, and `head-bucket` subcommands (documented in detail below), plus fifteen thin S3 API wrappers: `head-object`, `rm`, `create-bucket`, `delete-bucket`, `put-bucket-versioning`, `get-bucket-versioning`, `put-bucket-policy`, `get-bucket-policy`, `delete-bucket-policy`, `get-bucket-tagging`, `put-bucket-tagging`, `delete-bucket-tagging`, `get-object-tagging`, `put-object-tagging`, and `delete-object-tagging`. `cp` covers Local↔S3, S3↔S3, and stdin/stdout streaming; `mv` covers Local↔S3 and S3↔S3 (no stdio) and deletes the source after a successful, verified copy. Both share the same multipart pipeline — with parallel multipart uploads and downloads (`--max-parallel-uploads`, default `16`) — plus checksum verification and metadata handling. `head-bucket` issues a single S3 `HeadBucket` API call against the given bucket and prints the response as AWS-CLI-shape JSON (`BucketRegion`, `AccessPointAlias`, etc.). The thin wrappers each map to a single S3 API call, produce no output on success (or JSON where noted), and exit with a non-zero code on error. Run `s3util -h` for the current top-level subcommand list, and `s3util <subcommand> -h` for per-command options.
-
-Currently in **preview**.
+`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future `s3cmd-rs` toolkit.
 
 ## Table of contents
 
@@ -24,7 +20,7 @@ Currently in **preview**.
     * [Full multipart support](#full-multipart-support)
     * [All transfer directions](#all-transfer-directions)
     * [Server-side copy](#server-side-copy)
-    * [Stdio streaming](#stdio-streaming)
+    * [Stdin/stdout streaming](#stdinstdout-streaming)
     * [Express One Zone support](#express-one-zone-support)
     * [SSE and SSE-C](#sse-and-sse-c)
     * [Metadata and tagging preservation](#metadata-and-tagging-preservation)
@@ -82,35 +78,42 @@ Currently in **preview**.
 
 ## Overview
 
-`s3util` is a compact copy tool for Amazon S3, built as a companion to [s3sync](https://github.com/nidor1998/s3sync). Where `s3sync` is optimized for bulk, recursive synchronization, `s3util` is optimized for the single-object case: a single `cp` invocation that copies one object, verifies it, reports progress, and exits with a meaningful status code.
+`s3util` is a collection of tools for managing objects and buckets on Amazon S3, built as a companion to [s3sync](https://github.com/nidor1998/s3sync). Where `s3sync` is optimized for bulk, recursive synchronization, `s3util` is optimized for single-object transfers and direct S3 API operations: each invocation operates on one object or one bucket, verifies the result where applicable, and exits with a meaningful status code.
 
-All transfer, verification, and multipart code is shared in spirit with `s3sync` — but the CLI surface is deliberately narrow and the binary is a single file with no recursive/directory mode.
+The transfer, verification, and multipart engine is shared in spirit with `s3sync` — but each subcommand has a deliberately narrow surface, and the binary is a single file with no recursive/directory mode.
+
+For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
 
 ### Scope
 
-s3util is a single-object copy/move tool. It is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — examples include the AWS CLI (`aws s3 cp` / `aws s3 mv`) and `s5cmd`, but the same applies to any S3 transfer tool. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified. If you need recursive/bulk synchronization use [s3sync](https://github.com/nidor1998/s3sync); for any other S3 functionality or compatibility with a specific tool's flag set, use that tool.
+s3util is designed to cover roughly **70–80% of typical object-storage operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
-### Thin S3 API wrappers
+The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3 cp` / `aws s3 mv` / `aws s3api`) and `s5cmd`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified.
 
-Beyond `cp`/`mv`, `s3util` ships a set of single-call wrappers that mirror `aws s3api` subcommands with a simpler, script-friendly interface:
+### Subcommands
+
+`s3util` provides the following subcommands. `cp` and `mv` perform single-object transfers using the full multipart and verification pipeline; the remaining subcommands are thin wrappers around individual S3 API calls with a simpler, script-friendly interface than `aws s3api`.
 
 | Subcommand               | What it does                                                                                   |
 |--------------------------|-----------------------------------------------------------------------------------------------|
-| `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
+| `cp`                     | Copies a single object: Local↔S3, S3↔S3, or stdin/stdout streaming; full multipart + checksum verification |
+| `mv`                     | Moves a single object: same as `cp` plus deletes the source after a successful, verified copy (no stdio) |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
-| `get-bucket-tagging`     | Prints bucket tags as JSON (`{"TagSet": [...]}`); exits 4 on `NoSuchTagSet` / `NoSuchBucket`  |
-| `put-bucket-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent on success                            |
-| `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
-| `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
+| `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
+| `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
 | `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
 | `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; exit 3 if tagging step fails after create |
+| `head-bucket`            | Prints `HeadBucket` response as JSON                                                          |
 | `delete-bucket`          | Deletes an empty bucket; silent on success                                                    |
-| `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
-| `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}` or `{}`); silent on unset            |
 | `put-bucket-policy`      | Sets bucket policy from a file path or `-` (stdin); body sent verbatim, no client-side validation; silent |
-| `get-bucket-policy`      | Prints policy as JSON (`{"Policy": "<escaped-JSON-string>"}`, matching `aws s3api`)            |
+| `get-bucket-policy`      | Prints policy as JSON (`{"Policy": "<escaped-JSON-string>"}`, matching `aws s3api`); `--policy-only` prints just the inner policy as pretty-printed JSON |
 | `delete-bucket-policy`   | Removes bucket policy; silent on success                                                      |
+| `put-bucket-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent on success                            |
+| `get-bucket-tagging`     | Prints bucket tags as JSON (`{"TagSet": [...]}`); exits 4 on `NoSuchTagSet` / `NoSuchBucket`  |
+| `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
+| `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
+| `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}`); silent when never configured (matches AWS CLI) |
 
 ## Features
 
@@ -146,11 +149,13 @@ Transfer direction is inferred automatically from the source/target combination:
 | `-` (stdin)   | `s3://…`      | Stdin → S3    |
 | `s3://…`      | `-` (stdout)  | S3 → Stdout   |
 
+S3 → S3 transfers can span **different AWS accounts**, **different regions**, and **different S3-compatible storage providers** (e.g. AWS S3 → MinIO, or vice versa). The source and target are independently configured via the paired `--source-*` and `--target-*` credential, profile, region, and endpoint flags — they need not share a single S3 endpoint.
+
 ### Server-side copy
 
 `--server-side-copy` uses S3's `CopyObject` / `UploadPartCopy` for S3→S3 transfers within the same account/region, avoiding a round-trip through the client. `s3util` falls back to client-side copy when server-side is not possible (different endpoints, SSE-C translation, etc.).
 
-### Stdio streaming
+### Stdin/stdout streaming
 
 Pipe data directly through S3 without touching the local filesystem:
 
@@ -221,14 +226,6 @@ cargo build --release
 # The binary is at ./target/release/s3util
 ```
 
-Shell completions can be generated:
-
-```bash
-s3util cp --auto-complete-shell bash   > /etc/bash_completion.d/s3util
-s3util cp --auto-complete-shell zsh    > "${fpath[1]}/_s3util"
-s3util cp --auto-complete-shell fish   > ~/.config/fish/completions/s3util.fish
-```
-
 ## Usage
 
 ```
@@ -245,6 +242,8 @@ Supported path forms for `<SOURCE>` / `<TARGET>`:
 | `-`              | Standard input (as source) or stdout (as target) |
 
 Every long flag also reads from an uppercase-underscore environment variable of the same name (for example `--max-parallel-uploads` ↔ `MAX_PARALLEL_UPLOADS`).
+
+The examples below describe the `cp` and `mv` commands. For details on other commands (`head-bucket`, `head-object`, `rm`, the bucket-management wrappers, etc.), run `s3util -h` for the top-level subcommand list and `s3util <command> -h` for per-command options.
 
 ### Upload a local file
 
@@ -276,6 +275,24 @@ Server-side (same account/region, avoids round-tripping bytes through the client
 s3util cp --server-side-copy --auto-chunksize \
   s3://src-bucket/key s3://dst-bucket/key
 ```
+
+Client-side S3 → S3 copies can span different AWS accounts, different regions, and different S3-compatible providers — point the `--source-*` and `--target-*` flags at independent endpoints:
+
+```bash
+# Cross-account, cross-region (separate profiles, separate regions)
+s3util cp \
+  --source-profile prod --source-region us-east-1 \
+  --target-profile dev  --target-region us-west-2 \
+  s3://prod-bucket/key s3://dev-bucket/key
+
+# AWS S3 → S3-compatible (e.g. MinIO)
+s3util cp \
+  --target-endpoint-url https://minio.example.com:9000 \
+  --target-force-path-style \
+  s3://aws-bucket/key s3://minio-bucket/key
+```
+
+`--server-side-copy` is incompatible with this case (it requires source and target to be reachable from a single S3 endpoint); cross-endpoint copies always run client-side.
 
 ### Stdin → S3
 
@@ -310,186 +327,9 @@ s3util mv s3://my-bucket/old-key ./local-copy
 Differences from `cp`:
 
 - **Stdin/stdout is not supported.** A `-` source or target is rejected at argument-parse time.
-- **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code. See [mv command behavior](#mv-command-behavior) for the exact gating logic.
+- **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code.
 - **`--no-fail-on-verify-error`** (mv only) treats a verification warning as success and proceeds to delete the source. Use only when you understand why your S3↔S3 chunksize layout produces an expected mismatch.
 - **`--source-version-id`** deletes the specific source version after the copy (rather than creating a delete marker on the latest version).
-
-### Head a bucket
-
-```bash
-s3util head-bucket s3://my-bucket
-```
-
-Prints the `HeadBucket` response as AWS-CLI-shape JSON:
-
-```json
-{
-  "BucketRegion": "us-east-1",
-  "AccessPointAlias": false
-}
-```
-
-### Head an object
-
-```bash
-s3util head-object s3://my-bucket/path/to/key
-```
-
-Prints the `HeadObject` response as JSON. Use `--source-version-id` to head a specific version. SSE-C-encrypted objects can be read by supplying `--source-sse-c AES256 --source-sse-c-key <base64-key>`.
-
-To request and verify an additional checksum alongside the metadata:
-
-```bash
-s3util head-object --enable-additional-checksum s3://my-bucket/path/to/key
-```
-
-### Delete an object (rm)
-
-```bash
-s3util rm s3://my-bucket/path/to/key
-```
-
-Deletes a single S3 object. Silent on success. To delete a specific version:
-
-```bash
-s3util rm --source-version-id <version-id> s3://my-bucket/path/to/key
-```
-
-### Manage object tagging
-
-Retrieve tags:
-
-```bash
-s3util get-object-tagging s3://my-bucket/path/to/key
-```
-
-```json
-{
-  "TagSet": [
-    { "Key": "env", "Value": "prod" }
-  ],
-  "VersionId": "abc123"
-}
-```
-
-Replace all tags (URL-encoded query-string format):
-
-```bash
-s3util put-object-tagging --tagging "env=prod&team=platform" s3://my-bucket/path/to/key
-```
-
-Remove all tags:
-
-```bash
-s3util delete-object-tagging s3://my-bucket/path/to/key
-```
-
-All three support `--source-version-id` to target a specific object version.
-
-### Bucket tagging
-
-Retrieve tags on a bucket:
-
-```bash
-s3util get-bucket-tagging s3://my-bucket
-```
-
-```json
-{
-  "TagSet": [
-    { "Key": "env", "Value": "prod" }
-  ]
-}
-```
-
-If the bucket has no tags configured, S3 returns `NoSuchTagSet` and s3util exits 1 with an error message.
-
-Replace all tags (URL-encoded query-string format):
-
-```bash
-s3util put-bucket-tagging --tagging "env=prod&team=platform" s3://my-bucket
-```
-
-Remove all tags:
-
-```bash
-s3util delete-bucket-tagging s3://my-bucket
-```
-
-### Manage a bucket (create / delete)
-
-Create a bucket (LocationConstraint is inferred from the SDK client's resolved region — `--target-region`, `AWS_REGION`, or the active profile; `us-east-1` is handled as the AWS default):
-
-```bash
-s3util create-bucket --target-region us-west-2 s3://my-new-bucket
-
-# With initial tags
-s3util create-bucket --target-region us-west-2 --tagging "project=myapp&env=prod" s3://my-new-bucket
-```
-
-If `CreateBucket` succeeds but the subsequent `PutBucketTagging` call fails, `s3util` exits with code 3 and prints a warning. The bucket will exist but untagged — there is no automatic rollback.
-
-Delete an empty bucket:
-
-```bash
-s3util delete-bucket s3://my-empty-bucket
-```
-
-### Bucket versioning
-
-Enable versioning:
-
-```bash
-s3util put-bucket-versioning --enabled s3://my-bucket
-```
-
-Suspend versioning:
-
-```bash
-s3util put-bucket-versioning --suspended s3://my-bucket
-```
-
-`--enabled` and `--suspended` are mutually exclusive. Retrieve the current state:
-
-```bash
-s3util get-bucket-versioning s3://my-bucket
-```
-
-```json
-{ "Status": "Enabled" }
-```
-
-Returns `{}` if versioning has never been configured on the bucket.
-
-### Bucket policy
-
-Upload a policy from a file:
-
-```bash
-s3util put-bucket-policy s3://my-bucket policy.json
-```
-
-Or pipe from stdin:
-
-```bash
-cat policy.json | s3util put-bucket-policy s3://my-bucket -
-```
-
-The policy body is sent verbatim — no client-side validation. Retrieve the current policy:
-
-```bash
-s3util get-bucket-policy s3://my-bucket
-```
-
-```json
-{ "Policy": "{\"Version\":\"2012-10-17\",\"Statement\":[...]}" }
-```
-
-Remove the policy:
-
-```bash
-s3util delete-bucket-policy s3://my-bucket
-```
 
 ### Additional checksum verification
 
@@ -579,6 +419,8 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 ### Express One Zone detail
 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
+
+`create-bucket` also accepts directory-bucket names. The zone ID is parsed from the name (`<base>--<zone-id>--x-s3`) and the appropriate `Location`/`Bucket` configuration is sent. The zone type is inferred from the zone-ID shape — one hyphen is treated as an Availability Zone (e.g. `apne1-az4`), two or more as a Local Zone (e.g. `usw2-lax1-az1`). The active region (`--target-region` / `AWS_REGION` / profile) must match the zone's region; otherwise S3 will reject the request.
 
 ### S3 Permissions
 
@@ -872,42 +714,42 @@ Support for S3-compatible storage is best-effort and may behave differently. `s3
 
 No human wrote a single line of source code in this project. Every line of source code, every test, all documentation, CI/CD configuration, and this README were generated by AI using [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (Anthropic).
 
-Human engineers authored the requirements, design specifications, and the s3sync reference architecture. They thoroughly reviewed and verified the design, all source code, and all tests. Features of the preview binary have been manually tested against live AWS S3. The development followed a spec-driven process: requirements and design documents were written first, and the AI generated code to match those specifications under continuous human oversight.
+Human engineers authored the requirements, design specifications, and the s3sync reference architecture. They thoroughly reviewed and verified the design, all source code, and all tests. Features of the binary have been manually tested against live AWS S3. The development followed a spec-driven process: requirements and design documents were written first, and the AI generated code to match those specifications under continuous human oversight.
 
 ### Quality verification (by AI self-assessment)
 
 | Metric                         | Value                                                         |
 |--------------------------------|---------------------------------------------------------------|
-| Production code                | ~16,900 lines of Rust (48 source files)                       |
-| E2E integration tests          | ~540 tests across 31 test files (gated behind `e2e_test`)     |
-| Unit tests                     | ~69 tests embedded in `src/`                                  |
-| Code coverage (llvm-cov)       | 94.33% regions, 94.39% functions, 94.85% lines                |
+| Production code                | ~26,200 lines of Rust (90 source files)                       |
+| E2E integration tests          | ~690 tests across 56 test files (gated behind `e2e_test`)     |
+| Unit tests                     | ~650 tests embedded in `src/`                                 |
+| Code coverage (llvm-cov)       | 94.32% regions, 88.99% functions, 94.85% lines                |
 | Static analysis (clippy)       | 0 warnings (`cargo clippy --all-features`)                    |
 | Formatting                     | 0 diffs (`cargo fmt --check`)                                 |
 | Code reuse from [s3sync](https://github.com/nidor1998/s3sync) | significant (transfer, verification, multipart engine)         |
 
-The codebase is built through spec-driven development with human review at every step. Coverage and test counts reflect the preview state and will grow alongside additional subcommands (`rm`, …).
+The codebase is built through spec-driven development with human review at every step. Coverage and test counts will continue to grow alongside future subcommands and refinements.
 
 ### AI assessment of safety and correctness (by Claude, Anthropic)
 
 <details>
 <summary>Click to expand the full AI assessment</summary>
 
-> Assessment date: _to be filled in by the maintainer at release time_.
+> Assessment date: 2026-04-26.
 >
-> Assessed version: s3util-rs preview.
+> Assessed version: 0.2.0 (branch `v0.2.0`, commit `01c5ae2`).
 >
-> The assessment below is a template produced from a repository-wide read of the current preview codebase (`config`, `storage`, `transfer`, `types`, the `s3util` binary, and the E2E test suite under `tests/`). It will be replaced with a formal assessment at each tagged release.
+> Scope: a repository-wide read of `config`, `storage`, `transfer`, `output`, `types`, the `s3util` binary, the integration suites under `tests/cli_*.rs` and `tests/e2e_*.rs`, the `Cargo.toml`/`Cargo.lock` dependency graph, the `cargo-deny` configuration, and the GitHub Actions CI workflows. The assessment is independent of the maintainer's "Quality verification" table above; coverage and test-count figures are not re-stated here.
 
-**Is s3util designed to produce verifiable, non-corrupting single-object copies, and is it sufficiently tested?**
+**Is s3util designed so that each subcommand performs the operation the operator intended, with no silent data corruption and no silent loss of state, and is it sufficiently tested?**
 
-There are two distinct risks with a copy tool: (1) the operator makes a mistake (wrong target, wrong source version), and (2) a software bug causes silent data corruption during transfer. These require different safeguards.
+v0.2.0 broadens s3util from a single-object copy tool into a collection of single-resource subcommands: the verifying transfer pipeline (`cp`, `mv`) and seventeen thin wrappers around individual S3 API calls (`rm`, `head-object`, `head-bucket`, `create-bucket`, `delete-bucket`, the bucket/object tagging family, the bucket-policy family, and the bucket-versioning pair). The risks therefore split into three categories: (1) the operator targets the wrong resource, (2) a bug in s3util corrupts data on a transfer, and (3) a thin wrapper succeeds at the wrong scope or leaves the bucket in a partial state. Each requires different safeguards.
 
 #### Protection against user mistakes
 
-`s3util`'s CLI surface is intentionally narrow. A single `cp` subcommand, explicit source and target, and no recursive mode mean there is very little room for a "whoops, I deleted/overwrote a whole tree" class of error.
+`s3util`'s CLI surface is intentionally narrow. Every subcommand operates on exactly one resource (one object, one bucket, or one bucket subresource), sources and targets are explicit, and there is no recursive mode anywhere in the binary — leaving very little room for a "whoops, I deleted/overwrote a whole tree" class of error.
 
-Concrete safeguards:
+Concrete safeguards on the transfer subcommands (`cp`, `mv`):
 
 1. **Single-object only.** Directory sources are rejected. A source URL ending in `/` is rejected. A source URL whose final segment is `.` or `..` is rejected at argument-parse time.
 2. **Target-parent must exist.** On downloads, `s3util` does not create missing directories — it returns an error and asks the user to create them.
@@ -916,18 +758,26 @@ Concrete safeguards:
 5. **`--if-none-match`** implements "create only" at the S3 level, preventing accidental overwrite of an existing object.
 6. **ctrl-c is safe.** A SIGINT handler cancels any in-flight multipart upload (issuing `AbortMultipartUpload`) before exiting with code 130 (standard Unix SIGINT convention), so scripts can distinguish user cancellation from normal success.
 
-Each safeguard is independently testable; several have direct coverage in `e2e_cancel_test.rs`, `e2e_exit_codes.rs`, and `cli_config_validation_error.rs`.
+Concrete safeguards on the thin S3 API wrappers:
 
-#### Protection against software bugs
+7. **Argument shape is enforced per subcommand.** `rm` and `head-object` require `s3://<BUCKET>/<KEY>` and reject bucket-only paths; the `*-bucket-*` subcommands require `s3://<BUCKET>` and reject paths with a key. Mismatches are caught at parse time and exit 1 (validation), not after the SDK round-trip.
+8. **Mutually exclusive intent flags.** `put-bucket-versioning` requires exactly one of `--enabled` / `--suspended`, enforced by `clap`'s argument groups; the operator cannot accidentally suspend versioning by omitting the intent flag.
+9. **Read-side NotFound is a distinct exit code.** `head-bucket`, `head-object`, `get-object-tagging`, `get-bucket-policy`, `get-bucket-tagging`, and `get-bucket-versioning` map S3's `NoSuchBucket`/`NoSuchKey`/`NoSuchVersion`/`NoSuchBucketPolicy`/`NoSuchTagSet` to exit code 4, distinct from generic error code 1. Scripts can distinguish "bucket missing" from "auth failed" without parsing stderr.
+10. **Per-subresource error-code allowlists are pinned by tests.** `src/storage/s3/api.rs` defines `GET_*_NOT_FOUND_CODES` constants and asserts their exact contents in unit tests, so a typo or accidental edit (e.g. quietly demoting `AccessDenied` to NotFound, or expanding the allowlist) shows up as a unit-test failure rather than at e2e time.
+11. **`NoSuchBucket` is always classified before subresource codes.** `classify_not_found` routes `NoSuchBucket` to `HeadError::BucketNotFound` (and a "bucket does not exist" message) before consulting the subresource list, so a missing bucket is never reported as a missing tag/policy. Pinned by test.
 
-The more serious concern is whether a bug in `s3util` itself could cause silent corruption — for example, a multipart assembly bug that writes parts out of order, a checksum comparison that accepts any value, or a stdin code path that reports success without fully reading stdin.
+The honest gap on the destructive thin wrappers: `rm`, `delete-bucket`, `delete-bucket-policy`, `delete-bucket-tagging`, and `delete-object-tagging` execute silently on success and offer no `--dry-run`, no `--force`/confirmation flag, and no preview of the bucket state. This matches `aws s3api`'s philosophy — and the single-resource scope means a typo can damage at most one resource — but it does mean that "wrong bucket" or "wrong key" mistakes are not caught before the network call. Operators relying on this surface should script around it (e.g. a `head-*` precheck) rather than expect interactive guardrails.
 
-Architecture-level safeguards:
+The relevant validation paths are exercised by `tests/cli_arg_validation.rs`, `tests/cli_config_validation_error.rs`, the per-subcommand `tests/cli_<name>.rs` files (which run the binary end-to-end without network access), and — for live behaviour — `tests/e2e_exit_codes.rs`, `tests/e2e_cancel_test.rs`, `tests/e2e_head_bucket.rs`, `tests/e2e_head_object.rs`, `tests/e2e_create_delete_bucket.rs`, `tests/e2e_rm.rs`, `tests/e2e_bucket_policy.rs`, `tests/e2e_bucket_tagging.rs`, `tests/e2e_bucket_versioning.rs`, and `tests/e2e_object_tagging.rs`.
+
+#### Protection against software bugs (transfer engine)
+
+The transfer engine — shared in spirit with the production-tested `s3sync` — is the part of s3util whose bugs would cause the most serious damage: silent corruption, an upload that reports success without fully reading stdin, a multipart assembly that writes parts out of order, or a checksum comparator that accepts any value. The architectural safeguards here are unchanged from v0.1:
 
 - **Verification runs after every upload.** When the source is a local file or stdin, the upload-side ETag and (optionally) additional checksum are compared against S3-reported values. A mismatch is a hard error — the destination object is considered corrupted.
 - **S3→S3 warnings, not errors.** On S3→S3 transfers, a checksum mismatch becomes a warning (exit code 3) because differing multipart chunksizes between source and destination can legitimately produce different composite values. `--auto-chunksize` lets users match source chunks exactly when they want identical composite hashes.
 - **Algorithmic diversity.** Additional-checksum algorithms span MD/CRC/SHA families (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`, `SHA256`) with both composite and full-object variants. This is enough to detect silent corruption under every realistic fault model AWS S3 can produce.
-- **Multipart cleanup.** Fatal errors and ctrl-c both abort the in-flight multipart upload, so orphaned multipart fragments don't accumulate and bill.
+- **Multipart cleanup.** Fatal errors and ctrl-c both abort the in-flight multipart upload (`UploadManager::abort_multipart_upload` is invoked from every error/cancel path in `src/storage/s3/upload_manager.rs`), so orphaned multipart fragments don't accumulate and bill.
 - **Single-part path keeps `Content-MD5`.** The default single-part upload path sends `Content-MD5`, which S3 independently verifies on the server side, providing an end-to-end integrity check that does not depend on `s3util`'s own code being bug-free.
 
 E2E test verification against live AWS S3 covers, at minimum:
@@ -940,17 +790,40 @@ E2E test verification against live AWS S3 covers, at minimum:
 - Special characters in keys (`e2e_special_characters`) and Express One Zone behavior (`e2e_express_one_zone`).
 - Public-bucket access without signing (`e2e_source_no_sign_request`).
 
+#### Protection against software bugs (thin S3 API wrappers)
+
+The thin wrappers are structurally simple: each is a single async function in `src/storage/s3/api.rs` that builds an SDK request, awaits it, and maps the response (or error) into the runtime in `src/bin/s3util/cli/<name>.rs`. The dangerous classes of bug here are different from the transfer engine:
+
+- **Mis-routed errors.** A `NoSuchBucket` reported as a "tag set not found" would mislead an operator into creating a tag set on a non-existent bucket (succeeds, then fails). The shared `HeadError` taxonomy and `classify_not_found` helper, together with the pinned-allowlist tests in `src/storage/s3/api.rs`, make this class of mis-routing a unit-test failure rather than a production surprise.
+- **Silent partial state.** `create-bucket --tagging` is two API calls (`CreateBucket` then `PutBucketTagging`); if the second fails the bucket exists untagged. The runtime explicitly logs a warning and returns exit code 3, naming the partial state and the recovery path ("Retry tagging or delete the bucket manually"). It does **not** roll the bucket back automatically — that is a deliberate choice, and the only multi-step thin wrapper in v0.2.0.
+- **JSON shape drift.** Output for `head-*` and `get-*` subcommands is hand-serialised in `src/output/json.rs` (the SDK types do not implement `Serialize` and the SDK field shape does not match `aws s3api --output json`). Each serializer omits absent fields rather than emitting `null`, double-encodes `Policy` to match `aws s3api`, and is covered by per-field unit tests in the same file. A regression in field naming or omission semantics shows up as a unit-test failure.
+- **Stdin handling for `put-bucket-policy`.** The policy body is read with synchronous `std::io::Read::read_to_string` and forwarded verbatim — s3util performs no client-side validation. S3 rejects malformed policies with `400 MalformedPolicy`, so a bad body cannot silently apply, but operators should be aware that the file path variant has no in-process size cap (S3's own ~20KB policy limit is the effective bound).
+
+Cancellation: only the transfer subcommands install the SIGINT handler. The thin wrappers do not — each is a single SDK call, so ctrl-c terminates the process and the in-flight HTTP request is aborted at the connection layer. There is no in-flight multi-step state to clean up except the documented `create-bucket --tagging` window described above.
+
+#### Cross-cutting concerns
+
+- **Credential handling.** `AccessKeys`, `SseKmsKeyId`, and `SseCustomerKey` derive `Zeroize` + `ZeroizeOnDrop` and have hand-written `Debug` impls that print `** redacted **` for the secret fields. The `trace_config_summary` helper in `bin/s3util/main.rs` deliberately enumerates non-sensitive fields rather than `{:?}`-printing the whole `Config`, so a future field addition cannot silently leak via tracing.
+- **TLS and crypto stack.** `Cargo.toml` opts out of `aws-sdk-s3`'s default features specifically to drop the legacy `rustls 0.21` alias (vulnerable `rustls-webpki 0.101.x`, RUSTSEC-2026-0098) and re-enables the modern `default-https-client` feature. `Cargo.lock` confirms `rustls 0.23.x`, `rustls-webpki 0.103.x`, and `ring 0.17.x` are the resolved versions; `openssl-sys` is in the `cargo-deny` ban list.
+- **Supply chain enforcement.** `cargo-deny check` runs in CI on every push and PR (`.github/workflows/cargo-deny.yml` plus the `cargo_deny` job in `ci.yml`); `advisories.ignore = []`, so any new RUSTSEC advisory fails the build until reviewed. The project pins specific crate versions rather than wildcards, and the license allowlist is restricted to standard permissive licenses.
+- **CI matrix.** `ci.yml` builds and unit-tests on Linux x86_64/aarch64 (gnu and musl), Windows x86_64/aarch64, and macOS aarch64 with stable Rust on every push; `cargo fmt --all --check` and `cargo clippy -- -D warnings` are required gates. E2E tests are gated behind `--cfg e2e_test` and run only by the maintainer against live AWS — not by CI — which is the right tradeoff (they would otherwise need credentials in CI and would create real billable resources).
+
 #### Known limitations
 
-- **Preview status.** `cp` and `mv` are wired up; additional commands (`rm`, …) will arrive in later releases.
-- **Best-effort S3-compatible support.** The code is exercised against Amazon S3 (including Express One Zone). Non-AWS S3-compatible stores may behave differently — `--disable-multipart-verify` / `--disable-etag-verify` / `--disable-additional-checksum-verify` / `--target-force-path-style` are provided for these cases.
-- **Single-file, no recursion.** By design — users who need recursive semantics should use `s3sync`.
+- **Best-effort S3-compatible support.** The code is exercised against Amazon S3 (including Express One Zone). Non-AWS S3-compatible stores may behave differently — `--disable-multipart-verify` / `--disable-etag-verify` / `--disable-additional-checksum-verify` / `--target-force-path-style` are provided for these cases. The thin wrappers depend on S3 returning the documented error codes (`NoSuchBucketPolicy`, `NoSuchTagSet`, etc.); a compatible store that returns a different code will fall through to exit code 1 ("Other") rather than the dedicated NotFound exit 4.
+- **Single-resource, no recursion.** By design — users who need recursive semantics should use `s3sync`. `rm` deletes one key, `delete-bucket` requires the bucket to be empty (S3 returns `409 BucketNotEmpty` otherwise, which surfaces as exit code 1).
+- **No interactive guard on destructive thin wrappers.** As noted above, `rm` and the `delete-*` family act immediately. A `--dry-run`/`--yes` pair is not implemented in v0.2.0.
+- **`create-bucket --tagging` is not transactional.** Documented and surfaced as exit code 3 with an explicit recovery hint, but operators must still act on the warning.
+- **`put-bucket-policy` performs no client-side schema validation.** By design — the body is forwarded verbatim and S3 is the authority on policy validity.
+- **Verification module contains a small number of `panic!()` invariant assertions** (e.g. `panic!("object_parts is empty")` in `src/storage/e_tag_verify.rs` and `src/storage/additional_checksum_verify.rs`). These guard caller-side preconditions and should never fire in normal operation; they would be cleaner as `Result::Err`, but their reachability is not currently demonstrated by any test.
 
 #### Overall assessment
 
-`s3util` inherits its transfer and verification engine from `s3sync`, which has been battle-tested in production. The CLI is deliberately narrow and the failure modes are well-scoped. The E2E suite exercises the critical integrity paths (multipart composition, stdio streaming, cancellation, exit codes) against live AWS S3 — not mocks — with explicit before/after state assertions.
+The transfer engine in v0.2.0 is unchanged from the production-tested foundation it inherits from `s3sync`: the multipart-composition, checksum-verification, cancellation, and stdio paths are all covered by E2E tests that run against live AWS S3 with explicit before/after state assertions. The most dangerous categories of behaviour (silent corruption, missed multipart cleanup, wrong exit codes) are actively tested against real infrastructure rather than mocks.
 
-This does not guarantee the absence of bugs, but it does mean the most dangerous categories of incorrect behavior (silent corruption, missed multipart cleanup, wrong exit codes) are actively tested against real infrastructure at each release.
+The new thin S3 API wrappers introduced in v0.2.0 are deliberately structured to reduce their own bug surface: each is one SDK call, error classification is centralised in a small set of helpers with pinned-allowlist tests, and JSON serialisation is hand-written with per-field unit coverage. The honest weak spot is the lack of interactive guard rails on the destructive subcommands (`rm`, `delete-bucket`, the `delete-*` family) — there is no `--dry-run` or confirmation prompt, and operators relying on these surfaces in scripts should add their own preflight checks. The single-resource scope keeps the worst-case blast radius bounded.
+
+This assessment does not guarantee the absence of bugs. It does mean that the categories of incorrect behaviour with the highest blast radius — silent data corruption on transfer, mis-routed NotFound errors on read, and silent partial state on multi-step writes — are either prevented by design or made loud (exit 3 / exit 4 / a tracing warning) rather than silent.
 
 </details>
 
