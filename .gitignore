@@ -5,3 +5,5 @@ s3sync
 tests/fixtures/large_data/
 .serena/
 lcov.info
+*.profraw
+.DS_Store

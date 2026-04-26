@@ -9,15 +9,48 @@ use shadow_rs::shadow;
 shadow!(build);
 
 pub mod common;
+pub mod common_client;
 pub mod cp;
+pub mod create_bucket;
+pub mod delete_bucket;
+pub mod delete_bucket_policy;
+pub mod delete_bucket_tagging;
+pub mod delete_object_tagging;
+pub mod get_bucket_policy;
+pub mod get_bucket_tagging;
+pub mod get_bucket_versioning;
+pub mod get_object_tagging;
+pub mod head_bucket;
+pub mod head_object;
 pub mod mv;
+pub mod put_bucket_policy;
+pub mod put_bucket_tagging;
+pub mod put_bucket_versioning;
+pub mod put_object_tagging;
+pub mod rm;
 pub mod value_parser;
 
 #[cfg(test)]
 mod tests;
 
 pub use cp::CpArgs;
+pub use create_bucket::CreateBucketArgs;
+pub use delete_bucket::DeleteBucketArgs;
+pub use delete_bucket_policy::DeleteBucketPolicyArgs;
+pub use delete_bucket_tagging::DeleteBucketTaggingArgs;
+pub use delete_object_tagging::DeleteObjectTaggingArgs;
+pub use get_bucket_policy::GetBucketPolicyArgs;
+pub use get_bucket_tagging::GetBucketTaggingArgs;
+pub use get_bucket_versioning::GetBucketVersioningArgs;
+pub use get_object_tagging::GetObjectTaggingArgs;
+pub use head_bucket::HeadBucketArgs;
+pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
+pub use put_bucket_policy::PutBucketPolicyArgs;
+pub use put_bucket_tagging::PutBucketTaggingArgs;
+pub use put_bucket_versioning::PutBucketVersioningArgs;
+pub use put_object_tagging::PutObjectTaggingArgs;
+pub use rm::RmArgs;
 
 // Re-exports kept here so existing callers that reference
 // `crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX`
@@ -48,9 +81,67 @@ pub struct Cli {
 #[derive(Subcommand, Clone, Debug)]
 pub enum Commands {
     /// Copy objects from/to S3
+    #[command(display_order = 1)]
     Cp(CpArgs),
+    /// Create an S3 bucket (general-purpose or directory bucket)
+    ///
+    /// Creates an S3 general-purpose bucket, or a directory bucket
+    /// (S3 Express One Zone) when the name ends with `--<zone-id>--x-s3`
+    /// (e.g. `s3://my-bucket--apne1-az4--x-s3` for an Availability Zone,
+    /// `s3://my-bucket--usw2-lax1-az1--x-s3` for a Local Zone).
+    ///
+    /// For general-purpose buckets, the location constraint is derived from the
+    /// resolved region (--target-region, AWS_REGION, or the active profile's region).
+    #[command(display_order = 8)]
+    CreateBucket(CreateBucketArgs),
+    /// Delete an S3 bucket (must be empty)
+    #[command(display_order = 10)]
+    DeleteBucket(DeleteBucketArgs),
+    /// Delete the bucket policy from an S3 bucket
+    #[command(display_order = 13)]
+    DeleteBucketPolicy(DeleteBucketPolicyArgs),
+    /// Delete all tags from an S3 bucket
+    #[command(display_order = 16)]
+    DeleteBucketTagging(DeleteBucketTaggingArgs),
+    /// Delete all tags from an S3 object
+    #[command(display_order = 7)]
+    DeleteObjectTagging(DeleteObjectTaggingArgs),
+    /// Retrieve the bucket policy of an S3 bucket and print it as JSON
+    #[command(display_order = 12)]
+    GetBucketPolicy(GetBucketPolicyArgs),
+    /// Retrieve the tags of an S3 bucket and print them as JSON
+    #[command(display_order = 15)]
+    GetBucketTagging(GetBucketTaggingArgs),
+    /// Retrieve the versioning state of an S3 bucket and print it as JSON
+    #[command(display_order = 18)]
+    GetBucketVersioning(GetBucketVersioningArgs),
+    /// Retrieve the tags of an S3 object and print them as JSON
+    #[command(display_order = 6)]
+    GetObjectTagging(GetObjectTaggingArgs),
+    /// Head an S3 bucket and print its metadata as JSON
+    #[command(display_order = 9)]
+    HeadBucket(HeadBucketArgs),
+    /// Head an S3 object and print its metadata as JSON
+    #[command(display_order = 4)]
+    HeadObject(HeadObjectArgs),
     /// Move objects from/to S3 (copy then delete source)
+    #[command(display_order = 2)]
     Mv(MvArgs),
+    /// Set the bucket policy on an S3 bucket
+    #[command(display_order = 11)]
+    PutBucketPolicy(PutBucketPolicyArgs),
+    /// Replace all tags on an S3 bucket
+    #[command(display_order = 14)]
+    PutBucketTagging(PutBucketTaggingArgs),
+    /// Set the versioning state of an S3 bucket (Enabled or Suspended)
+    #[command(display_order = 17)]
+    PutBucketVersioning(PutBucketVersioningArgs),
+    /// Replace all tags on an S3 object
+    #[command(display_order = 5)]
+    PutObjectTagging(PutObjectTaggingArgs),
+    /// Delete a single S3 object
+    #[command(display_order = 3)]
+    Rm(RmArgs),
 }
 
 pub fn parse_from_args<I, T>(args: I) -> Result<Cli, clap::Error>
@@ -69,7 +160,70 @@ where
     let cli = Cli::try_parse_from(args).map_err(|e| e.to_string())?;
     match cli.command {
         Commands::Cp(cp_args) => Config::try_from(cp_args),
+        Commands::CreateBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; create-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteBucketPolicy(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketPolicy(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketVersioning(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-versioning is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; get-object-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::HeadBucket(_) => Err(
+            "build_config_from_args is for cp/mv only; head-bucket is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::HeadObject(_) => Err(
+            "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::PutBucketPolicy(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutBucketTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutBucketVersioning(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-versioning is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutObjectTagging(_) => Err(
+            "build_config_from_args is for cp/mv only; put-object-tagging is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::Rm(_) => {
+            Err("build_config_from_args is for cp/mv only; rm is dispatched in main.rs".to_string())
+        }
     }
 }
 

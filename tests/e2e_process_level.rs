@@ -84,7 +84,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             dst.to_str().unwrap(),
         ]);
@@ -126,7 +126,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-request-payer",
             &source,
             dst.to_str().unwrap(),
@@ -171,9 +171,9 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             &target,
         ]);
@@ -217,9 +217,9 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-request-payer",
             &source,
             &target,
@@ -264,9 +264,9 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-request-payer",
             &source,
             &target,
@@ -311,9 +311,9 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-request-payer",
             "--target-request-payer",
             &source,
@@ -353,7 +353,7 @@ mod tests {
         let target = format!("s3://{}/{}", bucket, key);
 
         let output = run_s3util_with_stdin(
-            &["cp", "--target-profile", "s3sync-e2e-test", "-", &target],
+            &["cp", "--target-profile", "s3util-e2e-test", "-", &target],
             &body,
         );
 
@@ -391,7 +391,7 @@ mod tests {
             &[
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--target-request-payer",
                 "-",
                 &target,
@@ -432,7 +432,7 @@ mod tests {
 
         let source = format!("s3://{}/{}", bucket, key);
 
-        let output = run_s3util(&["cp", "--source-profile", "s3sync-e2e-test", &source, "-"]);
+        let output = run_s3util(&["cp", "--source-profile", "s3util-e2e-test", &source, "-"]);
 
         assert_eq!(
             output.status.code(),
@@ -467,7 +467,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-request-payer",
             &source,
             "-",
@@ -510,7 +510,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-request-payer",
             test_file.to_str().unwrap(),
             &target,
@@ -556,7 +556,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--show-progress",
             test_file.to_str().unwrap(),
             &target,
@@ -609,7 +609,7 @@ mod tests {
         let output = run_s3util(&[
             "cp",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--disable-payload-signing",
             test_file.to_str().unwrap(),
             &target,
@@ -658,7 +658,7 @@ mod tests {
             &[
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--multipart-threshold",
                 "5MiB",
                 "--multipart-chunksize",

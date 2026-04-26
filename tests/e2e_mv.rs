@@ -87,7 +87,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             test_file.to_str().unwrap(),
             &target,
         ]);
@@ -132,7 +132,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             dst.to_str().unwrap(),
         ]);
@@ -177,9 +177,9 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             &target,
         ]);
@@ -224,9 +224,9 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--server-side-copy",
             &source,
             &target,
@@ -283,9 +283,9 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--multipart-threshold",
             "5MiB",
             "--multipart-chunksize",
@@ -333,9 +333,9 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--multipart-threshold",
             "5MiB",
             "--multipart-chunksize",
@@ -401,7 +401,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             dst.to_str().unwrap(),
         ]);
@@ -462,7 +462,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1_id,
             &source,
@@ -514,7 +514,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             dst.to_str().unwrap(),
         ]);
@@ -562,7 +562,7 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             dst.to_str().unwrap(),
         ]);
@@ -589,7 +589,7 @@ mod tests {
     /// exit 1, target present, source intact.
     ///
     /// Marked `#[ignore]`: the existing test infrastructure uses a single
-    /// IAM identity (`s3sync-e2e-test`) that can both put and delete in
+    /// IAM identity (`s3util-e2e-test`) that can both put and delete in
     /// every test bucket. Reproducing this case requires either:
     ///   (a) a second AWS profile scoped down to PutObject-only on a
     ///       dedicated source bucket, or
@@ -624,9 +624,9 @@ mod tests {
         let output = run_s3util(&[
             "mv",
             "--source-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &source,
             &target,
         ]);
@@ -689,7 +689,7 @@ mod tests {
             .args([
                 "mv",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--rate-limit-bandwidth",
                 "2MiB",
                 test_file.to_str().unwrap(),

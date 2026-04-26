@@ -2,7 +2,7 @@
 #[allow(clippy::module_inception)]
 mod tests {
     use crate::config::Config;
-    use crate::config::args::{Commands, build_config_from_args, parse_from_args};
+    use crate::config::args::{Cli, Commands, build_config_from_args, parse_from_args};
     use crate::types::{S3Credentials, StoragePath};
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
@@ -973,5 +973,169 @@ mod tests {
         };
         let err = Config::try_from(mv_args).unwrap_err();
         assert!(err.contains("--storage-class"));
+    }
+
+    #[test]
+    fn parses_head_bucket_subcommand() {
+        use clap::Parser;
+        let cli = Cli::try_parse_from(["s3util", "head-bucket", "s3://my-bucket"]).unwrap();
+        assert!(matches!(cli.command, Commands::HeadBucket(_)));
+    }
+
+    // build_config_from_args should reject every thin-wrapper subcommand with
+    // a clear Err message — those commands are dispatched in main.rs without
+    // going through Config. Each arm asserted individually so a regression
+    // produces a precise, actionable failure (rather than a single test that
+    // dumps fourteen subcommands' output).
+    //
+    // Keeps the message contract stable: it must mention the subcommand name
+    // and route the operator to main.rs so the next maintainer can navigate
+    // from the error to the actual dispatch site.
+
+    fn assert_rejects_with(args: &[&str], cmd_name: &str) {
+        let err = build_config_from_args(args.iter().map(|s| s.to_string())).unwrap_err();
+        assert!(
+            err.contains(cmd_name),
+            "expected error to mention subcommand `{cmd_name}`, got: {err}"
+        );
+        assert!(
+            err.contains("dispatched in main.rs"),
+            "expected error to point at main.rs, got: {err}"
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_create_bucket() {
+        assert_rejects_with(&["s3util", "create-bucket", "s3://b"], "create-bucket");
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket() {
+        assert_rejects_with(&["s3util", "delete-bucket", "s3://b"], "delete-bucket");
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket_policy() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-policy", "s3://b"],
+            "delete-bucket-policy",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket_tagging() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-tagging", "s3://b"],
+            "delete-bucket-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_object_tagging() {
+        assert_rejects_with(
+            &["s3util", "delete-object-tagging", "s3://b/k"],
+            "delete-object-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_policy() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-policy", "s3://b"],
+            "get-bucket-policy",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_tagging() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-tagging", "s3://b"],
+            "get-bucket-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_versioning() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-versioning", "s3://b"],
+            "get-bucket-versioning",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_object_tagging() {
+        assert_rejects_with(
+            &["s3util", "get-object-tagging", "s3://b/k"],
+            "get-object-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_head_bucket() {
+        assert_rejects_with(&["s3util", "head-bucket", "s3://b"], "head-bucket");
+    }
+
+    #[test]
+    fn build_config_rejects_head_object() {
+        assert_rejects_with(&["s3util", "head-object", "s3://b/k"], "head-object");
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_policy() {
+        // put-bucket-policy needs a second positional (policy file path or `-`);
+        // we don't read the file in arg-parsing, so a non-existent path is fine.
+        assert_rejects_with(
+            &["s3util", "put-bucket-policy", "s3://b", "/tmp/policy.json"],
+            "put-bucket-policy",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_tagging() {
+        assert_rejects_with(
+            &["s3util", "put-bucket-tagging", "--tagging", "k=v", "s3://b"],
+            "put-bucket-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_versioning() {
+        assert_rejects_with(
+            &["s3util", "put-bucket-versioning", "--enabled", "s3://b"],
+            "put-bucket-versioning",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_object_tagging() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-object-tagging",
+                "--tagging",
+                "k=v",
+                "s3://b/k",
+            ],
+            "put-object-tagging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_rm() {
+        assert_rejects_with(&["s3util", "rm", "s3://b/k"], "rm");
+    }
+
+    #[test]
+    fn build_config_clap_parse_error_propagates() {
+        // A non-existent subcommand is a clap parse error, surfaced as Err
+        // via `Cli::try_parse_from(...).map_err(...)?` at the top of
+        // build_config_from_args.
+        let err = build_config_from_args(
+            ["s3util", "no-such-subcommand"]
+                .iter()
+                .map(|s| s.to_string()),
+        )
+        .unwrap_err();
+        assert!(!err.is_empty());
     }
 }

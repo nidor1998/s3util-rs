@@ -32,6 +32,7 @@ use crate::types::{
 
 const EXPRESS_ONEZONE_STORAGE_SUFFIX: &str = "--x-s3";
 
+pub mod api;
 mod client_builder;
 mod upload_manager;
 

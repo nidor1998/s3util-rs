@@ -38,7 +38,25 @@ mod tests {
     fn cp_args_from(cli: Cli) -> s3util_rs::config::args::CpArgs {
         match cli.command {
             Commands::Cp(cp_args) => cp_args,
-            Commands::Mv(_) => panic!("expected Cp variant"),
+            Commands::CreateBucket(_)
+            | Commands::DeleteBucket(_)
+            | Commands::DeleteBucketPolicy(_)
+            | Commands::DeleteBucketTagging(_)
+            | Commands::DeleteObjectTagging(_)
+            | Commands::GetBucketPolicy(_)
+            | Commands::GetBucketTagging(_)
+            | Commands::GetBucketVersioning(_)
+            | Commands::GetObjectTagging(_)
+            | Commands::HeadBucket(_)
+            | Commands::HeadObject(_)
+            | Commands::Mv(_)
+            | Commands::PutBucketPolicy(_)
+            | Commands::PutBucketTagging(_)
+            | Commands::PutBucketVersioning(_)
+            | Commands::PutObjectTagging(_)
+            | Commands::Rm(_) => {
+                panic!("expected Cp variant")
+            }
         }
     }
 

@@ -16,13 +16,46 @@ use s3util_rs::types::StoragePath;
 use s3util_rs::types::token::{PipelineCancellationToken, create_pipeline_cancellation_token};
 
 pub mod cp;
+pub mod create_bucket;
 pub mod ctrl_c_handler;
+pub mod delete_bucket;
+pub mod delete_bucket_policy;
+pub mod delete_bucket_tagging;
+pub mod delete_object_tagging;
+pub mod get_bucket_policy;
+pub mod get_bucket_tagging;
+pub mod get_bucket_versioning;
+pub mod get_object_tagging;
+pub mod head_bucket;
+pub mod head_object;
 pub mod indicator;
 pub mod mv;
+pub mod put_bucket_policy;
+pub mod put_bucket_tagging;
+pub mod put_bucket_versioning;
+pub mod put_object_tagging;
+pub mod rm;
+pub mod tagging;
 pub mod ui_config;
 
 pub use cp::run_cp;
+pub use create_bucket::run_create_bucket;
+pub use delete_bucket::run_delete_bucket;
+pub use delete_bucket_policy::run_delete_bucket_policy;
+pub use delete_bucket_tagging::run_delete_bucket_tagging;
+pub use delete_object_tagging::run_delete_object_tagging;
+pub use get_bucket_policy::run_get_bucket_policy;
+pub use get_bucket_tagging::run_get_bucket_tagging;
+pub use get_bucket_versioning::run_get_bucket_versioning;
+pub use get_object_tagging::run_get_object_tagging;
+pub use head_bucket::run_head_bucket;
+pub use head_object::run_head_object;
 pub use mv::run_mv;
+pub use put_bucket_policy::run_put_bucket_policy;
+pub use put_bucket_tagging::run_put_bucket_tagging;
+pub use put_bucket_versioning::run_put_bucket_versioning;
+pub use put_object_tagging::run_put_object_tagging;
+pub use rm::run_rm;
 
 // Default refill interval is 100ms (= 10 refills per second).
 const REFILL_PER_INTERVAL_DIVIDER: usize = 10;
@@ -45,6 +78,7 @@ fn build_rate_limiter(config: &Config) -> Option<Arc<RateLimiter>> {
 pub enum ExitStatus {
     Success,
     Warning,
+    NotFound,
     Cancelled,
 }
 
@@ -53,6 +87,7 @@ impl ExitStatus {
         match self {
             ExitStatus::Success => EXIT_CODE_SUCCESS,
             ExitStatus::Warning => EXIT_CODE_WARNING,
+            ExitStatus::NotFound => EXIT_CODE_NOT_FOUND,
             ExitStatus::Cancelled => EXIT_CODE_CANCELLED,
         }
     }
@@ -61,6 +96,9 @@ impl ExitStatus {
 pub const EXIT_CODE_SUCCESS: i32 = 0;
 pub const EXIT_CODE_ERROR: i32 = 1;
 pub const EXIT_CODE_WARNING: i32 = 3;
+// Returned by the head-* subcommands when the target does not exist
+// (HeadBucket / HeadObject service error reports `is_not_found()`).
+pub const EXIT_CODE_NOT_FOUND: i32 = 4;
 // Standard Unix convention for processes terminated by SIGINT (128 + 2).
 pub const EXIT_CODE_CANCELLED: i32 = 130;
 
@@ -544,10 +582,12 @@ mod tests {
     fn exit_status_codes() {
         assert_eq!(ExitStatus::Success.code(), EXIT_CODE_SUCCESS);
         assert_eq!(ExitStatus::Warning.code(), EXIT_CODE_WARNING);
+        assert_eq!(ExitStatus::NotFound.code(), EXIT_CODE_NOT_FOUND);
         assert_eq!(ExitStatus::Cancelled.code(), EXIT_CODE_CANCELLED);
         assert_eq!(EXIT_CODE_SUCCESS, 0);
         assert_eq!(EXIT_CODE_ERROR, 1);
         assert_eq!(EXIT_CODE_WARNING, 3);
+        assert_eq!(EXIT_CODE_NOT_FOUND, 4);
         assert_eq!(EXIT_CODE_CANCELLED, 130);
     }
 

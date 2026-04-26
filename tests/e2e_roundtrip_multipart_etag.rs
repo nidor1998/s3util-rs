@@ -28,7 +28,7 @@ mod tests {
                 "s3util",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -51,9 +51,9 @@ mod tests {
                 "s3util",
                 "cp",
                 "--source-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 &source,
                 &target2,
             ])
@@ -101,7 +101,7 @@ mod tests {
                 "s3util",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -127,9 +127,9 @@ mod tests {
                 "s3util",
                 "cp",
                 "--source-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 &source,
                 &target2,
             ])
@@ -176,7 +176,7 @@ mod tests {
                 "s3util",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 test_file.to_str().unwrap(),
                 &target,
             ])
