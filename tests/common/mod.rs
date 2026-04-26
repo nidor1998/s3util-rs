@@ -15,7 +15,8 @@ use aws_sdk_s3::types::{
     BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
     CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object, ObjectOwnership,
     PublicAccessBlockConfiguration, ServerSideEncryption, ServerSideEncryptionByDefault,
-    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, Tag, VersioningConfiguration,
+    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, Tag, Tagging,
+    VersioningConfiguration,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -459,6 +460,35 @@ impl TestHelper {
             .send()
             .await
             .unwrap()
+    }
+
+    /// Set tags on an existing object (optionally for a specific version).
+    /// Used by `--source-version-id` tagging tests to seed per-version tags
+    /// before exercising the s3util CLI.
+    pub async fn put_object_tagging(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        tags: &[(&str, &str)],
+    ) {
+        let tag_set: Vec<Tag> = tags
+            .iter()
+            .map(|(k, v)| Tag::builder().key(*k).value(*v).build().unwrap())
+            .collect();
+        let tagging = Tagging::builder()
+            .set_tag_set(Some(tag_set))
+            .build()
+            .unwrap();
+        self.client
+            .put_object_tagging()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .tagging(tagging)
+            .send()
+            .await
+            .unwrap();
     }
 
     pub async fn is_object_exist(

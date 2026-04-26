@@ -172,6 +172,208 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    // ------------------------------------------------------------------
+    // --source-version-id targets the correct version
+    // ------------------------------------------------------------------
+
+    /// Put two versions, seed each with a distinguishing tag via the SDK,
+    /// then verify `get-object-tagging --source-version-id` returns the
+    /// targeted version's tags (and echoes back the targeted VersionId).
+    #[tokio::test]
+    async fn get_object_tagging_with_source_version_id_returns_targeted_version() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "versioned-tagged.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"v1".to_vec())
+            .await;
+        let v2 = helper
+            .put_object_with_version(&bucket, key, b"v2".to_vec())
+            .await;
+
+        helper
+            .put_object_tagging(&bucket, key, Some(v1.clone()), &[("version", "one")])
+            .await;
+        helper
+            .put_object_tagging(&bucket, key, Some(v2.clone()), &[("version", "two")])
+            .await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let v1_out = run_s3util(&[
+            "get-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--source-version-id",
+            &v1,
+            &object_arg,
+        ]);
+        let v2_out = run_s3util(&[
+            "get-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--source-version-id",
+            &v2,
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            v1_out.status.success(),
+            "get-object-tagging v1 must succeed"
+        );
+        assert!(
+            v2_out.status.success(),
+            "get-object-tagging v2 must succeed"
+        );
+
+        let v1_json: serde_json::Value =
+            serde_json::from_str(&String::from_utf8_lossy(&v1_out.stdout)).unwrap();
+        let v2_json: serde_json::Value =
+            serde_json::from_str(&String::from_utf8_lossy(&v2_out.stdout)).unwrap();
+
+        assert_eq!(v1_json["VersionId"].as_str(), Some(v1.as_str()));
+        let v1_tags = v1_json["TagSet"].as_array().unwrap();
+        assert_eq!(v1_tags.len(), 1);
+        assert_eq!(v1_tags[0]["Key"].as_str(), Some("version"));
+        assert_eq!(v1_tags[0]["Value"].as_str(), Some("one"));
+
+        assert_eq!(v2_json["VersionId"].as_str(), Some(v2.as_str()));
+        let v2_tags = v2_json["TagSet"].as_array().unwrap();
+        assert_eq!(v2_tags.len(), 1);
+        assert_eq!(v2_tags[0]["Key"].as_str(), Some("version"));
+        assert_eq!(v2_tags[0]["Value"].as_str(), Some("two"));
+    }
+
+    /// `put-object-tagging --source-version-id` must apply tags only to
+    /// the targeted version; the other version must remain untagged.
+    #[tokio::test]
+    async fn put_object_tagging_with_source_version_id_targets_correct_version() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "put-tag-versioned.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"v1".to_vec())
+            .await;
+        let v2 = helper
+            .put_object_with_version(&bucket, key, b"v2".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let put_out = run_s3util(&[
+            "put-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--source-version-id",
+            &v1,
+            "--tagging",
+            "applied=v1",
+            &object_arg,
+        ]);
+
+        // Capture per-version tags via SDK before bucket teardown.
+        let v1_tags = helper
+            .get_object_tagging(&bucket, key, Some(v1.clone()))
+            .await;
+        let v2_tags = helper
+            .get_object_tagging(&bucket, key, Some(v2.clone()))
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            put_out.status.success(),
+            "put-object-tagging --source-version-id should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // v1 must carry the new tag.
+        assert_eq!(v1_tags.tag_set().len(), 1);
+        assert_eq!(v1_tags.tag_set()[0].key(), "applied");
+        assert_eq!(v1_tags.tag_set()[0].value(), "v1");
+
+        // v2 must be unaffected.
+        assert_eq!(
+            v2_tags.tag_set().len(),
+            0,
+            "v2 must not be tagged when put-object-tagging targets v1"
+        );
+    }
+
+    /// `delete-object-tagging --source-version-id` must clear tags only
+    /// on the targeted version; the other version's tags must survive.
+    #[tokio::test]
+    async fn delete_object_tagging_with_source_version_id_targets_correct_version() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "delete-tag-versioned.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"v1".to_vec())
+            .await;
+        let v2 = helper
+            .put_object_with_version(&bucket, key, b"v2".to_vec())
+            .await;
+
+        helper
+            .put_object_tagging(&bucket, key, Some(v1.clone()), &[("a", "1")])
+            .await;
+        helper
+            .put_object_tagging(&bucket, key, Some(v2.clone()), &[("b", "2")])
+            .await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let del_out = run_s3util(&[
+            "delete-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--source-version-id",
+            &v1,
+            &object_arg,
+        ]);
+
+        let v1_tags = helper
+            .get_object_tagging(&bucket, key, Some(v1.clone()))
+            .await;
+        let v2_tags = helper
+            .get_object_tagging(&bucket, key, Some(v2.clone()))
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            del_out.status.success(),
+            "delete-object-tagging --source-version-id should succeed; stderr: {}",
+            String::from_utf8_lossy(&del_out.stderr)
+        );
+
+        // v1 tags must be cleared.
+        assert_eq!(
+            v1_tags.tag_set().len(),
+            0,
+            "v1 tags must be cleared by delete-object-tagging --source-version-id"
+        );
+
+        // v2 tags must be intact.
+        assert_eq!(v2_tags.tag_set().len(), 1);
+        assert_eq!(v2_tags.tag_set()[0].key(), "b");
+        assert_eq!(v2_tags.tag_set()[0].value(), "2");
+    }
+
     #[tokio::test]
     async fn delete_object_tagging_on_missing_key_exits_non_zero() {
         let bucket = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());

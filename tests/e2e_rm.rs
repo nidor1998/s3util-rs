@@ -69,7 +69,7 @@ mod tests {
         let v1 = helper
             .put_object_with_version(&bucket, key, b"version1".to_vec())
             .await;
-        let _v2 = helper
+        let v2 = helper
             .put_object_with_version(&bucket, key, b"version2".to_vec())
             .await;
 
@@ -83,6 +83,11 @@ mod tests {
             &object_arg,
         ]);
 
+        // Verify version-targeting before tearing the bucket down: only the
+        // specified version should be gone, the other must still resolve.
+        let v1_exists = helper.is_object_exist(&bucket, key, Some(v1.clone())).await;
+        let v2_exists = helper.is_object_exist(&bucket, key, Some(v2.clone())).await;
+
         helper.delete_bucket_with_cascade(&bucket).await;
 
         assert!(
@@ -91,5 +96,10 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
         assert_eq!(output.status.code(), Some(0));
+        assert!(!v1_exists, "v1 must be gone after rm --source-version-id");
+        assert!(
+            v2_exists,
+            "v2 must still exist; rm --source-version-id v1 must not touch v2"
+        );
     }
 }
