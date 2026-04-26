@@ -523,6 +523,8 @@ Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB
 
 `s3util` uses [tracing-subscriber](https://docs.rs/tracing-subscriber) for tracing. More occurrences of `-v` increase verbosity (`-v`: `info`, `-vv`: `debug`, `-vvv`: `trace`). Use `-q`, `-qq` to reduce verbosity. Default: warning and error messages.
 
+With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning` likewise logs `Bucket versioning not configured.` when the bucket has no versioning configuration (it prints nothing on stdout in that case, matching `aws s3api`).
+
 ### --aws-sdk-tracing
 
 Enable AWS SDK for Rust's internal tracing. Useful for diagnosing endpoint/signature issues.
