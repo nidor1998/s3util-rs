@@ -86,6 +86,39 @@ mod tests {
         );
     }
 
+    /// Companion to the missing-bucket case above: when the bucket exists
+    /// but the key does not, `run_get_object_tagging` must take the
+    /// `HeadError::NotFound` arm (distinct from `BucketNotFound`) and still
+    /// exit 4. Guards the object-not-found classification path.
+    #[tokio::test]
+    async fn get_object_tagging_on_missing_key_in_existing_bucket_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let object_arg = format!("s3://{bucket}/nonexistent-key");
+        let output = run_s3util(&[
+            "get-object-tagging",
+            "--target-profile",
+            "s3util-e2e-test",
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !output.status.success(),
+            "get-object-tagging on a non-existent key in an existing bucket must fail"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "get-object-tagging on a non-existent key in an existing bucket must exit 4 (NotFound)"
+        );
+    }
+
     // ------------------------------------------------------------------
     // put-object-tagging + delete-object-tagging round-trip
     // ------------------------------------------------------------------
