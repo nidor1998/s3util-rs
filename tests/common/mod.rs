@@ -336,6 +336,18 @@ impl TestHelper {
             .is_not_found()
     }
 
+    pub async fn head_bucket(
+        &self,
+        bucket: &str,
+    ) -> aws_sdk_s3::operation::head_bucket::HeadBucketOutput {
+        self.client
+            .head_bucket()
+            .bucket(bucket)
+            .send()
+            .await
+            .unwrap()
+    }
+
     pub async fn delete_bucket_with_cascade(&self, bucket: &str) {
         if !self.is_bucket_exist(bucket).await {
             return;

@@ -194,6 +194,141 @@ mod tests {
         assert_eq!(output.status.code(), Some(1));
     }
 
+    /// create-bucket + delete-bucket round-trip for a Single-AZ directory
+    /// bucket (S3 Express One Zone). Exercises the directory-bucket branch
+    /// of `parse_directory_bucket_zone` (1-hyphen zone id → AvailabilityZone
+    /// + SingleAvailabilityZone) end-to-end through the s3util CLI.
+    #[tokio::test]
+    async fn create_and_delete_directory_bucket_round_trip() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        // Directory bucket names follow `<base>--<zone-id>--x-s3` and have
+        // a 63-char total cap; the `s3e2e-<uuid>` base keeps us well under it.
+        let bucket = format!(
+            "s3e2e-{}--{}--x-s3",
+            uuid::Uuid::new_v4(),
+            EXPRESS_ONE_ZONE_AZ
+        );
+        let bucket_arg = format!("s3://{bucket}");
+
+        let create_output = run_s3util(&[
+            "create-bucket",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+
+        let helper = TestHelper::new().await;
+
+        if !create_output.status.success() {
+            helper.delete_directory_bucket_with_cascade(&bucket).await;
+            panic!(
+                "create-bucket on directory bucket should succeed; stderr: {}",
+                String::from_utf8_lossy(&create_output.stderr)
+            );
+        }
+        assert!(
+            helper.is_bucket_exist(&bucket).await,
+            "directory bucket should exist after create-bucket"
+        );
+
+        let delete_output = run_s3util(&[
+            "delete-bucket",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+        if !delete_output.status.success() {
+            helper.delete_directory_bucket_with_cascade(&bucket).await;
+            panic!(
+                "delete-bucket on directory bucket should succeed; stderr: {}",
+                String::from_utf8_lossy(&delete_output.stderr)
+            );
+        }
+
+        // Same eventual-consistency dance as the general-purpose round-trip.
+        let mut gone = false;
+        for _ in 0..30 {
+            let head_out = run_s3util(&[
+                "head-bucket",
+                "--target-profile",
+                "s3sync-e2e-test",
+                "--target-region",
+                REGION,
+                &bucket_arg,
+            ]);
+            if !head_out.status.success() {
+                gone = true;
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        assert!(
+            gone,
+            "directory bucket should not exist after delete-bucket (waited 60s)"
+        );
+    }
+
+    /// `s3util create-bucket` on a directory-bucket name lands a bucket
+    /// whose AZ location attributes match the zone id encoded in the name.
+    /// Verifies via SDK head-bucket so the assertion bypasses our own
+    /// JSON-shaping layer (we want to confirm S3 actually accepted the
+    /// CreateBucketConfiguration we sent).
+    #[tokio::test]
+    async fn create_directory_bucket_sets_az_location_attributes() {
+        use aws_sdk_s3::types::LocationType;
+
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let bucket = format!(
+            "s3e2e-{}--{}--x-s3",
+            uuid::Uuid::new_v4(),
+            EXPRESS_ONE_ZONE_AZ
+        );
+        let bucket_arg = format!("s3://{bucket}");
+
+        let create_output = run_s3util(&[
+            "create-bucket",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+
+        let helper = TestHelper::new().await;
+
+        if !create_output.status.success() {
+            helper.delete_directory_bucket_with_cascade(&bucket).await;
+            panic!(
+                "create-bucket on directory bucket should succeed; stderr: {}",
+                String::from_utf8_lossy(&create_output.stderr)
+            );
+        }
+
+        let head = helper.head_bucket(&bucket).await;
+        let location_type = head.bucket_location_type().cloned();
+        let location_name = head.bucket_location_name().map(|s| s.to_string());
+
+        helper.delete_directory_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            location_type,
+            Some(LocationType::AvailabilityZone),
+            "directory bucket created via s3util CLI must report \
+             BucketLocationType=AvailabilityZone"
+        );
+        assert_eq!(
+            location_name.as_deref(),
+            Some(EXPRESS_ONE_ZONE_AZ),
+            "BucketLocationName must echo back the zone id encoded in the bucket name"
+        );
+    }
+
     /// delete-bucket on a non-existent bucket exits non-zero.
     #[tokio::test]
     async fn delete_bucket_missing_bucket_exits_non_zero() {
