@@ -218,6 +218,7 @@ fn is_verification_supported_sse(sse: &Option<ServerSideEncryption>) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::storage::test_support::create_large_file;
     use crate::types::token::create_pipeline_cancellation_token;
     use std::path::PathBuf;
     use tracing_subscriber::EnvFilter;
@@ -624,7 +625,7 @@ mod tests {
     async fn generate_e_tag_hash_from_path_test() {
         init_dummy_tracing_subscriber();
 
-        create_large_file().await;
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
 
         assert_eq!(
             generate_e_tag_hash_from_path(
@@ -667,7 +668,7 @@ mod tests {
     async fn generate_e_tag_hash_from_path_cancel_test() {
         init_dummy_tracing_subscriber();
 
-        create_large_file().await;
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
 
         let cancel_token = create_pipeline_cancellation_token();
         cancel_token.cancel();
@@ -688,7 +689,7 @@ mod tests {
     async fn generate_e_tag_hash_from_path_auto_chunksize_test() {
         init_dummy_tracing_subscriber();
 
-        create_large_file().await;
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
 
         assert_eq!(
             generate_e_tag_hash_from_path_with_auto_chunksize(
@@ -761,7 +762,7 @@ mod tests {
     async fn generate_e_tag_hash_from_path_auto_chunksize_cancel_test() {
         init_dummy_tracing_subscriber();
 
-        create_large_file().await;
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
 
         let cancel_token = create_pipeline_cancellation_token();
         cancel_token.cancel();
@@ -840,7 +841,7 @@ mod tests {
     async fn generate_e_tag_hash_from_path_with_auto_chunksize_panics_when_parts_empty() {
         // Empty object_parts is unreachable under normal flow but the helper
         // panics defensively. Lock that contract in.
-        create_large_file().await;
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
         let _ = generate_e_tag_hash_from_path_with_auto_chunksize(
             &PathBuf::from(LARGE_FILE_PATH),
             vec![],
@@ -889,26 +890,6 @@ mod tests {
         // Single-quotes and other characters should be left intact.
         let etag = Some("'abc'\"".to_string());
         assert_eq!(normalize_e_tag(&etag), Some("'abc'".to_string()));
-    }
-
-    #[cfg_attr(coverage_nightly, coverage(off))]
-    async fn create_large_file() {
-        if PathBuf::from(LARGE_FILE_PATH).try_exists().unwrap() {
-            return;
-        }
-
-        tokio::fs::create_dir_all(LARGE_FILE_DIR).await.unwrap();
-
-        // Write to a unique temp path then atomically rename into place so
-        // parallel tests never observe a partially-written LARGE_FILE_PATH.
-        let tmp_path = tempfile::Builder::new()
-            .prefix("large_file_")
-            .tempfile_in(LARGE_FILE_DIR)
-            .unwrap()
-            .into_temp_path();
-        let data = vec![0_u8; LARGE_FILE_SIZE];
-        tokio::fs::write(&tmp_path, data.as_slice()).await.unwrap();
-        let _ = tmp_path.persist(LARGE_FILE_PATH);
     }
 
     fn init_dummy_tracing_subscriber() {

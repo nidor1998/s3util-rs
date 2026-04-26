@@ -98,8 +98,13 @@ The following are explicitly out of scope and will not be added, regardless of d
 - Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
 - Glob or wildcard expansion in S3 keys. For pattern-based matching, use s3sync, which supports regular expressions.
 - Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
-- Behavioral or flag compatibility with `aws s3`, `aws s3api`, `s5cmd`, `rclone`, or any other S3 client.
-- Feature parity with other S3 clients. The presence of a feature in `aws s3`, `aws s3api`, `s5cmd`, `rclone`, `s3cmd`, or any other S3 tool is not, by itself, a reason to add it to s3util. Each feature request is evaluated only against s3util's own scope and design principles.
+- Compatibility with other S3 clients — neither in flag names and
+  behavior, nor in feature coverage. The presence of a feature, flag,
+  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
+  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
+  to add or change it in s3util. Each request is evaluated only
+  against s3util's own scope and design principles. Use that other
+  tool if you need its specific surface.
 - A plugin or extension mechanism.
 
 Issues and pull requests requesting any of the above will be closed.

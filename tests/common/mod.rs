@@ -529,6 +529,24 @@ impl TestHelper {
             .unwrap();
     }
 
+    /// Put an object encrypted with SSE-C using `TEST_SSE_C_KEY_1`. The
+    /// key/MD5 strings are passed to the SDK verbatim (the S3 protocol
+    /// expects them already base64-encoded — the SDK does not encode them).
+    pub async fn put_object_with_sse_c(&self, bucket: &str, key: &str, body: Vec<u8>) {
+        let stream = ByteStream::from(body);
+        self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(stream)
+            .sse_customer_algorithm("AES256")
+            .sse_customer_key(TEST_SSE_C_KEY_1)
+            .sse_customer_key_md5(TEST_SSE_C_KEY_1_MD5)
+            .send()
+            .await
+            .unwrap();
+    }
+
     pub async fn put_object_with_tagging(
         &self,
         bucket: &str,
