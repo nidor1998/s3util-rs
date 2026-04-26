@@ -492,6 +492,39 @@ pub fn parse_range_header_string(range: &str) -> Option<(u64, u64)> {
     None
 }
 
+/// Shared test fixtures used by `#[cfg(test)]` code across the
+/// `storage` submodules. Kept in one place so the fixture body — in
+/// particular the tempfile + atomic-rename pattern that protects
+/// parallel tests from a half-written file — can't drift between
+/// copies.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::path::PathBuf;
+
+    /// Materialize a `size`-byte zero-filled file at `path`, creating
+    /// `dir` first. Idempotent: returns immediately if `path` already
+    /// exists. Writes to a unique temp path inside `dir` and atomically
+    /// renames into place so concurrent test runs never observe a
+    /// partially-written fixture.
+    #[cfg_attr(coverage_nightly, coverage(off))]
+    pub async fn create_large_file(path: &str, dir: &str, size: usize) {
+        if PathBuf::from(path).try_exists().unwrap() {
+            return;
+        }
+
+        tokio::fs::create_dir_all(dir).await.unwrap();
+
+        let tmp_path = tempfile::Builder::new()
+            .prefix("large_file_")
+            .tempfile_in(dir)
+            .unwrap()
+            .into_temp_path();
+        let data = vec![0_u8; size];
+        tokio::fs::write(&tmp_path, data.as_slice()).await.unwrap();
+        let _ = tmp_path.persist(path);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
