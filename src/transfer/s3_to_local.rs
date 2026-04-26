@@ -749,4 +749,264 @@ mod tests {
             "expected SyncComplete stat to be emitted with target key"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Direct mock-trait coverage. The transfer-level tests above only
+    // exercise the methods used by the production `transfer()` path; the
+    // assertions below pin the remaining real-return methods to their
+    // expected values and verify each `unimplemented!()` / `unreachable!()`
+    // stub still panics (so the regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn dummy_get_object_output() -> GetObjectOutput {
+        GetObjectOutput::builder().build()
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    #[tokio::test]
+    async fn mock_source_real_return_methods_behave_as_expected() {
+        let source = MockSource {
+            version_id: Some("v1".to_string()),
+        };
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        let head = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.version_id(), Some("v1"));
+        assert_eq!(head.content_length(), Some(4));
+        assert_eq!(head.e_tag(), Some("\"abc\""));
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.version_id(), Some("v1"));
+        assert_eq!(get.content_length(), Some(4));
+        assert_eq!(get.e_tag(), Some("\"abc\""));
+
+        // put_object on the source mock is the regression guard — it must
+        // surface the explicit error rather than silently succeeding.
+        let put_err = source
+            .put_object(
+                "k",
+                Box::new(MockSource { version_id: None }),
+                "src",
+                0,
+                None,
+                dummy_get_object_output(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(put_err.to_string().contains("should not be invoked"));
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn mock_source_unimplemented_methods_panic() {
+        let source = MockSource { version_id: None };
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn mock_target_real_return_methods_behave_as_expected() {
+        let target = MockTarget;
+
+        assert!(target.is_local_storage());
+        assert!(!target.is_express_onezone_storage());
+
+        let put = target
+            .put_object(
+                "k",
+                Box::new(MockSource { version_id: None }),
+                "src",
+                0,
+                None,
+                dummy_get_object_output(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        // Empty PutObjectOutput on the local-target mock — no etag set.
+        assert_eq!(put.e_tag(), None);
+
+        assert!(target.get_client().is_none());
+        assert!(target.get_rate_limit_bandwidth().is_none());
+        assert_eq!(target.get_local_path(), PathBuf::new());
+        let _tx = target.get_stats_sender();
+        target
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        target.set_warning();
+    }
+
+    #[tokio::test]
+    async fn mock_target_unimplemented_methods_panic() {
+        let target = MockTarget;
+
+        assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.get_object_tagging("k", None)).await;
+        assert_future_panics(target.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(target.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(target.delete_object("k", None)).await;
+
+        assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn failing_head_source_real_return_methods_behave_as_expected() {
+        let source = FailingHeadSource;
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        let err = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("simulated HEAD failure"));
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn failing_head_source_unimplemented_methods_panic() {
+        let source = FailingHeadSource;
+
+        assert_future_panics(source.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(MockTarget),
+            "src",
+            0,
+            None,
+            dummy_get_object_output(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
 }

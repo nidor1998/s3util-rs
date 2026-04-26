@@ -971,4 +971,145 @@ mod tests {
         // Sanity: helpers used by transfer-module tests still link.
         let _ = create_pipeline_cancellation_token();
     }
+
+    // ------------------------------------------------------------------
+    // Direct StubStorage trait coverage. The function-under-test cases
+    // above only invoke the head/get_parts paths used by the production
+    // helpers; the assertions below pin the remaining real-return methods
+    // to their expected values and verify each `unimplemented!()` stub
+    // (and the `None` head-response branches) still panics.
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn stub_storage_real_return_methods_behave_as_expected() {
+        let s3 = StubStorage::s3();
+        let local = StubStorage::local();
+
+        assert!(!s3.is_local_storage());
+        assert!(local.is_local_storage());
+        assert!(!s3.is_express_onezone_storage());
+        assert!(!local.is_express_onezone_storage());
+
+        // head_object Ok branch.
+        let stub = StubStorage::s3().with_head_object_response(Ok(HeadObjectOutput::builder()
+            .e_tag("\"abc\"")
+            .content_length(42)
+            .build()));
+        let head = stub
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.e_tag(), Some("\"abc\""));
+        assert_eq!(head.content_length(), Some(42));
+
+        // head_object Err branch.
+        let stub = StubStorage::s3().with_head_object_response(Err("boom-head".to_string()));
+        let err = stub
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom-head"));
+
+        // head_object_first_part Ok branch.
+        let stub =
+            StubStorage::s3().with_head_object_first_part_response(Ok(HeadObjectOutput::builder()
+                .e_tag("\"first\"")
+                .build()));
+        let head = stub
+            .head_object_first_part("k", None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.e_tag(), Some("\"first\""));
+
+        // head_object_first_part Err branch.
+        let stub =
+            StubStorage::s3().with_head_object_first_part_response(Err("boom-first".to_string()));
+        let err = stub
+            .head_object_first_part("k", None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("boom-first"));
+
+        // Trivial getters.
+        assert!(s3.get_client().is_none());
+        assert!(s3.get_rate_limit_bandwidth().is_none());
+        assert_eq!(s3.get_local_path(), PathBuf::new());
+        let _tx = s3.get_stats_sender();
+        s3.send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        s3.set_warning();
+        assert_eq!(s3.generate_copy_source_key("k", None), "");
+    }
+
+    #[tokio::test]
+    async fn stub_storage_head_methods_panic_when_response_unset() {
+        // The `None` branch in each head_* response slot is the regression
+        // guard for tests that forget to wire a response — must still panic.
+        let stub = StubStorage::s3();
+        assert_future_panics(stub.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(stub.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+    }
+
+    #[tokio::test]
+    async fn stub_storage_unimplemented_methods_panic() {
+        let stub = StubStorage::s3();
+
+        assert_future_panics(stub.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(stub.get_object_tagging("k", None)).await;
+        assert_future_panics(stub.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(stub.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(stub.put_object(
+            "k",
+            Box::new(StubStorage::s3()),
+            "src",
+            0,
+            None,
+            GetObjectOutput::builder().build(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(stub.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(stub.delete_object("k", None)).await;
+    }
 }

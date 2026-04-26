@@ -842,4 +842,102 @@ mod tests {
             )
             .try_init();
     }
+
+    // ------------------------------------------------------------------
+    // Direct StubStorage trait coverage. The default-impl test above only
+    // calls `put_object_stream` on the trait; the assertions below pin
+    // the few real-return methods and verify each `unreachable!()` stub
+    // still panics (so the regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn stub_storage_real_return_methods_behave_as_expected() {
+        let stub = StubStorage;
+
+        assert!(!stub.is_local_storage());
+        assert!(!stub.is_express_onezone_storage());
+        assert!(stub.get_client().is_none());
+        assert!(stub.get_rate_limit_bandwidth().is_none());
+    }
+
+    #[tokio::test]
+    async fn stub_storage_unreachable_methods_panic() {
+        let stub = StubStorage;
+
+        assert_future_panics(stub.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(stub.get_object_tagging("k", None)).await;
+        assert_future_panics(stub.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(stub.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(stub.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(stub.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(stub.put_object(
+            "k",
+            Box::new(StubStorage),
+            "src",
+            0,
+            None,
+            GetObjectOutput::builder().build(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(stub.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(stub.delete_object("k", None)).await;
+        assert_future_panics(stub.send_stats(SyncStatistics::SyncComplete { key: "k".into() }))
+            .await;
+
+        assert_call_panics(|| stub.get_stats_sender());
+        assert_call_panics(|| stub.get_local_path());
+        assert_call_panics(|| stub.generate_copy_source_key("k", None));
+        assert_call_panics(|| stub.set_warning());
+    }
 }
