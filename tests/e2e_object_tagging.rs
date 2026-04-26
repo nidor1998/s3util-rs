@@ -374,6 +374,78 @@ mod tests {
         assert_eq!(v2_tags.tag_set()[0].value(), "2");
     }
 
+    // ------------------------------------------------------------------
+    // UTF-8 3-byte (CJK) tag key/value round-trip
+    // ------------------------------------------------------------------
+
+    /// `--tagging` is URL-query-encoded, so non-ASCII keys/values must be
+    /// percent-encoded by the caller. `parse_tagging_to_tags` decodes them
+    /// before handing raw strings to the SDK (which serializes to XML for
+    /// `PutObjectTagging`). This test pins the round-trip end-to-end:
+    /// percent-encoded UTF-8 in → decoded UTF-8 stored → decoded UTF-8 out.
+    ///
+    /// Tag string encodes キー=バリュー (Japanese, 3 bytes per character in
+    /// UTF-8) — the same fixture s3sync's tagging value-parser tests use.
+    #[tokio::test]
+    async fn put_then_get_object_tagging_with_utf8_3byte_codes_round_trips() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "utf8-tagged-object.bin";
+        helper.put_object(&bucket, key, b"data".to_vec()).await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // %E3%82%AD%E3%83%BC = キー, %E3%83%90%E3%83%AA%E3%83%A5%E3%83%BC = バリュー
+        let put_out = run_s3util(&[
+            "put-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            "--tagging",
+            "%E3%82%AD%E3%83%BC=%E3%83%90%E3%83%AA%E3%83%A5%E3%83%BC",
+            &object_arg,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-object-tagging with UTF-8 should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        let get_out = run_s3util(&[
+            "get-object-tagging",
+            "--target-profile",
+            "s3sync-e2e-test",
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            get_out.status.success(),
+            "get-object-tagging should succeed; stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&get_out.stdout);
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+        let tag_set = json["TagSet"].as_array().expect("TagSet must be array");
+        assert_eq!(tag_set.len(), 1, "expected 1 tag; got: {stdout}");
+        // Stored values must be decoded UTF-8, never percent-encoded.
+        assert_eq!(
+            tag_set[0]["Key"].as_str(),
+            Some("キー"),
+            "tag Key must round-trip as decoded UTF-8; got: {stdout}"
+        );
+        assert_eq!(
+            tag_set[0]["Value"].as_str(),
+            Some("バリュー"),
+            "tag Value must round-trip as decoded UTF-8; got: {stdout}"
+        );
+    }
+
     #[tokio::test]
     async fn delete_object_tagging_on_missing_key_exits_non_zero() {
         let bucket = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
