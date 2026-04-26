@@ -38,7 +38,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 // Throttle to keep the upload running long enough for
                 // SIGINT to land. Without this, fast networks finish a
                 // 30 MiB upload during the 500ms sleep and the test sees
@@ -118,7 +118,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 // Small chunksize+threshold guarantees the upload uses the
                 // multipart code path (which is where the abort logic
                 // lives).
@@ -243,7 +243,7 @@ mod tests {
                 "s3util",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 src_file.to_str().unwrap(),
                 &s3_path,
             ])
@@ -257,7 +257,7 @@ mod tests {
             .args([
                 "cp",
                 "--source-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 // Throttle the download so SIGINT reliably lands mid-stream
                 // regardless of network speed: 2 MiB/s on a 30 MiB file gives
                 // ~15s of read-loop window, well beyond the 1500ms sleep

@@ -35,7 +35,7 @@ mod tests {
         let put_enabled = run_s3util(&[
             "put-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
             "--enabled",
         ]);
@@ -55,7 +55,7 @@ mod tests {
         let get_enabled = run_s3util(&[
             "get-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -75,7 +75,7 @@ mod tests {
         let put_suspended = run_s3util(&[
             "put-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
             "--suspended",
         ]);
@@ -89,7 +89,7 @@ mod tests {
         let get_suspended = run_s3util(&[
             "get-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -123,7 +123,7 @@ mod tests {
         let output = run_s3util(&[
             "get-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 
@@ -150,7 +150,7 @@ mod tests {
         let output = run_s3util(&[
             "put-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
             "--enabled",
         ]);
@@ -170,7 +170,7 @@ mod tests {
         let output = run_s3util(&[
             "get-bucket-versioning",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 

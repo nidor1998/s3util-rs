@@ -32,7 +32,7 @@ mod tests {
         let create_output = run_s3util(&[
             "create-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -54,7 +54,7 @@ mod tests {
         let delete_output = run_s3util(&[
             "delete-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -76,7 +76,7 @@ mod tests {
             let head_out = run_s3util(&[
                 "head-bucket",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--target-region",
                 REGION,
                 &bucket_arg,
@@ -104,7 +104,7 @@ mod tests {
         let output = run_s3util(&[
             "create-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             "--tagging",
@@ -129,7 +129,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -179,7 +179,7 @@ mod tests {
         let output = run_s3util(&[
             "delete-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -214,7 +214,7 @@ mod tests {
         let create_output = run_s3util(&[
             "create-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -237,7 +237,7 @@ mod tests {
         let delete_output = run_s3util(&[
             "delete-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -256,7 +256,7 @@ mod tests {
             let head_out = run_s3util(&[
                 "head-bucket",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--target-region",
                 REGION,
                 &bucket_arg,
@@ -294,7 +294,7 @@ mod tests {
         let create_output = run_s3util(&[
             "create-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,
@@ -337,7 +337,7 @@ mod tests {
         let output = run_s3util(&[
             "delete-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--target-region",
             REGION,
             &bucket_arg,

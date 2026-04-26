@@ -32,7 +32,7 @@ mod tests {
         let output = run_s3util(&[
             "head-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 
@@ -60,7 +60,7 @@ mod tests {
         let output = run_s3util(&[
             "head-bucket",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 

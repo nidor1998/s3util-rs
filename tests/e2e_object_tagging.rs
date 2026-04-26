@@ -41,7 +41,7 @@ mod tests {
         let output = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 
@@ -71,7 +71,7 @@ mod tests {
         let output = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 
@@ -107,7 +107,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--tagging",
             "env=staging&owner=alice",
             &object_arg,
@@ -122,7 +122,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
         assert!(
@@ -141,7 +141,7 @@ mod tests {
         let del_out = run_s3util(&[
             "delete-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
         assert!(
@@ -154,7 +154,7 @@ mod tests {
         let get_after = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
         assert!(
@@ -207,7 +207,7 @@ mod tests {
         let v1_out = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1,
             &object_arg,
@@ -215,7 +215,7 @@ mod tests {
         let v2_out = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v2,
             &object_arg,
@@ -273,7 +273,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1,
             "--tagging",
@@ -340,7 +340,7 @@ mod tests {
         let del_out = run_s3util(&[
             "delete-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1,
             &object_arg,
@@ -403,7 +403,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--tagging",
             "%E3%82%AD%E3%83%BC=%E3%83%90%E3%83%AA%E3%83%A5%E3%83%BC",
             &object_arg,
@@ -417,7 +417,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 
@@ -453,7 +453,7 @@ mod tests {
         let output = run_s3util(&[
             "delete-object-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 

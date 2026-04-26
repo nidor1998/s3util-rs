@@ -38,7 +38,7 @@ mod tests {
         );
 
         let object_arg = format!("s3://{bucket}/{key}");
-        let output = run_s3util(&["rm", "--target-profile", "s3sync-e2e-test", &object_arg]);
+        let output = run_s3util(&["rm", "--target-profile", "s3util-e2e-test", &object_arg]);
 
         let still_exists = helper.is_object_exist(&bucket, key, None).await;
 
@@ -77,7 +77,7 @@ mod tests {
         let output = run_s3util(&[
             "rm",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1,
             &object_arg,

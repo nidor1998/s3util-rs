@@ -36,7 +36,7 @@ mod tests {
         let output = run_s3util(&[
             "head-object",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 
@@ -87,7 +87,7 @@ mod tests {
         let output = run_s3util(&[
             "head-object",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--source-version-id",
             &v1,
             &object_arg,
@@ -123,7 +123,7 @@ mod tests {
         let output = run_s3util(&[
             "head-object",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &object_arg,
         ]);
 

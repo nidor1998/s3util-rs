@@ -25,7 +25,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "-",
                 &target,
             ])
@@ -81,7 +81,7 @@ mod tests {
                 "--",
                 "cp",
                 "--source-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 &source,
                 "-",
             ])

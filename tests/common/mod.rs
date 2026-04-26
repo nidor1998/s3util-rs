@@ -132,7 +132,7 @@ pub const TEST_SSE_C_KEY_1_MD5: &str = "zZ5FnqcIqUjVwvWmyog4zw==";
 pub const TEST_SSE_C_KEY_2: &str = "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=";
 pub const TEST_SSE_C_KEY_2_MD5: &str = "GoDL8oWeAZVZNl1r5Hh5Tg==";
 
-const PROFILE_NAME: &str = "s3sync-e2e-test";
+const PROFILE_NAME: &str = "s3util-e2e-test";
 
 #[derive(Debug, Default)]
 pub struct StatsCount {

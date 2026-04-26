@@ -38,7 +38,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--tagging",
             "env=staging&owner=alice",
             &bucket_arg,
@@ -53,7 +53,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -70,7 +70,7 @@ mod tests {
         let del_out = run_s3util(&[
             "delete-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -83,7 +83,7 @@ mod tests {
         let get_after = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -121,7 +121,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--tagging",
             "%E3%82%AD%E3%83%BC=%E3%83%90%E3%83%AA%E3%83%A5%E3%83%BC",
             &bucket_arg,
@@ -135,7 +135,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 
@@ -171,7 +171,7 @@ mod tests {
         let output = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 
@@ -200,7 +200,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             "--tagging",
             "project=myapp",
             &bucket_arg,
@@ -210,7 +210,7 @@ mod tests {
         let output = run_s3util(&[
             "get-bucket-tagging",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 

@@ -71,7 +71,7 @@ mod tests {
         let put_out = run_s3util(&[
             "put-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
             policy_file_str,
         ]);
@@ -90,7 +90,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -109,7 +109,7 @@ mod tests {
         let del_out = run_s3util(&[
             "delete-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -127,7 +127,7 @@ mod tests {
         let get_after_del = run_s3util(&[
             "get-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -161,7 +161,7 @@ mod tests {
             &[
                 "put-bucket-policy",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 &bucket_arg,
                 "-",
             ],
@@ -177,7 +177,7 @@ mod tests {
         let get_out = run_s3util(&[
             "get-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
         assert!(
@@ -209,7 +209,7 @@ mod tests {
         let out = run_s3util(&[
             "get-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
         ]);
 
@@ -242,7 +242,7 @@ mod tests {
         let out = run_s3util(&[
             "put-bucket-policy",
             "--target-profile",
-            "s3sync-e2e-test",
+            "s3util-e2e-test",
             &bucket_arg,
             policy_file.to_str().unwrap(),
         ]);

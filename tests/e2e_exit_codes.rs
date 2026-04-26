@@ -60,7 +60,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -98,7 +98,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 test_file.to_str().unwrap(),
                 &target,
             ])
@@ -310,7 +310,7 @@ mod tests {
                 "--",
                 "cp",
                 "--target-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 "--multipart-threshold",
                 "5MiB",
                 "--multipart-chunksize",
@@ -338,7 +338,7 @@ mod tests {
                 "--",
                 "cp",
                 "--source-profile",
-                "s3sync-e2e-test",
+                "s3util-e2e-test",
                 &s3_path,
                 dl_file.to_str().unwrap(),
             ])
