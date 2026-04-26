@@ -324,7 +324,7 @@ struct DirectoryBucketZone {
 /// - one hyphen (e.g. `apne1-az4`) → Availability Zone
 /// - two or more hyphens (e.g. `usw2-lax1-az1`) → Local Zone
 fn parse_directory_bucket_zone(bucket: &str) -> Option<DirectoryBucketZone> {
-    let stripped = bucket.strip_suffix("--x-s3")?;
+    let stripped = bucket.strip_suffix(super::EXPRESS_ONEZONE_STORAGE_SUFFIX)?;
     let (_, zone_id) = stripped.rsplit_once("--")?;
     if zone_id.is_empty() {
         return None;
