@@ -1257,6 +1257,85 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket2).await;
     }
 
+    /// Source uploaded as multipart with 5 MiB chunks + SHA256 (composite
+    /// 2-part SHA256 over 5+4 MiB). The s3-to-s3 copy uses 8 MiB chunks +
+    /// SHA256 with no `--auto-chunksize`, so the target ends up as a 2-part
+    /// composite SHA256 over 8+1 MiB. Composite checksums and multipart
+    /// ETags both depend on part boundaries → both mismatch the source.
+    /// Per upload_manager: a remote-multipart, non-full-object checksum
+    /// mismatch is treated as a warning (not fatal), so the copy still
+    /// completes — it just emits ETagMismatch + ChecksumMismatch (both
+    /// counted under `sync_warning` by the test helper).
+    #[tokio::test]
+    async fn s3_to_s3_multipart_with_checksum_sha256_chunksize_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_sized_file(&local_dir, "mp_sha256_ng.bin", 9 * 1024 * 1024);
+
+        let source = format!("s3://{}/mp_sha256_ng.bin", bucket1);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                test_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+
+        let target = format!("s3://{}/mp_sha256_ng.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-chunksize",
+                "8MiB",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "SHA256",
+                &source,
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 0);
+        // ETagMismatch + ChecksumMismatch — the helper counts both under
+        // sync_warning via its SyncStatistics → StatsCount mapping.
+        assert_eq!(stats.sync_warning, 2);
+        assert!(stats.has_warning_flag);
+
+        // The body itself was transferred intact — the warning is purely
+        // about the composite-checksum / ETag boundaries differing.
+        let bytes = helper
+            .get_object_bytes(&bucket2, "mp_sha256_ng.bin", None)
+            .await;
+        assert_eq!(TestHelper::get_sha256_from_bytes(&bytes), SHA256_9M_ZEROS);
+
+        std::fs::remove_dir_all(&local_dir).ok();
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
     #[tokio::test]
     async fn s3_to_s3_multipart_with_sse_kms() {
         TestHelper::init_dummy_tracing_subscriber();
