@@ -32,8 +32,9 @@ pub fn get_bucket_policy_to_json(out: &GetBucketPolicyOutput) -> Value {
 ///
 /// When versioning has never been configured, S3 returns no `Status` element
 /// and the SDK populates neither `status()` nor `mfa_delete()` → emits `{}`.
-/// Otherwise emits `{"Status": "Enabled"|"Suspended"}` and optionally
-/// `{"MFADelete": "Enabled"|"Disabled"}` when present.
+/// Otherwise emits `{"Status": "Enabled"|"Suspended"}` and, when present,
+/// both `{"MFADelete": "Enabled"|"Disabled"}` (the AWS-CLI/SDK casing) and
+/// `{"MfaDelete": ...}` (the literal S3 XML tag name).
 pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
     let mut map = Map::new();
     if let Some(status) = out.status() {
@@ -43,10 +44,9 @@ pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
         );
     }
     if let Some(mfa) = out.mfa_delete() {
-        map.insert(
-            "MFADelete".to_string(),
-            Value::String(mfa.as_str().to_string()),
-        );
+        let v = Value::String(mfa.as_str().to_string());
+        map.insert("MFADelete".to_string(), v.clone());
+        map.insert("MfaDelete".to_string(), v);
     }
     Value::Object(map)
 }
@@ -403,6 +403,9 @@ mod tests {
         let json = get_bucket_versioning_to_json(&out);
         assert_eq!(json["Status"], Value::String("Enabled".into()));
         assert_eq!(json["MFADelete"], Value::String("Enabled".into()));
+        // `MfaDelete` is the literal S3 XML tag name; emitted alongside
+        // the AWS-CLI/SDK-cased `MFADelete`.
+        assert_eq!(json["MfaDelete"], Value::String("Enabled".into()));
     }
 
     // ----- get_bucket_tagging_to_json tests -----
