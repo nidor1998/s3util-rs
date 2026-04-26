@@ -39,8 +39,19 @@ pub async fn run_head_object(
             println!("{pretty}");
             Ok(ExitStatus::Success)
         }
-        Err(HeadError::BucketNotFound) | Err(HeadError::NotFound) => {
-            tracing::error!("object s3://{bucket}/{key} not found");
+        Err(HeadError::BucketNotFound) => {
+            tracing::error!("bucket s3://{bucket} not found");
+            Ok(ExitStatus::NotFound)
+        }
+        Err(HeadError::NotFound) => {
+            match args.source_version_id.as_deref() {
+                Some(v) => {
+                    tracing::error!("s3://{bucket}/{key} (versionId={v}) not found");
+                }
+                None => {
+                    tracing::error!("s3://{bucket}/{key} not found");
+                }
+            }
             Ok(ExitStatus::NotFound)
         }
         Err(HeadError::Other(e)) => Err(e),
