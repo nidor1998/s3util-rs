@@ -83,7 +83,15 @@ pub enum Commands {
     /// Copy objects from/to S3
     #[command(display_order = 1)]
     Cp(CpArgs),
-    /// Create an S3 bucket
+    /// Create an S3 bucket (general-purpose or directory bucket)
+    ///
+    /// Creates an S3 general-purpose bucket, or a directory bucket
+    /// (S3 Express One Zone) when the name ends with `--<zone-id>--x-s3`
+    /// (e.g. `s3://my-bucket--apne1-az4--x-s3` for an Availability Zone,
+    /// `s3://my-bucket--usw2-lax1-az1--x-s3` for a Local Zone).
+    ///
+    /// For general-purpose buckets, the location constraint is derived from the
+    /// resolved region (--target-region, AWS_REGION, or the active profile's region).
     #[command(display_order = 8)]
     CreateBucket(CreateBucketArgs),
     /// Delete an S3 bucket (must be empty)
