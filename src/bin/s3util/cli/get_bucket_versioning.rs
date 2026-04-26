@@ -11,8 +11,10 @@ use super::ExitStatus;
 ///
 /// Builds the SDK client from `client_config`, issues `GetBucketVersioning`,
 /// and prints the response as AWS-CLI-shape pretty-printed JSON followed by
-/// a newline.  When the bucket has never had versioning configured, S3 returns
-/// no `Status` element and the output is `{}`. Returns `ExitStatus::NotFound`
+/// a newline. When the bucket has never had versioning configured, S3 returns
+/// no `Status` element and the SDK populates neither `status()` nor
+/// `mfa_delete()`; in that case nothing is printed, matching `aws s3api
+/// get-bucket-versioning --output json`. Returns `ExitStatus::NotFound`
 /// (exit code 4) when S3 reports `NoSuchBucket`.
 pub async fn run_get_bucket_versioning(
     args: GetBucketVersioningArgs,
@@ -26,8 +28,10 @@ pub async fn run_get_bucket_versioning(
     match api::get_bucket_versioning(&client, &bucket).await {
         Ok(out) => {
             let json = get_bucket_versioning_to_json(&out);
-            let pretty = serde_json::to_string_pretty(&json)?;
-            println!("{pretty}");
+            if !json.as_object().is_some_and(|m| m.is_empty()) {
+                let pretty = serde_json::to_string_pretty(&json)?;
+                println!("{pretty}");
+            }
             Ok(ExitStatus::Success)
         }
         Err(HeadError::BucketNotFound) | Err(HeadError::NotFound) => {

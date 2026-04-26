@@ -109,9 +109,10 @@ mod tests {
     }
 
     /// On a freshly-created bucket that has never had versioning configured,
-    /// get-bucket-versioning should emit `{}` (no Status element).
+    /// get-bucket-versioning should emit nothing on stdout, matching
+    /// `aws s3api get-bucket-versioning --output json`.
     #[tokio::test]
-    async fn get_versioning_on_unconfigured_bucket_yields_empty_object() {
+    async fn get_versioning_on_unconfigured_bucket_yields_no_output() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -134,11 +135,10 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
-        let json: serde_json::Value =
-            serde_json::from_slice(&output.stdout).expect("stdout must be valid JSON");
         assert!(
-            json.as_object().map(|m| m.is_empty()).unwrap_or(false),
-            "expected {{}} for unconfigured bucket; got: {json}"
+            output.stdout.is_empty(),
+            "expected empty stdout for unconfigured bucket; got: {:?}",
+            String::from_utf8_lossy(&output.stdout)
         );
     }
 

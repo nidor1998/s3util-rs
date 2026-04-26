@@ -143,15 +143,17 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     if let Some(v) = out.version_id() {
         map.insert("VersionId".to_string(), Value::String(v.to_string()));
     }
-    if let Some(meta) = out.metadata() {
-        if !meta.is_empty() {
-            let obj: Map<String, Value> = meta
-                .iter()
+    // AWS CLI v2 always emits `Metadata` (as `{}` when no user metadata is set),
+    // so we do too. The SDK returns `Some(empty map)` in that case.
+    let meta_obj: Map<String, Value> = out
+        .metadata()
+        .map(|m| {
+            m.iter()
                 .map(|(k, v)| (k.clone(), Value::String(v.clone())))
-                .collect();
-            map.insert("Metadata".to_string(), Value::Object(obj));
-        }
-    }
+                .collect()
+        })
+        .unwrap_or_default();
+    map.insert("Metadata".to_string(), Value::Object(meta_obj));
     if let Some(v) = out.server_side_encryption() {
         map.insert(
             "ServerSideEncryption".to_string(),
@@ -160,6 +162,18 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     }
     if let Some(v) = out.ssekms_key_id() {
         map.insert("SSEKMSKeyId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.sse_customer_algorithm() {
+        map.insert(
+            "SSECustomerAlgorithm".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.sse_customer_key_md5() {
+        map.insert(
+            "SSECustomerKeyMD5".to_string(),
+            Value::String(v.to_string()),
+        );
     }
     if let Some(v) = out.bucket_key_enabled() {
         map.insert("BucketKeyEnabled".to_string(), Value::Bool(v));
@@ -262,6 +276,12 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     if let Some(v) = out.delete_marker() {
         map.insert("DeleteMarker".to_string(), Value::Bool(v));
     }
+    if let Some(v) = out.tag_count() {
+        map.insert(
+            "TagCount".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
 
     Value::Object(map)
 }
@@ -273,6 +293,9 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
 /// populate them; they are never emitted as `null`.
 pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
     let mut map = Map::new();
+    if let Some(arn) = out.bucket_arn() {
+        map.insert("BucketArn".to_string(), Value::String(arn.to_string()));
+    }
     if let Some(region) = out.bucket_region() {
         map.insert(
             "BucketRegion".to_string(),
@@ -482,10 +505,14 @@ mod tests {
     // ----- head_object_to_json tests -----
 
     #[test]
-    fn head_object_empty_output_yields_empty_object() {
+    fn head_object_empty_output_yields_only_metadata_key() {
+        // AWS CLI v2 always emits `Metadata` (as `{}` when no user metadata is
+        // set), so an otherwise-empty HeadObjectOutput maps to `{"Metadata": {}}`.
         let out = HeadObjectOutput::builder().build();
         let json = head_object_to_json(&out);
-        assert_eq!(json, Value::Object(Map::new()));
+        let mut expected = Map::new();
+        expected.insert("Metadata".to_string(), Value::Object(Map::new()));
+        assert_eq!(json, Value::Object(expected));
     }
 
     #[test]
@@ -586,6 +613,22 @@ mod tests {
     }
 
     #[test]
+    fn head_bucket_with_bucket_arn() {
+        let out = HeadBucketOutput::builder()
+            .bucket_arn("arn:aws:s3:::data.cpp17.org")
+            .bucket_region("ap-northeast-1")
+            .access_point_alias(false)
+            .build();
+        let json = head_bucket_to_json(&out);
+        assert_eq!(
+            json["BucketArn"],
+            Value::String("arn:aws:s3:::data.cpp17.org".into())
+        );
+        assert_eq!(json["BucketRegion"], Value::String("ap-northeast-1".into()));
+        assert_eq!(json["AccessPointAlias"], Value::Bool(false));
+    }
+
+    #[test]
     fn head_bucket_with_location_type_and_name() {
         use aws_sdk_s3::types::LocationType;
         let out = HeadBucketOutput::builder()
@@ -647,13 +690,33 @@ mod tests {
     }
 
     #[test]
-    fn head_object_with_empty_metadata_omits_key() {
-        // The SDK can produce Some(empty map) when no user metadata is set;
-        // the serialiser must omit the Metadata key in that case (matching
-        // aws s3api which only emits Metadata when at least one entry exists).
+    fn head_object_with_empty_metadata_emits_empty_object() {
+        // AWS CLI v2 always emits `Metadata`, even as `{}` when no user
+        // metadata is set. The serialiser must do the same.
         let out = HeadObjectOutput::builder().build();
         let json = head_object_to_json(&out);
-        assert!(json.get("Metadata").is_none());
+        assert_eq!(json["Metadata"], Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn head_object_with_tag_count() {
+        let out = HeadObjectOutput::builder().tag_count(2).build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["TagCount"], Value::Number(serde_json::Number::from(2)));
+    }
+
+    #[test]
+    fn head_object_with_sse_customer_fields() {
+        let out = HeadObjectOutput::builder()
+            .sse_customer_algorithm("AES256")
+            .sse_customer_key_md5("md5digest==")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["SSECustomerAlgorithm"], Value::String("AES256".into()));
+        assert_eq!(
+            json["SSECustomerKeyMD5"],
+            Value::String("md5digest==".into())
+        );
     }
 
     #[test]
