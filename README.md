@@ -1,5 +1,7 @@
 # s3util
 
+[![Crates.io](https://img.shields.io/crates/v/s3util-rs.svg)](https://crates.io/crates/s3util-rs)
+[![GitHub](https://img.shields.io/github/downloads/nidor1998/s3util-rs/total?label=downloads%20%28GitHub%29)](https://github.com/nidor1998/s3util-rs/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)
 ![MSRV](https://img.shields.io/badge/msrv-1.91.1-red)
 [![codecov](https://codecov.io/gh/nidor1998/s3util-rs/graph/badge.svg)](https://codecov.io/gh/nidor1998/s3util-rs)
