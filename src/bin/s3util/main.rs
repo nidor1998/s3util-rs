@@ -6,10 +6,18 @@ use s3util_rs::Config;
 use s3util_rs::config::args::{Cli, Commands};
 
 mod cli;
+mod help;
 mod tracing_init;
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    let raw_args: Vec<String> = std::env::args().collect();
+    if help::is_top_level_help_request(&raw_args) {
+        let mut stdout = std::io::stdout().lock();
+        let _ = help::print_categorized_help(&mut stdout);
+        return Ok(());
+    }
+
     let cli_args = Cli::parse();
 
     match cli_args.command {
