@@ -77,13 +77,18 @@ fn bucket_with_key_exits_1() {
 
 #[test]
 fn target_access_key_without_secret_exits_non_zero() {
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "get-bucket-policy",
         "s3://example",
         "--target-access-key",
         "AKIA",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap missing-arg should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("required")
             || stderr.to_lowercase().contains("--target-secret-access-key"),

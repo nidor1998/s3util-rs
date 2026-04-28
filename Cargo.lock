@@ -807,9 +807,9 @@ dependencies = [
 
 [[package]]
 name = "clap_complete"
-version = "4.6.2"
+version = "4.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ff7a1dccbdd8b078c2bdebff47e404615151534d5043da397ec50286816f9cb"
+checksum = "660c0520455b1013b9bcb0393d5f643d7e4454fb69c915b8d6d2aa0e9a45acc3"
 dependencies = [
  "clap",
 ]
@@ -2607,7 +2607,7 @@ checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
 name = "s3util-rs"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -2647,6 +2647,7 @@ dependencies = [
  "percent-encoding",
  "pin-project",
  "regex",
+ "serde",
  "serde_json",
  "sha1 0.11.0",
  "sha2 0.11.0",

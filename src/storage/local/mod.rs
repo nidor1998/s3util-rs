@@ -589,6 +589,11 @@ impl LocalStorage {
         let mut upload_parts_join_handles = FuturesUnordered::new();
         let target_stats_sender = self.get_stats_sender();
         loop {
+            if self.cancellation_token.is_cancelled() {
+                warn!(key = key, "sync cancelled.",);
+                return Err(anyhow!(S3syncError::Cancelled));
+            }
+
             let chunksize = if part_number == 1 {
                 first_chunk_content_length
             } else if offset + config_chunksize as u64 > source_size {
