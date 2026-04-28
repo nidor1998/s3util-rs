@@ -1125,6 +1125,191 @@ mod tests {
         assert_rejects_with(&["s3util", "rm", "s3://b/k"], "rm");
     }
 
+    // The remaining bucket-config CRUD subcommands. Same contract as the
+    // tests above: build_config_from_args must reject every thin-wrapper
+    // subcommand with a message naming the subcommand and pointing at
+    // main.rs. put-* commands take a JSON-file positional that is not read
+    // at parse time, so a placeholder path is fine.
+
+    #[test]
+    fn build_config_rejects_delete_bucket_cors() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-cors", "s3://b"],
+            "delete-bucket-cors",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket_encryption() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-encryption", "s3://b"],
+            "delete-bucket-encryption",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket_lifecycle_configuration() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-lifecycle-configuration", "s3://b"],
+            "delete-bucket-lifecycle-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_bucket_website() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-website", "s3://b"],
+            "delete-bucket-website",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_public_access_block() {
+        assert_rejects_with(
+            &["s3util", "delete-public-access-block", "s3://b"],
+            "delete-public-access-block",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_cors() {
+        assert_rejects_with(&["s3util", "get-bucket-cors", "s3://b"], "get-bucket-cors");
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_encryption() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-encryption", "s3://b"],
+            "get-bucket-encryption",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_lifecycle_configuration() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-lifecycle-configuration", "s3://b"],
+            "get-bucket-lifecycle-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_logging() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-logging", "s3://b"],
+            "get-bucket-logging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_notification_configuration() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-notification-configuration", "s3://b"],
+            "get-bucket-notification-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_website() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-website", "s3://b"],
+            "get-bucket-website",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_public_access_block() {
+        assert_rejects_with(
+            &["s3util", "get-public-access-block", "s3://b"],
+            "get-public-access-block",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_cors() {
+        assert_rejects_with(
+            &["s3util", "put-bucket-cors", "s3://b", "/tmp/cors.json"],
+            "put-bucket-cors",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_encryption() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-encryption",
+                "s3://b",
+                "/tmp/encryption.json",
+            ],
+            "put-bucket-encryption",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_lifecycle_configuration() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-lifecycle-configuration",
+                "s3://b",
+                "/tmp/lifecycle.json",
+            ],
+            "put-bucket-lifecycle-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_logging() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-logging",
+                "s3://b",
+                "/tmp/logging.json",
+            ],
+            "put-bucket-logging",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_notification_configuration() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-notification-configuration",
+                "s3://b",
+                "/tmp/notification.json",
+            ],
+            "put-bucket-notification-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_website() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-website",
+                "s3://b",
+                "/tmp/website.json",
+            ],
+            "put-bucket-website",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_public_access_block() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-public-access-block",
+                "s3://b",
+                "/tmp/pab.json",
+            ],
+            "put-public-access-block",
+        );
+    }
+
     #[test]
     fn build_config_clap_parse_error_propagates() {
         // A non-existent subcommand is a clap parse error, surfaced as Err
