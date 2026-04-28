@@ -7,3 +7,4 @@ tests/fixtures/large_data/
 lcov.info
 *.profraw
 .DS_Store
+/docs
