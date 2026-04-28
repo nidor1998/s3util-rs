@@ -101,7 +101,7 @@ fn auto_complete_shell_short_circuits_without_positionals() {
 #[test]
 fn target_access_key_without_secret_exits_non_zero() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "put-bucket-notification-configuration",
         "s3://example",
         tmp.path().to_str().unwrap(),
@@ -109,6 +109,11 @@ fn target_access_key_without_secret_exits_non_zero() {
         "AKIA",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap missing-arg should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("required")
             || stderr.to_lowercase().contains("--target-secret-access-key"),
@@ -140,7 +145,7 @@ fn malformed_json_exits_1() {
 #[test]
 fn target_no_sign_request_conflicts_with_target_profile() {
     let tmp = tempfile::NamedTempFile::new().unwrap();
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "put-bucket-notification-configuration",
         "s3://example",
         tmp.path().to_str().unwrap(),
@@ -149,6 +154,11 @@ fn target_no_sign_request_conflicts_with_target_profile() {
         "default",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap conflict should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("cannot be used")
             || stderr.to_lowercase().contains("conflict"),

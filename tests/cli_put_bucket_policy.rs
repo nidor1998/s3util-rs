@@ -106,7 +106,7 @@ fn auto_complete_shell_short_circuits_without_positionals() {
 fn target_access_key_without_secret_exits_non_zero() {
     // Create a temp file so the positionals parse correctly
     let tmp = tempfile::NamedTempFile::new().unwrap();
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "put-bucket-policy",
         "s3://example",
         tmp.path().to_str().unwrap(),
@@ -114,6 +114,11 @@ fn target_access_key_without_secret_exits_non_zero() {
         "AKIA",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap missing-arg should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("required")
             || stderr.to_lowercase().contains("--target-secret-access-key"),

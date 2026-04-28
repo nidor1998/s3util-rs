@@ -53,13 +53,18 @@ fn auto_complete_shell_short_circuits_without_target() {
 
 #[test]
 fn target_access_key_without_secret_exits_non_zero() {
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "delete-public-access-block",
         "s3://example",
         "--target-access-key",
         "AKIA",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap missing-arg should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("required")
             || stderr.to_lowercase().contains("--target-secret-access-key"),
@@ -69,7 +74,7 @@ fn target_access_key_without_secret_exits_non_zero() {
 
 #[test]
 fn target_no_sign_request_conflicts_with_target_profile() {
-    let (ok, _stdout, stderr, _code) = run(s3util().args([
+    let (ok, _stdout, stderr, code) = run(s3util().args([
         "delete-public-access-block",
         "s3://example",
         "--target-no-sign-request",
@@ -77,6 +82,11 @@ fn target_no_sign_request_conflicts_with_target_profile() {
         "default",
     ]));
     assert!(!ok);
+    assert_eq!(
+        code,
+        Some(2),
+        "clap conflict should exit 2; stderr: {stderr}"
+    );
     assert!(
         stderr.to_lowercase().contains("cannot be used")
             || stderr.to_lowercase().contains("conflict"),
