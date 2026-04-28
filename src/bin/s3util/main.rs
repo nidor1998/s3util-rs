@@ -17,6 +17,13 @@ async fn main() -> Result<()> {
         let _ = help::print_categorized_help(&mut stdout);
         return Ok(());
     }
+    // No subcommand: render the same categorized help, but to stderr with
+    // exit 2 to preserve the "missing subcommand is an error" semantic.
+    if raw_args.len() <= 1 {
+        let mut stderr = std::io::stderr().lock();
+        let _ = help::print_categorized_help(&mut stderr);
+        std::process::exit(2);
+    }
 
     let cli_args = Cli::parse();
 
