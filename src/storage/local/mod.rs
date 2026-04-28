@@ -590,7 +590,8 @@ impl LocalStorage {
         let target_stats_sender = self.get_stats_sender();
         loop {
             if self.cancellation_token.is_cancelled() {
-                break;
+                warn!(key = key, "sync cancelled.",);
+                return Err(anyhow!(S3syncError::Cancelled));
             }
 
             let chunksize = if part_number == 1 {
