@@ -1,0 +1,281 @@
+#![cfg(e2e_test)]
+
+#[cfg(test)]
+mod common;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use common::*;
+
+    use std::process::{Command, Stdio};
+
+    fn run_s3util(args: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(args)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn s3util")
+    }
+
+    fn run_s3util_with_stdin(args: &[&str], stdin_data: &[u8]) -> std::process::Output {
+        use std::io::Write;
+        let mut child = Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn s3util");
+        if let Some(stdin) = child.stdin.take() {
+            let mut stdin = stdin;
+            stdin.write_all(stdin_data).ok();
+        }
+        child.wait_with_output().expect("wait s3util")
+    }
+
+    fn sample_encryption_json() -> &'static str {
+        // AES256 default (no KMS key needed; works on any account/region).
+        r#"{
+          "Rules": [
+            {
+              "ApplyServerSideEncryptionByDefault": { "SSEAlgorithm": "AES256" }
+            }
+          ]
+        }"#
+    }
+
+    #[tokio::test]
+    async fn put_get_delete_get_round_trip_via_file() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let config_file = TestHelper::create_test_file(
+            &tmp_dir,
+            "encryption.json",
+            sample_encryption_json().as_bytes(),
+        );
+        let config_file_str = config_file.to_str().unwrap();
+
+        let put_out = run_s3util(&[
+            "put-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            config_file_str,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&put_out.stdout).trim(),
+            "",
+            "put must produce no stdout"
+        );
+
+        let get_out = run_s3util(&[
+            "get-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(
+            get_out.status.success(),
+            "get should succeed; stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&get_out.stdout).expect("get stdout must be JSON");
+        let rules = json["ServerSideEncryptionConfiguration"]["Rules"]
+            .as_array()
+            .expect("Rules array");
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0]["ApplyServerSideEncryptionByDefault"]["SSEAlgorithm"],
+            "AES256"
+        );
+
+        let del_out = run_s3util(&[
+            "delete-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(del_out.status.success());
+
+        // Since 2023, S3 applies a default AES256 encryption to all buckets,
+        // so delete-bucket-encryption clears the user-set rule but leaves the
+        // server-managed default in place. Get therefore still succeeds and
+        // returns AES256 (NOT ServerSideEncryptionConfigurationNotFoundError).
+        let get_after_del = run_s3util(&[
+            "get-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(
+            get_after_del.status.success(),
+            "after delete, S3's default AES256 encryption remains, so get must succeed; stderr: {}",
+            String::from_utf8_lossy(&get_after_del.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&get_after_del.stdout)
+            .expect("get stdout after delete must be JSON");
+        assert_eq!(
+            json["ServerSideEncryptionConfiguration"]["Rules"][0]["ApplyServerSideEncryptionByDefault"]
+                ["SSEAlgorithm"],
+            "AES256",
+            "S3's automatic default after delete must be AES256"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
+    #[tokio::test]
+    async fn put_via_stdin_and_get_round_trip() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+
+        let put_out = run_s3util_with_stdin(
+            &[
+                "put-bucket-encryption",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+                "-",
+            ],
+            sample_encryption_json().as_bytes(),
+        );
+        assert!(
+            put_out.status.success(),
+            "put via stdin should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        let get_out = run_s3util(&[
+            "get-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(get_out.status.success());
+        let json: serde_json::Value = serde_json::from_slice(&get_out.stdout).unwrap();
+        assert!(json.get("ServerSideEncryptionConfiguration").is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Since 2023, S3 applies a default AES256 encryption to every new bucket,
+    /// so a freshly-created bucket with no explicit `put-bucket-encryption` call
+    /// still returns a configuration. Get therefore succeeds with AES256 — it
+    /// does NOT exit 4 with `ServerSideEncryptionConfigurationNotFoundError`,
+    /// which only happens for buckets created before 2023 or in regions /
+    /// account-types that opt out of the auto-default.
+    #[tokio::test]
+    async fn get_on_unconfigured_bucket_returns_default_aes256() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let out = run_s3util(&[
+            "get-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            out.status.success(),
+            "get on unconfigured bucket must succeed (S3 auto-default); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let json: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("get stdout must be JSON");
+        assert_eq!(
+            json["ServerSideEncryptionConfiguration"]["Rules"][0]["ApplyServerSideEncryptionByDefault"]
+                ["SSEAlgorithm"],
+            "AES256",
+            "S3's automatic default for new buckets is AES256"
+        );
+    }
+
+    #[tokio::test]
+    async fn put_on_missing_bucket_exits_1() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let config_file = TestHelper::create_test_file(
+            &tmp_dir,
+            "encryption.json",
+            sample_encryption_json().as_bytes(),
+        );
+
+        let out = run_s3util(&[
+            "put-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            config_file.to_str().unwrap(),
+        ]);
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+
+        assert!(!out.status.success());
+        assert_eq!(out.status.code(), Some(1));
+    }
+
+    #[tokio::test]
+    async fn delete_on_missing_bucket_exits_1() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+
+        let out = run_s3util(&[
+            "delete-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+
+        assert!(!out.status.success());
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "delete on missing bucket must exit 1 (delete uses Result<()>, not HeadError, so NoSuchBucket → exit 1)"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_on_nonexistent_bucket_exits_4() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+        let out = run_s3util(&[
+            "get-bucket-encryption",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(!out.status.success());
+        assert_eq!(out.status.code(), Some(4));
+    }
+}

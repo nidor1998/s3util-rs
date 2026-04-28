@@ -11,30 +11,56 @@ use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
 use aws_sdk_s3::operation::delete_bucket::DeleteBucketOutput;
+use aws_sdk_s3::operation::delete_bucket_cors::DeleteBucketCorsOutput;
+use aws_sdk_s3::operation::delete_bucket_encryption::DeleteBucketEncryptionOutput;
+use aws_sdk_s3::operation::delete_bucket_lifecycle::DeleteBucketLifecycleOutput;
 use aws_sdk_s3::operation::delete_bucket_policy::DeleteBucketPolicyOutput;
 use aws_sdk_s3::operation::delete_bucket_tagging::DeleteBucketTaggingOutput;
+use aws_sdk_s3::operation::delete_bucket_website::DeleteBucketWebsiteOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
+use aws_sdk_s3::operation::delete_public_access_block::DeletePublicAccessBlockOutput;
+use aws_sdk_s3::operation::get_bucket_cors::GetBucketCorsOutput;
+use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+use aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
+use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::put_bucket_cors::PutBucketCorsOutput;
+use aws_sdk_s3::operation::put_bucket_encryption::PutBucketEncryptionOutput;
+use aws_sdk_s3::operation::put_bucket_lifecycle_configuration::PutBucketLifecycleConfigurationOutput;
+use aws_sdk_s3::operation::put_bucket_logging::PutBucketLoggingOutput;
+use aws_sdk_s3::operation::put_bucket_notification_configuration::PutBucketNotificationConfigurationOutput;
 use aws_sdk_s3::operation::put_bucket_policy::PutBucketPolicyOutput;
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
+use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
 use aws_sdk_s3::types::{
-    BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
-    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Tagging,
-    VersioningConfiguration,
+    BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint, BucketLoggingStatus,
+    BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration, CreateBucketConfiguration,
+    DataRedundancy, LocationInfo, LocationType, NotificationConfiguration,
+    PublicAccessBlockConfiguration, ServerSideEncryptionConfiguration, Tagging,
+    VersioningConfiguration, WebsiteConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
 /// from every other failure mode (network, auth, region mismatch, etc.).
-/// Used by `head_object`, `head_bucket`, `get_object_tagging`,
-/// `get_bucket_policy`, `get_bucket_tagging`, and `get_bucket_versioning`
+/// Used by `head_object`, `head_bucket`, and the `get_*` wrappers in this
+/// module that need to distinguish bucket-missing from subresource-missing
+/// (`get_object_tagging`, `get_bucket_policy`, `get_bucket_tagging`,
+/// `get_bucket_versioning`, `get_bucket_lifecycle_configuration`,
+/// `get_bucket_encryption`, `get_bucket_cors`, `get_public_access_block`,
+/// `get_bucket_website`, `get_bucket_logging`,
+/// `get_bucket_notification_configuration`),
 /// so the runtime can map NotFound to a dedicated exit code (4) and emit
 /// an accurate "bucket missing" vs "subresource missing" message.
 #[derive(Debug, thiserror::Error)]
@@ -69,6 +95,41 @@ const GET_BUCKET_TAGGING_NOT_FOUND_CODES: &[&str] = &["NoSuchTagSet"];
 /// when versioning has never been configured, so the only NotFound case
 /// is `NoSuchBucket`, which `classify_not_found` handles separately.
 const GET_BUCKET_VERSIONING_NOT_FOUND_CODES: &[&str] = &[];
+/// S3 error codes that `get-bucket-lifecycle-configuration` treats as a
+/// subresource NotFound. `NoSuchLifecycleConfiguration` covers the case
+/// where the bucket exists but no lifecycle rules are configured.
+const GET_BUCKET_LIFECYCLE_CONFIGURATION_NOT_FOUND_CODES: &[&str] =
+    &["NoSuchLifecycleConfiguration"];
+/// S3 error codes that `get-bucket-encryption` treats as a subresource
+/// NotFound. `ServerSideEncryptionConfigurationNotFoundError` covers the
+/// case where the bucket exists but no encryption configuration is set.
+const GET_BUCKET_ENCRYPTION_NOT_FOUND_CODES: &[&str] =
+    &["ServerSideEncryptionConfigurationNotFoundError"];
+/// S3 error codes that `get-bucket-cors` treats as a subresource NotFound.
+/// `NoSuchCORSConfiguration` covers the case where the bucket exists but
+/// no CORS configuration is set.
+const GET_BUCKET_CORS_NOT_FOUND_CODES: &[&str] = &["NoSuchCORSConfiguration"];
+/// S3 error codes that `get-public-access-block` treats as a subresource
+/// NotFound. `NoSuchPublicAccessBlockConfiguration` covers the case where
+/// the bucket exists but no public-access-block configuration is set.
+const GET_PUBLIC_ACCESS_BLOCK_NOT_FOUND_CODES: &[&str] = &["NoSuchPublicAccessBlockConfiguration"];
+/// S3 error codes that `get-bucket-website` treats as a subresource NotFound.
+/// `NoSuchWebsiteConfiguration` covers the case where the bucket exists but
+/// no website configuration is set.
+const GET_BUCKET_WEBSITE_NOT_FOUND_CODES: &[&str] = &["NoSuchWebsiteConfiguration"];
+/// S3 error codes that `get-bucket-logging` treats as a subresource NotFound.
+/// Mirrors `get-bucket-versioning`: `GetBucketLogging` returns success with
+/// an empty body when no logging is configured (no `NoSuchLoggingConfiguration`
+/// code exists), so the only NotFound case is `NoSuchBucket`, which
+/// `classify_not_found` handles separately.
+const GET_BUCKET_LOGGING_NOT_FOUND_CODES: &[&str] = &[];
+/// S3 error codes that `get-bucket-notification-configuration` treats as a
+/// subresource NotFound. Mirrors `get-bucket-versioning` and
+/// `get-bucket-logging`: `GetBucketNotificationConfiguration` returns
+/// success with an empty body when no notifications are configured
+/// (there is no per-resource NotFound error code), so the only NotFound
+/// case is `NoSuchBucket`, which `classify_not_found` handles separately.
+const GET_BUCKET_NOTIFICATION_CONFIGURATION_NOT_FOUND_CODES: &[&str] = &[];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -523,6 +584,399 @@ pub async fn delete_bucket_policy(
         .with_context(|| format!("delete-bucket-policy on s3://{bucket}"))
 }
 
+/// Issue `GetBucketLifecycleConfiguration` for `bucket`. Returns the SDK
+/// response on success, `HeadError::BucketNotFound` when S3 returns
+/// `NoSuchBucket`, `HeadError::NotFound` when S3 returns
+/// `NoSuchLifecycleConfiguration` (the bucket exists but no lifecycle
+/// rules are configured), and `HeadError::Other` for any other failure.
+pub async fn get_bucket_lifecycle_configuration(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketLifecycleConfigurationOutput, HeadError> {
+    client
+        .get_bucket_lifecycle_configuration()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_LIFECYCLE_CONFIGURATION_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                    "get-bucket-lifecycle-configuration on s3://{bucket}"
+                ))),
+            }
+        })
+}
+
+/// Issue `PutBucketLifecycleConfiguration` for `bucket` with the given
+/// configuration. Returns the SDK response on success.
+pub async fn put_bucket_lifecycle_configuration(
+    client: &Client,
+    bucket: &str,
+    cfg: BucketLifecycleConfiguration,
+) -> Result<PutBucketLifecycleConfigurationOutput> {
+    client
+        .put_bucket_lifecycle_configuration()
+        .bucket(bucket)
+        .lifecycle_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-lifecycle-configuration on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketLifecycle` for `bucket`. Returns the SDK response on
+/// success.
+///
+/// Wrapped under the symmetric CLI name `delete-bucket-lifecycle-configuration`.
+/// AWS CLI uses the asymmetric `delete-bucket-lifecycle`; we choose symmetry
+/// for predictability with the `get-` / `put-` siblings.
+pub async fn delete_bucket_lifecycle_configuration(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketLifecycleOutput> {
+    client
+        .delete_bucket_lifecycle()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-lifecycle-configuration on s3://{bucket}"))
+}
+
+/// Issue `GetBucketEncryption` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns
+/// `ServerSideEncryptionConfigurationNotFoundError` (the bucket exists
+/// but no encryption configuration is set), and `HeadError::Other` for
+/// any other failure.
+pub async fn get_bucket_encryption(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketEncryptionOutput, HeadError> {
+    client
+        .get_bucket_encryption()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_ENCRYPTION_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-bucket-encryption on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketEncryption` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_bucket_encryption(
+    client: &Client,
+    bucket: &str,
+    cfg: ServerSideEncryptionConfiguration,
+) -> Result<PutBucketEncryptionOutput> {
+    client
+        .put_bucket_encryption()
+        .bucket(bucket)
+        .server_side_encryption_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-encryption on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketEncryption` for `bucket`. Returns the SDK response
+/// on success.
+pub async fn delete_bucket_encryption(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketEncryptionOutput> {
+    client
+        .delete_bucket_encryption()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-encryption on s3://{bucket}"))
+}
+
+/// Issue `GetBucketCors` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchCORSConfiguration` (the
+/// bucket exists but no CORS configuration is set), and `HeadError::Other`
+/// for any other failure.
+pub async fn get_bucket_cors(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketCorsOutput, HeadError> {
+    client
+        .get_bucket_cors()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_CORS_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e).context(format!("get-bucket-cors on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketCors` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_bucket_cors(
+    client: &Client,
+    bucket: &str,
+    cfg: CorsConfiguration,
+) -> Result<PutBucketCorsOutput> {
+    client
+        .put_bucket_cors()
+        .bucket(bucket)
+        .cors_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-cors on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketCors` for `bucket`. Returns the SDK response on success.
+pub async fn delete_bucket_cors(client: &Client, bucket: &str) -> Result<DeleteBucketCorsOutput> {
+    client
+        .delete_bucket_cors()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-cors on s3://{bucket}"))
+}
+
+/// Issue `GetPublicAccessBlock` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns
+/// `NoSuchPublicAccessBlockConfiguration` (the bucket exists but no
+/// public-access-block configuration is set), and `HeadError::Other` for
+/// any other failure.
+pub async fn get_public_access_block(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetPublicAccessBlockOutput, HeadError> {
+    client
+        .get_public_access_block()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_PUBLIC_ACCESS_BLOCK_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-public-access-block on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutPublicAccessBlock` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_public_access_block(
+    client: &Client,
+    bucket: &str,
+    cfg: PublicAccessBlockConfiguration,
+) -> Result<PutPublicAccessBlockOutput> {
+    client
+        .put_public_access_block()
+        .bucket(bucket)
+        .public_access_block_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-public-access-block on s3://{bucket}"))
+}
+
+/// Issue `DeletePublicAccessBlock` for `bucket`. Returns the SDK response
+/// on success.
+pub async fn delete_public_access_block(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeletePublicAccessBlockOutput> {
+    client
+        .delete_public_access_block()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-public-access-block on s3://{bucket}"))
+}
+
+/// Issue `GetBucketWebsite` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchWebsiteConfiguration` (the
+/// bucket exists but no website configuration is set), and
+/// `HeadError::Other` for any other failure.
+pub async fn get_bucket_website(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketWebsiteOutput, HeadError> {
+    client
+        .get_bucket_website()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_WEBSITE_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e).context(format!("get-bucket-website on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketWebsite` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_bucket_website(
+    client: &Client,
+    bucket: &str,
+    cfg: WebsiteConfiguration,
+) -> Result<PutBucketWebsiteOutput> {
+    client
+        .put_bucket_website()
+        .bucket(bucket)
+        .website_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-website on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketWebsite` for `bucket`. Returns the SDK response on success.
+pub async fn delete_bucket_website(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketWebsiteOutput> {
+    client
+        .delete_bucket_website()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-website on s3://{bucket}"))
+}
+
+/// Issue `GetBucketLogging` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// and `HeadError::Other` for any other failure.
+///
+/// `GetBucketLogging` returns success with an empty body when no logging
+/// is configured — that is `Ok`, not NotFound, mirroring
+/// `get_bucket_versioning`. The caller (`get_bucket_logging_to_json`)
+/// maps the empty payload to `{}`. The `HeadError::NotFound` variant is
+/// kept in the return type for symmetry with the other `get_*` wrappers
+/// but is never produced by this function.
+pub async fn get_bucket_logging(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketLoggingOutput, HeadError> {
+    client
+        .get_bucket_logging()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_LOGGING_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e).context(format!("get-bucket-logging on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketLogging` for `bucket` with the given status.
+/// Returns the SDK response on success.
+///
+/// To disable logging on the bucket, supply a `BucketLoggingStatus` with
+/// no `LoggingEnabled` field — AWS does not expose a `DeleteBucketLogging`
+/// API.
+pub async fn put_bucket_logging(
+    client: &Client,
+    bucket: &str,
+    status: BucketLoggingStatus,
+) -> Result<PutBucketLoggingOutput> {
+    client
+        .put_bucket_logging()
+        .bucket(bucket)
+        .bucket_logging_status(status)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-logging on s3://{bucket}"))
+}
+
+/// Issue `GetBucketNotificationConfiguration` for `bucket`. Returns the SDK
+/// response on success, `HeadError::BucketNotFound` when S3 returns
+/// `NoSuchBucket`, and `HeadError::Other` for any other failure.
+///
+/// `GetBucketNotificationConfiguration` returns success with an empty body
+/// when no notifications are configured — that is `Ok`, not NotFound,
+/// mirroring `get_bucket_versioning` and `get_bucket_logging`. The caller
+/// (`get_bucket_notification_configuration_to_json`) maps the empty
+/// payload to `{}`. The `HeadError::NotFound` variant is kept in the
+/// return type for symmetry with the other `get_*` wrappers but is never
+/// produced by this function.
+pub async fn get_bucket_notification_configuration(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketNotificationConfigurationOutput, HeadError> {
+    client
+        .get_bucket_notification_configuration()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_NOTIFICATION_CONFIGURATION_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                    "get-bucket-notification-configuration on s3://{bucket}"
+                ))),
+            }
+        })
+}
+
+/// Issue `PutBucketNotificationConfiguration` for `bucket` with the given
+/// configuration. Returns the SDK response on success.
+///
+/// To remove every notification on the bucket, supply an empty
+/// `NotificationConfiguration` (no topic/queue/lambda/event-bridge fields)
+/// — AWS does not expose a `DeleteBucketNotificationConfiguration` API.
+pub async fn put_bucket_notification_configuration(
+    client: &Client,
+    bucket: &str,
+    cfg: NotificationConfiguration,
+) -> Result<PutBucketNotificationConfigurationOutput> {
+    client
+        .put_bucket_notification_configuration()
+        .bucket(bucket)
+        .notification_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-notification-configuration on s3://{bucket}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -593,6 +1047,58 @@ mod tests {
     fn get_bucket_versioning_not_found_codes_pinned() {
         let empty: &[&str] = &[];
         assert_eq!(GET_BUCKET_VERSIONING_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_configuration_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_LIFECYCLE_CONFIGURATION_NOT_FOUND_CODES,
+            &["NoSuchLifecycleConfiguration"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_encryption_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_ENCRYPTION_NOT_FOUND_CODES,
+            &["ServerSideEncryptionConfigurationNotFoundError"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_cors_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_CORS_NOT_FOUND_CODES,
+            &["NoSuchCORSConfiguration"]
+        );
+    }
+
+    #[test]
+    fn get_public_access_block_not_found_codes_pinned() {
+        assert_eq!(
+            GET_PUBLIC_ACCESS_BLOCK_NOT_FOUND_CODES,
+            &["NoSuchPublicAccessBlockConfiguration"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_website_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_WEBSITE_NOT_FOUND_CODES,
+            &["NoSuchWebsiteConfiguration"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_logging_not_found_codes_pinned() {
+        let empty: &[&str] = &[];
+        assert_eq!(GET_BUCKET_LOGGING_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn get_bucket_notification_configuration_not_found_codes_pinned() {
+        let empty: &[&str] = &[];
+        assert_eq!(GET_BUCKET_NOTIFICATION_CONFIGURATION_NOT_FOUND_CODES, empty);
     }
 
     #[test]
