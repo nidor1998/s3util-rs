@@ -197,7 +197,9 @@ S3 → S3 transfers can span **different AWS accounts**, **different regions**, 
 
 ### Server-side copy
 
-`--server-side-copy` uses S3's `CopyObject` / `UploadPartCopy` for S3→S3 transfers within the same account/region, avoiding a round-trip through the client. `s3util` falls back to client-side copy when server-side is not possible (different endpoints, SSE-C translation, etc.).
+By default, S3→S3 transfers are **client-side**: `s3util` streams the object from the source through the local process and re-uploads it to the target. This is the most compatible mode — it works across different regions, endpoints, accounts, and S3-compatible providers, and is required for any transfer that crosses a boundary `CopyObject` cannot.
+
+Passing `--server-side-copy` switches to S3's `CopyObject` / `UploadPartCopy`, so the bytes never round-trip through the client. Both source and target must be S3, and the API call must be supported by the server (typically same-region, single endpoint). `s3util` does **not** fall back to client-side copy if server-side copy fails or is unsuitable — leave the flag off when in doubt.
 
 ### stdin/stdout streaming
 
