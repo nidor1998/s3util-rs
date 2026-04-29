@@ -37,7 +37,7 @@ pub fn show_indicator(
     show_progress: bool,
     show_result: bool,
     log_sync_summary: bool,
-    resolved_target: Option<String>,
+    resolved_target: String,
     source_key: String,
     target_key: String,
 ) -> JoinHandle<()> {
@@ -127,15 +127,9 @@ pub fn show_indicator(
                     // Clear live progress before printing final output
                     progress_text.finish_and_clear();
 
-                    // Show resolved destination path first
-                    if show_result
-                        && total_error_count == 0
-                        && let Some(ref resolved) = resolved_target
-                    {
-                        eprintln!("-> {resolved}");
-                    }
-
                     if show_result && total_error_count == 0 {
+                        eprintln!("-> {resolved_target}");
+
                         let mut parts = vec![format!(
                             "Transferred: {} | {}/sec",
                             HumanBytes(total_sync_bytes),
@@ -192,7 +186,7 @@ mod tests {
             true,
             true,
             false,
-            None,
+            String::new(),
             String::new(),
             String::new(),
         );
@@ -251,7 +245,7 @@ mod tests {
             true,
             false,
             true,
-            None,
+            String::new(),
             "src".to_string(),
             "dst".to_string(),
         );
@@ -306,7 +300,7 @@ mod tests {
             false,
             true,
             true,
-            None,
+            String::new(),
             "src".to_string(),
             "dst".to_string(),
         );
@@ -322,9 +316,9 @@ mod tests {
 
     #[tokio::test]
     async fn indicator_with_resolved_target_prints_destination_line() {
-        // Covers the `Some(ref resolved)` arm of resolved_target on successful
-        // completion (no errors). Gated on `show_result` so `--show-progress`
-        // controls whether the line is printed.
+        // Destination line is printed on successful completion (no errors),
+        // gated on `show_result` so `--show-progress` controls whether the
+        // line is printed.
         init_dummy_tracing_subscriber();
         let (stats_sender, stats_receiver) = async_channel::unbounded();
         let join_handle = show_indicator(
@@ -332,7 +326,7 @@ mod tests {
             false,
             true,
             false,
-            Some("s3://bucket/resolved/key".to_string()),
+            "s3://bucket/resolved/key".to_string(),
             String::new(),
             String::new(),
         );
@@ -357,7 +351,7 @@ mod tests {
             false,
             true,
             false,
-            None,
+            String::new(),
             String::new(),
             String::new(),
         );
@@ -389,7 +383,7 @@ mod tests {
             false,
             true,
             false,
-            None,
+            String::new(),
             String::new(),
             String::new(),
         );

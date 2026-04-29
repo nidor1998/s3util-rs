@@ -292,7 +292,7 @@ The examples below describe the `cp` and `mv` commands. For details on other com
 s3util cp ./release.tar.gz s3://my-bucket/releases/
 ```
 
-If the target ends in `/` (or is a bucket root), the source basename is appended to form the key. When `--show-progress` is set, the resolved write path is printed on a `-> <path>` line before the transfer summary.
+If the target ends in `/` (or is a bucket root), the source basename is appended to form the key. When `--show-progress` is set, the destination path is printed on a `-> <path>` line before the transfer summary.
 
 ### Download to local
 
@@ -379,8 +379,9 @@ Differences from `cp`:
 s3util cp --additional-checksum-algorithm SHA256 \
   ./release.tar.gz s3://my-bucket/releases/release.tar.gz
 
-# Download with SHA256 verification (requires server-side checksum)
-s3util cp --enable-additional-checksum --additional-checksum-algorithm SHA256 \
+# Download and verify the additional checksum stored on the object
+# (the algorithm is whatever was used at upload time)
+s3util cp --enable-additional-checksum \
   s3://my-bucket/releases/release.tar.gz ./release.tar.gz
 ```
 
@@ -426,7 +427,7 @@ s3util cp --target-region us-west-2 ./file.bin s3://my-bucket/file.bin
 
 ### Path and target resolution
 
-If the target is `s3://bucket`, `s3://bucket/dir/`, or a directory-style local path (an existing directory, or one ending in a path separator like `../`), the source basename is appended. When `--show-progress` is set, the resolved write path is printed on a `-> <path>` line before the transfer summary.
+If the target is `s3://bucket`, `s3://bucket/dir/`, or a directory-style local path (an existing directory, or one ending in a path separator like `../`), the source basename is appended. When `--show-progress` is set, the destination path is printed on a `-> <path>` line before the transfer summary.
 
 With stdin as the source there is no basename, so the target key must be spelled out.
 
@@ -501,7 +502,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 |------|---------------------------------------------------------------------------------------------------------------------|
 | 0    | Success                                                                                                             |
 | 1    | Error — transfer failed or configuration rejected                                                                   |
-| 2    | Argument-parsing error — emitted by clap when an argument is unknown, missing, or has an invalid value              |
+| 2    | Argument-parsing error — an argument is unknown, missing, or has an invalid value                                   |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
 | 4    | Not found — `head-bucket` / `head-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` only on `NoSuchBucket` (S3 returns success with an empty body when the subresource is unconfigured for these three) |
 | 101  | Abnormal termination (internal panic)                                                                               |
@@ -812,7 +813,7 @@ Validation runs at argument-parse time, before any network call:
 - Path shape per subcommand. Transfer subcommands and `rm` / `head-object` / object-tagging subcommands require `s3://<BUCKET>/<KEY>`; bucket-management subcommands require `s3://<BUCKET>` and reject paths with a key. Mismatches exit with clap's code 2.
 - Source-side rejection on `cp` / `mv`. Source URLs ending in `/`, source basenames of `.` or `..`, and local directory sources are rejected.
 - Mutual exclusivity. `put-bucket-versioning` requires exactly one of `--enabled` / `--suspended` via `clap`'s argument groups, so omitting the intent flag fails parse rather than defaulting to a destructive action.
-- Resolved target preview. When a source basename is appended to a target (e.g. target is a bucket root or a directory), the resolved write path is printed on a `-> <path>` line before bytes move (`src/bin/s3util/cli/indicator.rs`).
+- Destination preview. With `--show-progress`, the resolved destination path is printed on a `-> <path>` line before the transfer summary (`src/bin/s3util/cli/indicator.rs`).
 - Local target parent must exist. Downloads do not create missing directories; the runtime returns an error and asks the operator to create them (`src/storage/local/fs_util.rs`).
 - `--if-none-match` provides "create only" semantics on uploads, plumbed through `UploadManager` (`src/storage/s3/upload_manager.rs:482, 1062, 1879, 1913`).
 
