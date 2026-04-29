@@ -599,7 +599,11 @@ s3util cp -q ./artifact.tar.gz s3://my-bucket/artifacts/
 
 **Supported target: Amazon S3 only.**
 
-Support for S3-compatible storage is best-effort and may behave differently. `s3util` has been tested with Amazon S3 and Express One Zone directory buckets.
+Support for S3-compatible storage is on a best-effort basis and may behave differently.
+
+`s3util` has been tested with Amazon S3, including Express One Zone directory buckets. `s3util` has many end-to-end tests and unit tests, and they run every time a new version is released.
+
+S3-compatible storage is not tested when a new version is released (I test only when making major changes). This is because S3-compatible storage may have different behaviors and features. Since there is no official certification for S3-compatible storage, comprehensive testing is not possible.
 
 ## Fully AI-generated (human-verified) software
 
