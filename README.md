@@ -76,6 +76,7 @@
     * [Quality verification (by AI self-assessment)](#quality-verification-by-ai-self-assessment)
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
+    * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
 - [License](#license)
 
 </details>
@@ -994,6 +995,48 @@ Non-transfer S3 API wrapper reliability has moderate evidence. The wrappers are 
 Operator-error prevention has limited evidence. The command parser rejects malformed resource shapes and unsupported transfer directions, but a correctly parsed wrong bucket, key, version ID, policy file, or configuration file is still accepted. Destructive and replacement commands do not require confirmation or dry-run review.
 
 Based on the reviewed repository state, the reliability conclusion is that the implementation has concrete safeguards and tests for the highest-impact transfer correctness risks, and it contains a live-AWS e2e suite that is outside the default test path. The assessment cannot state that the latest live-AWS e2e run passed without run artifacts, that all bugs are excluded, or that destructive commands protect against a correctly parsed but unintended target.
+
+</details>
+
+### AI assessment of safety and correctness (by Gemini)
+
+<details>
+<summary>Click to expand the full assessment</summary>
+
+Assessment date: 2026-04-29.
+
+Scope: The `src/` and `tests/` directories, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `.github/workflows/`, `lcov.info`, and `lcov.report`. The assessment relies on static source analysis and unit-test coverage data.
+
+#### 1. Data Integrity and Transfer Reliability
+
+The core functionality of moving data is highly reliable. The transfer engine prevents silent data corruption by enforcing strict post-transfer verification.
+- **Checksum Coverage:** Implementations for all supported checksum algorithms (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`, and `SHA256`) have 100.00% region and line coverage. 
+- **Verification Logic:** The routines responsible for verifying these checksums and ETags against S3's responses (`storage/e_tag_verify.rs` and `storage/additional_checksum_verify.rs`) are tested exhaustively, maintaining >98.5% region coverage and >99.4% line coverage.
+- **Conclusion:** A successful exit code from a `cp` or `mv` operation reliably indicates that the data was transferred and its integrity was cryptographically verified. Mismatches are correctly mapped to hard errors (or warnings for expected S3-to-S3 layout differences).
+
+#### 2. Subcommand and API Wrapper Predictability
+
+The execution of specific S3 API calls operates predictably, but delegates schema authority to AWS.
+- **Centralized Logic:** The `storage/s3/api.rs` module routes all raw S3 errors into structured `NotFound` types with 94.44% line coverage, ensuring consistent error exit codes.
+- **Data Serialization:** Manual JSON parsing and serialization (`input/json.rs` and `output/json.rs`) exhibit >99.6% line coverage, proving comprehensive unit testing of the expected payload shapes.
+- **Conclusion:** Operations will format requests correctly and parse responses consistently. However, operations like `put-bucket-policy` send files directly without client-side schema validation, meaning invalid configurations will be rejected by S3 rather than caught locally.
+
+#### 3. Safety Risks and Operator Error
+
+The tool prioritizes immediate execution over operator safety rails.
+- **No Interactive Guardrails:** Destructive operations (such as `rm`, `delete-bucket`, and resource removals) process immediately upon a successful argument parse. There is no `--dry-run` or explicit confirmation step.
+- **Scope Containment:** While the lack of recursive operations naturally limits the blast radius of a single command to one object or bucket, an operator typo in the target path will immediately affect the wrong resource.
+- **Conclusion:** The binary is unsafe against operator errors. Users must independently verify targets before executing any destructive subcommand.
+
+#### 4. Testing Limitations
+
+The validation of the software relies heavily on isolated unit testing rather than continuous real-world integration.
+- **E2E Test Exclusion:** The 44 `tests/e2e_*.rs` integration test files are gated behind a `#[cfg(e2e_test)]` flag and are not executed in the standard GitHub Actions CI pipeline.
+- **Conclusion:** While unit tests comprehensively cover the codebase (97.55% overall line coverage), pull requests and standard builds do not empirically verify network behavior against live AWS infrastructure. Production reliability depends on manual maintainer validation of the E2E suite.
+
+#### Overall Conclusion
+
+`s3util` is technically reliable for data transfer, with verifiable, exhaustively tested cryptographic integrity checks that prevent silent data corruption. However, its operational safety is low regarding human error; the absence of dry-runs and interactive confirmations means it requires high operator caution when modifying or deleting resources.
 
 </details>
 
