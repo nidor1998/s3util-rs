@@ -8,7 +8,7 @@
 
 ## Tools for managing Amazon S3 objects and buckets
 
-`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores. It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future [`s7cmd`](https://github.com/nidor1998/s7cmd) toolkit.
+`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores, built on the official [AWS SDK for Rust](https://github.com/awslabs/aws-sdk-rust) (`aws-sdk-s3`). It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future [`s7cmd`](https://github.com/nidor1998/s7cmd) toolkit.
 
 ## Table of contents
 
@@ -31,7 +31,7 @@
     * [Observability](#observability)
 - [Requirements](#requirements)
 - [Installation](#installation)
-    * [Build from source](#build-from-source)
+    * [Install from crates.io](#install-from-cratesio)
 - [Usage](#usage)
     * [Upload a local file](#upload-a-local-file)
     * [Download to local](#download-to-local)
@@ -93,14 +93,14 @@ For object transfers in particular, `s3util` emphasizes high reliability, high p
 
 s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy, lifecycle, encryption, CORS, public-access-block, website, logging, notifications). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
-The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with s3util unmodified.
+The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
 
 ### Non-Goals
 
 The following are explicitly out of scope and will not be added, regardless of demand:
 
 - Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
-- Glob or wildcard expansion in S3 keys. For pattern-based matching, use s3sync, which supports regular expressions.
+- Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
 - Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
 - Compatibility with other S3 clients — neither in flag names and
   behavior, nor in feature coverage. The presence of a feature, flag,
@@ -259,18 +259,13 @@ For more information, see [SDK authentication with AWS](https://docs.aws.amazon.
 
 ## Installation
 
-### Build from source
+### Install from crates.io
 
 ```bash
-# Clone the repository
-git clone https://github.com/nidor1998/s3util-rs.git
-cd s3util-rs
-
-# Build release binary
-cargo build --release
-
-# The binary is at ./target/release/s3util
+cargo install s3util-rs
 ```
+
+The crate is published as [`s3util-rs`](https://crates.io/crates/s3util-rs); the installed binary is named `s3util`.
 
 ## Usage
 
@@ -297,12 +292,12 @@ The examples below describe the `cp` and `mv` commands. For details on other com
 s3util cp ./release.tar.gz s3://my-bucket/releases/
 ```
 
-If the target ends in `/` (or is a bucket root), the source basename is appended to form the key. The resolved write path is printed on a `-> <path>` line before the transfer summary.
+If the target ends in `/` (or is a bucket root), the source basename is appended to form the key. When `--show-progress` is set, the resolved write path is printed on a `-> <path>` line before the transfer summary.
 
 ### Download to local
 
 ```bash
-s3util cp s3://my-bucket/hosts ../
+s3util cp s3://my-bucket/hosts .
 ```
 
 **The target parent directory must already exist.** `s3util` does not create missing directories — it returns an error asking you to create them first.
@@ -431,7 +426,7 @@ s3util cp --target-region us-west-2 ./file.bin s3://my-bucket/file.bin
 
 ### Path and target resolution
 
-If the target is `s3://bucket`, `s3://bucket/dir/`, or a directory-style local path (an existing directory, or one ending in a path separator like `../`), the source basename is appended. The resolved write path is printed on a `-> <path>` line before the transfer summary.
+If the target is `s3://bucket`, `s3://bucket/dir/`, or a directory-style local path (an existing directory, or one ending in a path separator like `../`), the source basename is appended. When `--show-progress` is set, the resolved write path is printed on a `-> <path>` line before the transfer summary.
 
 With stdin as the source there is no basename, so the target key must be spelled out.
 
