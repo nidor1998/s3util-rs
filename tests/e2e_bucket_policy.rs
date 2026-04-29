@@ -255,4 +255,79 @@ mod tests {
         );
         assert_eq!(out.status.code(), Some(1));
     }
+
+    /// `put-bucket-policy` does not validate JSON client-side — the body is
+    /// sent verbatim and S3 rejects invalid policies with `MalformedPolicy`.
+    /// A real bucket is required so the server-side rejection is exercised
+    /// (otherwise we would hit `NoSuchBucket` first, like the test above).
+    #[tokio::test]
+    async fn malformed_json_via_file_exits_1() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let policy_file =
+            TestHelper::create_test_file(&tmp_dir, "policy.json", b"not valid json {");
+
+        let out = run_s3util(&[
+            "put-bucket-policy",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            policy_file.to_str().unwrap(),
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        std::fs::remove_dir_all(&tmp_dir).ok();
+
+        assert!(
+            !out.status.success(),
+            "put-bucket-policy with invalid JSON file must fail"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "S3 rejects invalid policy JSON server-side with MalformedPolicy → exit 1"
+        );
+    }
+
+    /// As above but reading the malformed policy from stdin (`-`).
+    #[tokio::test]
+    async fn malformed_json_via_stdin_exits_1() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+
+        let out = run_s3util_with_stdin(
+            &[
+                "put-bucket-policy",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+                "-",
+            ],
+            b"not valid json {",
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !out.status.success(),
+            "put-bucket-policy via stdin with invalid JSON must fail"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "S3 rejects invalid policy JSON server-side with MalformedPolicy → exit 1"
+        );
+    }
 }

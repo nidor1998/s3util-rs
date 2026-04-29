@@ -176,10 +176,7 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
     // Storage instances are created with an empty base path so that key = full path.
     let (source_key, target_key) = extract_keys(&config)?;
 
-    // When `extract_keys` resolved the target to a different path than the user
-    // typed (bare `s3://bucket`, S3 prefix ending in `/`, or a directory-style
-    // local target), surface the resolved path in the indicator.
-    let resolved_target_display = resolve_target_display(&config.target, &target_str, &target_key);
+    let resolved_target_display = format_target_path(&config.target, &target_key);
 
     let show_progress = ui_config::is_progress_indicator_needed(&config);
     let show_result = ui_config::is_show_result_needed(&config);
@@ -544,24 +541,6 @@ fn format_target_path(target: &StoragePath, target_key: &str) -> String {
     }
 }
 
-/// Build the display string for the resolved target path, if and only if
-/// it differs from what the user typed. When `extract_keys` appends a
-/// source basename (directory-style local targets, bare S3 buckets, S3
-/// prefixes ending in `/`), the resolved path is surfaced so the user
-/// sees where the data actually lands.
-fn resolve_target_display(
-    target: &StoragePath,
-    target_str: &str,
-    target_key: &str,
-) -> Option<String> {
-    let resolved = format_target_path(target, target_key);
-    if resolved != target_str {
-        Some(resolved)
-    } else {
-        None
-    }
-}
-
 /// Reject local source directories for `cp`.
 ///
 /// LocalStorage::head_object returns a 0-byte success for directories (inherited
@@ -832,57 +811,6 @@ mod tests {
         let (_, tgt) = extract_keys(&config).unwrap();
         let expected = tmp.path().join("file.dat").to_string_lossy().to_string();
         assert_eq!(tgt, expected);
-    }
-
-    #[test]
-    fn resolve_target_display_local_dir_shows_resolved_path() {
-        // User typed `../`. extract_keys appends the source basename.
-        // Display must show the resolved `../hosts` so the user sees
-        // where the file actually landed.
-        let target = StoragePath::Local(PathBuf::from("../"));
-        let resolved = resolve_target_display(&target, "../", "../hosts");
-        assert_eq!(resolved.as_deref(), Some("../hosts"));
-    }
-
-    #[test]
-    fn resolve_target_display_local_file_shows_nothing() {
-        // User typed a concrete file path; target_key is identical.
-        let target = StoragePath::Local(PathBuf::from("/tmp/out.txt"));
-        let resolved = resolve_target_display(&target, "/tmp/out.txt", "/tmp/out.txt");
-        assert_eq!(resolved, None);
-    }
-
-    #[test]
-    fn resolve_target_display_s3_bare_bucket_shows_resolved_path() {
-        // Bare bucket target — prior behavior, must still work.
-        let target = StoragePath::S3 {
-            bucket: "b".to_string(),
-            prefix: String::new(),
-        };
-        let resolved = resolve_target_display(&target, "s3://b", "key");
-        assert_eq!(resolved.as_deref(), Some("s3://b/key"));
-    }
-
-    #[test]
-    fn resolve_target_display_s3_prefix_ending_in_slash_shows_resolved_path() {
-        // Prefix-style S3 target — previously hidden, now surfaced.
-        let target = StoragePath::S3 {
-            bucket: "b".to_string(),
-            prefix: "dir/".to_string(),
-        };
-        let resolved = resolve_target_display(&target, "s3://b/dir/", "dir/key");
-        assert_eq!(resolved.as_deref(), Some("s3://b/dir/key"));
-    }
-
-    #[test]
-    fn resolve_target_display_s3_direct_object_shows_nothing() {
-        // Direct-object S3 target — user typed the exact key.
-        let target = StoragePath::S3 {
-            bucket: "b".to_string(),
-            prefix: "key.txt".to_string(),
-        };
-        let resolved = resolve_target_display(&target, "s3://b/key.txt", "key.txt");
-        assert_eq!(resolved, None);
     }
 
     #[test]
