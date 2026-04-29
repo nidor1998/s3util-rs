@@ -165,7 +165,7 @@ The features described below relate to the `cp` and `mv` subcommands. For detail
 
 When the source is a local file or stdin, `s3util` precalculates the ETag and — if `--additional-checksum-algorithm` is set — the additional checksum, then compares them against the S3-reported values. A mismatch is treated as an **error** (the destination object is considered corrupted).
 
-For S3→S3 transfers, mismatches remain **warnings** (exit code 3), because differing multipart chunk sizes between source and destination legitimately produce different composite ETags/checksums.
+For S3→S3 transfers, ETag and composite additional-checksum mismatches are downgraded to **warnings** (exit code 3), because differing multipart chunk sizes between source and destination legitimately produce different composite values. **Full-object** additional-checksum mismatches remain errors — chunk size cannot legitimately change a full-object checksum, so a mismatch indicates real corruption.
 
 Supported algorithms:
 - **ETag** (MD5 for single-part, multipart-composite hash for multipart uploads)
@@ -437,7 +437,7 @@ With stdin as the source there is no basename, so the target key must be spelled
 
 ### ETag verification
 
-For single-part objects, the S3-reported ETag is the MD5 of the object. `s3util` computes this on the upload side and compares; for downloads it compares the source's reported ETag against the bytes actually received. A mismatch is treated as an error for Local/stdin→S3 and S3→Local, and as a warning for S3→S3 (where multipart layout differences legitimately change the composite ETag).
+For single-part objects, the S3-reported ETag is the MD5 of the object. `s3util` computes this on the upload side and compares; for downloads it compares the source's reported ETag against the bytes actually received. Local/stdin→S3 mismatches are treated as **errors** (the upload is considered corrupted and the source is authoritative). S3→Local and S3→S3 mismatches are **warnings** (exit code 3) — for S3→S3 because multipart layout differences legitimately change the composite ETag, and for S3→Local because the file is already written and the warning lets you decide whether to redownload.
 
 `--disable-etag-verify` turns off ETag verification entirely. `--disable-content-md5-header` additionally omits the `Content-MD5` header on single-part uploads.
 
@@ -459,14 +459,14 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 
 ### stdin/stdout handling
 
-- **stdin → S3** streams bytes into a multipart upload once the threshold is crossed; below the threshold, stdin is buffered into a temp file first so a single-part PUT with a correct `Content-Length` can be issued.
+- **stdin → S3** reads up to `--multipart-threshold` bytes into an in-memory buffer. If EOF arrives first, the buffered bytes are issued as a single-part PUT with a correct `Content-Length`; otherwise the buffered prefix is chained with the rest of the stream and uploaded as a multipart.
 - **S3 → stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum.
 
 ### Express One Zone detail
 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
 
-`create-bucket` also accepts directory-bucket names. The zone ID is parsed from the name (`<base>--<zone-id>--x-s3`) and the appropriate `Location`/`Bucket` configuration is sent. The zone type is inferred from the zone-ID shape — one hyphen is treated as an Availability Zone (e.g. `apne1-az4`), two or more as a Local Zone (e.g. `usw2-lax1-az1`). The active region (`--target-region` / `AWS_REGION` / profile) must match the zone's region; otherwise S3 will reject the request.
+`create-bucket` also accepts directory-bucket names. The zone ID is parsed from the name (`<base>--<zone-id>--x-s3`) and the appropriate `Location`/`Bucket` configuration is sent. The zone type is inferred from the zone-ID shape — at most one hyphen is treated as an Availability Zone (e.g. `apne1-az4`), two or more as a Local Zone (e.g. `usw2-lax1-az1`). The active region (`--target-region` / `AWS_REGION` / profile) must match the zone's region; otherwise S3 will reject the request.
 
 ### S3 Permissions
 
