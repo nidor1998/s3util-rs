@@ -69,7 +69,6 @@
     * [--aws-sdk-tracing](#--aws-sdk-tracing)
     * [--auto-complete-shell](#--auto-complete-shell)
     * [--help](#--help)
-- [All command line options](#all-command-line-options)
 - [CI/CD Integration](#cicd-integration)
 - [About testing](#about-testing)
 - [Fully AI-generated (human-verified) software](#fully-ai-generated-human-verified-software)
@@ -282,7 +281,7 @@ Supported path forms for `<SOURCE>` / `<TARGET>`:
 | `/local/path`    | Local filesystem path                            |
 | `-`              | stdin or stdout                                  |
 
-Every long flag also reads from an uppercase-underscore environment variable of the same name (for example `--max-parallel-uploads` ↔ `MAX_PARALLEL_UPLOADS`).
+Every long flag also reads from an uppercase-underscore environment variable of the same name (for example `--max-parallel-uploads` ↔ `MAX_PARALLEL_UPLOADS`). Precedence: CLI arguments > environment variables > defaults.
 
 The examples below describe the `cp` and `mv` commands. For details on other commands (`head-bucket`, `head-object`, `rm`, the bucket-management wrappers, etc.), run `s3util -h` for the top-level subcommand list and `s3util <command> -h` for per-command options.
 
@@ -575,160 +574,6 @@ s3util cp --auto-complete-shell elvish
 ### --help
 
 For the full option list, see `s3util cp --help`.
-
-## All command line options
-
-<details>
-<summary>Click to expand to view all command line options</summary>
-
-### General
-
-| Option                  | Description |
-|-------------------------|-------------|
-| `-v`, `--verbose`       | Increase logging verbosity (repeatable). |
-| `-q`, `--quiet`         | Decrease logging verbosity (repeatable). |
-| `--show-progress`       | Show progress bar. |
-| `--server-side-copy`    | Use S3 server-side copy (S3→S3 only, same region/endpoint). |
-
-### AWS configuration
-
-| Option                                  | Description |
-|-----------------------------------------|-------------|
-| `--aws-config-file <FILE>`              | Alternate AWS config file. |
-| `--aws-shared-credentials-file <FILE>`  | Alternate AWS credentials file. |
-| `--source-no-sign-request`              | Access public S3 buckets anonymously. |
-| `--source-profile <NAME>`               | Source AWS profile. |
-| `--source-access-key <KEY>`             | Source access key. |
-| `--source-secret-access-key <KEY>`      | Source secret access key. |
-| `--source-session-token <TOKEN>`        | Source session token. |
-| `--target-profile <NAME>`               | Target AWS profile. |
-| `--target-access-key <KEY>`             | Target access key. |
-| `--target-secret-access-key <KEY>`      | Target secret access key. |
-| `--target-session-token <TOKEN>`        | Target session token. |
-
-### Source options
-
-| Option                             | Description |
-|------------------------------------|-------------|
-| `--source-region <REGION>`         | Source region. |
-| `--source-endpoint-url <URL>`      | Source endpoint URL (for S3-compatible stores). |
-| `--source-accelerate`              | Use S3 Transfer Acceleration on the source bucket. |
-| `--source-request-payer`           | Send `x-amz-request-payer: requester` on source reads. |
-| `--source-force-path-style`        | Force path-style addressing for source endpoint. |
-| `--source-version-id <ID>`         | Specific source object version (S3 source only). |
-
-### Target options
-
-| Option                             | Description |
-|------------------------------------|-------------|
-| `--target-region <REGION>`         | Target region. |
-| `--target-endpoint-url <URL>`      | Target endpoint URL. |
-| `--target-accelerate`              | Use S3 Transfer Acceleration on the target bucket. |
-| `--target-request-payer`           | Send `x-amz-request-payer: requester` on target writes. |
-| `--target-force-path-style`        | Force path-style addressing for target endpoint. |
-| `--storage-class <CLASS>`          | Target storage class: `STANDARD`, `REDUCED_REDUNDANCY`, `STANDARD_IA`, `ONE-ZONE_IA`, `INTELLIGENT_TIERING`, `GLACIER`, `DEEP_ARCHIVE`, `GLACIER_IR`, `EXPRESS_ONEZONE`. |
-
-### Verification
-
-| Option                                   | Description |
-|------------------------------------------|-------------|
-| `--additional-checksum-algorithm <ALGO>` | `SHA256`, `SHA1`, `CRC32`, `CRC32C`, `CRC64NVME`. |
-| `--full-object-checksum`                 | Use full-object checksum instead of composite. Required/forced for CRC64NVME; incompatible with SHA1/SHA256. |
-| `--enable-additional-checksum`           | Request additional checksum on download (S3 source only). |
-| `--disable-multipart-verify`             | Skip ETag/additional-checksum verification for multipart uploads. |
-| `--disable-etag-verify`                  | Skip ETag verification entirely. |
-| `--disable-additional-checksum-verify`   | Do not verify additional checksum (still uploads it to S3 if configured). |
-| `--no-fail-on-verify-error` (mv only)    | Treat verification warnings as success: delete source and exit 0. |
-
-### Performance
-
-| Option                                   | Description |
-|------------------------------------------|-------------|
-| `--max-parallel-uploads <N>`             | Parallel multipart uploads/downloads. Default `16`. |
-| `--rate-limit-bandwidth <BYTES_PER_SEC>` | Bandwidth cap. Accepts `MB`, `MiB`, `GB`, `GiB`. |
-
-### Multipart settings
-
-| Option                                   | Description |
-|------------------------------------------|-------------|
-| `--multipart-threshold <SIZE>`           | Object size threshold for multipart. Default `8MiB`. |
-| `--multipart-chunksize <SIZE>`           | Multipart chunk size. Default `8MiB`. |
-| `--auto-chunksize`                       | Match source/target chunk layout automatically. |
-
-### Metadata / headers
-
-| Option                                | Description |
-|---------------------------------------|-------------|
-| `--cache-control <V>`                 | `Cache-Control` header on the target object. |
-| `--content-disposition <V>`           | `Content-Disposition` header. |
-| `--content-encoding <V>`              | `Content-Encoding` header. |
-| `--content-language <V>`              | `Content-Language` header. |
-| `--content-type <V>`                  | `Content-Type` header. |
-| `--expires <RFC3339>`                 | `Expires` header, e.g. `2026-12-01T00:00:00Z`. |
-| `--metadata <k=v,k2=v2>`              | User-defined metadata entries. |
-| `--website-redirect <URL>`            | `x-amz-website-redirect-location` header. |
-| `--no-sync-system-metadata`           | Skip copying system metadata. |
-| `--no-sync-user-defined-metadata`     | Skip copying user-defined metadata. |
-
-### Tagging
-
-| Option                  | Description |
-|-------------------------|-------------|
-| `--tagging <QUERY>`     | Target object tagging as URL-encoded query string, e.g. `k1=v1&k2=v2`. |
-| `--disable-tagging`     | Do not copy source tagging. |
-
-### Encryption
-
-| Option                            | Description |
-|-----------------------------------|-------------|
-| `--sse <MODE>`                    | Target SSE mode: `AES256`, `aws:kms`, `aws:kms:dsse`. |
-| `--sse-kms-key-id <KEY_ID>`       | KMS key for `aws:kms` / `aws:kms:dsse`. |
-| `--source-sse-c <ALG>`            | Source SSE-C algorithm (`AES256`). |
-| `--source-sse-c-key <KEY>`        | Source SSE-C key (base64-encoded 256-bit). |
-| `--source-sse-c-key-md5 <MD5>`    | Base64 MD5 of `--source-sse-c-key`. |
-| `--target-sse-c <ALG>`            | Target SSE-C algorithm (`AES256`). |
-| `--target-sse-c-key <KEY>`        | Target SSE-C key. |
-| `--target-sse-c-key-md5 <MD5>`    | Base64 MD5 of `--target-sse-c-key`. |
-
-### Tracing / logging
-
-| Option                      | Description |
-|-----------------------------|-------------|
-| `--json-tracing`            | Emit traces as JSON. |
-| `--aws-sdk-tracing`         | Enable AWS SDK tracing. |
-| `--span-events-tracing`     | Emit span events. |
-| `--disable-color-tracing`   | Disable ANSI colors in trace output. |
-
-### Retry and timeouts
-
-| Option                                              | Description |
-|-----------------------------------------------------|-------------|
-| `--aws-max-attempts <N>`                            | Max retry attempts. Default `10`. |
-| `--initial-backoff-milliseconds <MS>`               | Initial backoff for exponential-with-jitter retry. Default `100`. |
-| `--operation-timeout-milliseconds <MS>`             | Per-operation timeout. |
-| `--operation-attempt-timeout-milliseconds <MS>`     | Per-attempt timeout. |
-| `--connect-timeout-milliseconds <MS>`               | TCP connect timeout. |
-| `--read-timeout-milliseconds <MS>`                  | Read timeout. |
-
-### Advanced
-
-| Option                                                | Description |
-|-------------------------------------------------------|-------------|
-| `--acl <ACL>`                                         | Canned ACL: `private`, `public-read`, `public-read-write`, `authenticated-read`, `aws-exec-read`, `bucket-owner-read`, `bucket-owner-full-control`. |
-| `--no-guess-mime-type`                                | Do not infer MIME type from local filename. |
-| `--put-last-modified-metadata`                        | Store source last-modified in target metadata. |
-| `--auto-complete-shell <SHELL>`                       | Emit shell completions and exit. `bash`, `fish`, `zsh`, `powershell`, `elvish`. |
-| `--disable-stalled-stream-protection`                 | Disable AWS SDK stalled-stream detection. |
-| `--disable-payload-signing`                           | Omit payload signing for uploads. |
-| `--disable-content-md5-header`                        | Omit `Content-MD5` on uploads (also disables single-part ETag verify). |
-| `--disable-express-one-zone-additional-checksum`      | Skip default additional-checksum verification for Express One Zone. |
-| `--if-none-match`                                     | Upload only if target key does not already exist. |
-
-All options can also be set via environment variables. The environment variable name matches the long option name in `SCREAMING_SNAKE_CASE` with hyphens converted to underscores (e.g. `--max-parallel-uploads` becomes `MAX_PARALLEL_UPLOADS`).
-
-**Precedence:** CLI arguments > environment variables > defaults.
-
-</details>
 
 ## CI/CD Integration
 
