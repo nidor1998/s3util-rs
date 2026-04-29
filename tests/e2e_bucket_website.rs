@@ -243,4 +243,67 @@ mod tests {
         assert!(!out.status.success());
         assert_eq!(out.status.code(), Some(4));
     }
+
+    /// Invalid JSON via file is rejected client-side by `serde_json::from_str`
+    /// before any AWS call, so no real bucket is required.
+    #[tokio::test]
+    async fn malformed_json_via_file_exits_1() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let config_file =
+            TestHelper::create_test_file(&tmp_dir, "website.json", b"not valid json {");
+
+        let out = run_s3util(&[
+            "put-bucket-website",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            config_file.to_str().unwrap(),
+        ]);
+
+        std::fs::remove_dir_all(&tmp_dir).ok();
+
+        assert!(
+            !out.status.success(),
+            "put-bucket-website with invalid JSON file must fail"
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.to_lowercase().contains("parsing json from"),
+            "expected 'parsing JSON from' in stderr; got: {stderr}"
+        );
+    }
+
+    /// Invalid JSON via stdin is also rejected client-side; the file-path
+    /// substring in the error context becomes `-`.
+    #[tokio::test]
+    async fn malformed_json_via_stdin_exits_1() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+
+        let out = run_s3util_with_stdin(
+            &[
+                "put-bucket-website",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+                "-",
+            ],
+            b"not valid json {",
+        );
+
+        assert!(
+            !out.status.success(),
+            "put-bucket-website with invalid JSON via stdin must fail"
+        );
+        assert_eq!(out.status.code(), Some(1));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.to_lowercase().contains("parsing json from"),
+            "expected 'parsing JSON from' in stderr; got: {stderr}"
+        );
+    }
 }
