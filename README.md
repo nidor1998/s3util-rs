@@ -75,6 +75,7 @@
 - [Fully AI-generated (human-verified) software](#fully-ai-generated-human-verified-software)
     * [Quality verification (by AI self-assessment)](#quality-verification-by-ai-self-assessment)
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
+    * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
 - [License](#license)
 
 </details>
@@ -885,6 +886,114 @@ The transfer engine is the highest-blast-radius surface in `s3util`, and it is t
 The 35 thin S3 API wrappers are deliberately structured so each is a single SDK call with centralised error classification and pinned-allowlist tests in `src/storage/s3/api.rs`, hand-written JSON output covered by 83 unit-test annotations, and (for the JSON-consuming `put-*` subcommands) hand-written JSON input covered by 64 unit-test annotations and per-subcommand invalid-JSON e2e assertions added in v1.0.0. The honest weak point is the absence of interactive guard rails on the destructive subcommands; the single-resource scope keeps the worst-case blast radius bounded but does not prevent a typo from acting immediately. `create-bucket --tagging` is the one thin wrapper that issues two API calls, and its partial-state outcome is surfaced as exit 3 with a recovery hint rather than rolled back automatically.
 
 This assessment does not guarantee the absence of bugs. It does establish that the categories of incorrect behaviour with the highest blast radius — silent data corruption on transfer, mis-routed `NotFound` errors on read, and silent partial state on multi-step writes — are either prevented by design, detected at runtime, or surfaced as a non-zero exit code rather than passing silently. Operators should still treat destructive subcommands with the same caution they would apply to `aws s3api delete-*`, and should run live workloads against representative data before adopting `s3util` for production-critical pipelines.
+
+</details>
+
+### AI assessment of safety and correctness (by Codex)
+
+<details>
+<summary>Click to expand the full assessment</summary>
+
+Assessment date: 2026-04-29.
+
+Assessed workspace: branch `update/v1.0.0`, base commit `ca0907e`, with local `lcov.info` and `lcov.report` present in the workspace.
+
+Evidence reviewed: `src/bin/s3util/`, `src/config/`, `src/storage/`, `src/transfer/`, `src/input/`, `src/output/`, `src/types/`, `tests/cli_*.rs`, `tests/e2e_*.rs`, `tests/common/mod.rs`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `.github/workflows/`, `lcov.info`, and `lcov.report`.
+
+Limits of this assessment: it is a static and local-test review of the current repository state. It does not prove absence of defects. It does not include fuzzing, sanitizer runs, formal verification, penetration testing, or a live-AWS e2e run observed by Codex. The e2e source files show AWS-backed tests, but source inspection is weaker evidence than current passing run logs for those tests.
+
+#### Subcommand Surface
+
+- The CLI defines 37 subcommands in `src/config/args/mod.rs`.
+- `cp` and `mv` use the transfer pipeline in `src/bin/s3util/cli/mod.rs` and `src/transfer/`.
+- The other 35 subcommands dispatch to API-specific runtimes in `src/bin/s3util/cli/` and SDK wrappers in `src/storage/s3/api.rs`.
+- The CLI has no recursive transfer mode, no glob expansion for S3 keys, and no multiple-source form for `cp` or `mv`.
+- Each invocation operates on one object, one bucket, or one bucket subresource.
+
+#### Argument Validation
+
+- `src/config/args/value_parser/storage_path.rs` accepts `s3://` URLs, local paths, multi-region access point ARNs, and `-` for stdio. It rejects missing paths, malformed URLs, and non-`s3://` URLs unless they are Windows absolute paths.
+- Object-level commands require a bucket and key. Bucket-level commands require a bucket-only path and reject paths containing keys. The per-command `bucket_name()` / `bucket_key()` tests under `src/config/args/` cover these shapes.
+- `put-bucket-versioning` requires exactly one of `--enabled` or `--suspended`; the argument tests cover missing and conflicting state flags.
+- `cp` and `mv` reject both-local, both-stdio, local-to-stdio, and stdio-to-local transfer directions in `src/transfer/mod.rs`.
+- `cp` and `mv` reject local directory sources before starting the transfer pipeline in `src/bin/s3util/cli/mod.rs`.
+- The resolved destination is printed by `src/bin/s3util/cli/indicator.rs` when a basename is appended to a bucket root, S3 prefix ending in `/`, or local directory target.
+- Downloads require the local target parent directory to exist; `src/storage/local/fs_util.rs` returns an error instead of creating missing parents.
+- Upload paths pass `--if-none-match` through to `PutObject` or `CompleteMultipartUpload` in `src/storage/s3/upload_manager.rs`.
+
+#### Transfer Correctness
+
+- Local-file and stdin uploads compute a source ETag and, when configured, an additional checksum before or during upload. The result is compared with S3's returned value in `src/storage/e_tag_verify.rs`, `src/storage/additional_checksum_verify.rs`, and `src/storage/s3/upload_manager.rs`.
+- A local/stdin checksum or ETag mismatch is returned as an error. `cp` maps that to exit code 1 through `src/bin/s3util/main.rs`.
+- S3-to-S3 checksum and ETag mismatches are warnings when different multipart layouts can produce different composite values. `cp` maps warnings to exit code 3.
+- `mv` deletes the source only after the copy phase returns success. `src/bin/s3util/cli/mv.rs` does not delete the source after a copy error, cancellation, or verification warning unless `--no-fail-on-verify-error` is set.
+- Multipart uploads sort completed parts by part number before completion in `src/storage/s3/upload_manager.rs`.
+- Multipart uploads compare uploaded byte count against the source size before completing in `src/storage/s3/upload_manager.rs`.
+- Multipart error paths call `AbortMultipartUpload` on a best-effort basis in `src/storage/s3/upload_manager.rs`.
+- `src/bin/s3util/cli/ctrl_c_handler.rs` maps SIGINT to the transfer cancellation token, and `run_copy_phase` installs that handler only for transfer commands. Unit tests cover token cancellation and a real SIGINT path.
+- Checksum implementations for `CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`, and `SHA256` are under `src/storage/checksum/`. `lcov.report` reports 100.00% region and line coverage for each algorithm file and for `storage/checksum/mod.rs`.
+
+#### Live AWS E2E Evidence
+
+- The repository contains 44 `tests/e2e_*.rs` integration-test files, and each file is gated by `#![cfg(e2e_test)]`.
+- `tests/common/mod.rs` builds an AWS S3 client from profile `s3util-e2e-test` and uses S3 SDK operations including bucket creation, bucket deletion, object upload, `HeadObject`, `GetObject`, and object tagging.
+- The e2e test source covers local-to-S3, S3-to-local, S3-to-S3, stdio transfers, multipart and checksum combinations, metadata and tagging, bucket subresources, cancellation, exit codes, public unsigned source access, and Express One Zone.
+- The default local and CI `cargo test` commands do not run these files as live AWS tests, because they are gated behind `cfg(e2e_test)`.
+- No current live-AWS e2e run log or CI artifact was present in the workspace reviewed for this assessment, so this assessment does not report a pass/fail result for that suite.
+
+#### Thin S3 API Wrappers
+
+- `src/storage/s3/api.rs` centralizes SDK calls for the non-transfer subcommands.
+- `HeadError` distinguishes `BucketNotFound`, subresource `NotFound`, and `Other`.
+- `classify_not_found` maps `NoSuchBucket` to `BucketNotFound` before checking per-subresource missing-code lists.
+- Unit tests pin the missing-code lists for `get-object-tagging`, `get-bucket-policy`, `get-bucket-tagging`, `get-bucket-versioning`, `get-bucket-lifecycle-configuration`, `get-bucket-encryption`, `get-bucket-cors`, `get-public-access-block`, `get-bucket-website`, `get-bucket-logging`, and `get-bucket-notification-configuration`.
+- `src/output/json.rs` manually serializes SDK response types for `head-*` and `get-*` commands; the file contains unit tests for field names, omitted fields, empty responses, and policy-only output.
+- `src/input/json.rs` parses JSON for `put-bucket-cors`, `put-bucket-encryption`, `put-bucket-lifecycle-configuration`, `put-bucket-logging`, `put-bucket-notification-configuration`, `put-bucket-website`, and `put-public-access-block` through mirror structs before converting to SDK types.
+- `put-bucket-policy` reads the policy body from a file or stdin and forwards it verbatim. It does not perform client-side policy schema validation.
+- `create-bucket --tagging` is the only reviewed non-transfer runtime that performs two S3 API calls. If `CreateBucket` succeeds and `PutBucketTagging` fails, the command returns warning status and logs that the bucket exists untagged. It does not roll back the bucket.
+
+#### Secrets And Dependency Controls
+
+- `AccessKeys`, `SseKmsKeyId`, and `SseCustomerKey` in `src/types/mod.rs` derive zeroization traits and redact secret material in `Debug` output.
+- `trace_config_summary` in `src/bin/s3util/main.rs` logs selected non-sensitive configuration fields instead of formatting the whole `Config` value.
+- The only `unsafe` occurrences found under `src/` are inside test modules that mutate environment variables.
+- `Cargo.toml` disables default features for `aws-config` and `aws-sdk-s3`, then enables the SDK HTTPS client feature set. `Cargo.lock` resolves the TLS stack to `rustls 0.23.39`, `rustls-webpki 0.103.13`, and `ring 0.17.14`.
+- `deny.toml` rejects unknown registries and unknown git sources. It has no ignored advisories.
+- Direct dependency requirements in `Cargo.toml` use explicit version requirements rather than wildcard requirements. `Cargo.lock` fixes the resolved dependency graph.
+
+#### Coverage Findings
+
+- Overall coverage in `lcov.report`: 96.69% regions, 95.45% functions, and 97.55% lines.
+- Transfer-related coverage: `transfer/mod.rs` and `transfer/progress.rs` are at 100.00% region coverage; `transfer/s3_to_local.rs` is at 99.05%; `transfer/s3_to_s3.rs` is at 97.83%; `transfer/stdio_to_s3.rs` is at 94.85%; `transfer/stdio_to_s3.rs` has the lowest line coverage in the transfer group at 92.23%.
+- Verification coverage: `storage/e_tag_verify.rs` is at 98.82% regions and 99.52% lines; `storage/additional_checksum_verify.rs` is at 98.59% regions and 99.43% lines.
+- Multipart manager coverage: `storage/s3/upload_manager.rs` is at 95.50% regions and 94.40% lines.
+- API wrapper coverage: `storage/s3/api.rs` is at 94.59% regions and 94.44% lines.
+- JSON coverage: `output/json.rs` is at 99.46% regions and 99.84% lines; `input/json.rs` is at 98.04% regions and 99.64% lines.
+- Lowest region coverage in `lcov.report` is in small CLI/runtime files: `bin/s3util/cli/create_bucket.rs` at 76.74%, `bin/s3util/cli/delete_bucket_policy.rs` at 78.95%, `bin/s3util/cli/get_bucket_logging.rs` at 81.08%, and `bin/s3util/cli/get_bucket_notification_configuration.rs` at 81.08%.
+- Branch coverage is not measured by the report.
+
+#### Known Limits
+
+- Destructive or replacement commands have no interactive confirmation, no `--dry-run`, and no required `--yes` flag. This applies to `mv` source deletion after a successful copy, `rm`, `delete-*` commands, tag replacement commands, policy/configuration `put-*` commands, and versioning state changes.
+- The single-resource command shape limits each invocation to one addressed resource, but it does not prevent an operator from supplying the wrong bucket, key, or version ID.
+- Live AWS behavior is represented by gated e2e test source files in this assessment, not by an observed current e2e pass. Default `cargo test` reports 0 tests for the `tests/e2e_*.rs` binaries unless `cfg(e2e_test)` is enabled.
+- S3-compatible storage support is best-effort. Error classification depends on service error codes matching the codes listed in `src/storage/s3/api.rs`; unknown codes fall through to generic errors.
+- Production code contains `panic!()` branches for unexpected checksum algorithms, unexpected storage path variants, and impossible object-part states. Several are covered by panic tests, but reaching them in a release binary would terminate the process instead of returning a structured error.
+- `put-bucket-policy` does not parse or validate the policy document before sending it to S3.
+- `create-bucket --tagging` is not transactional.
+- The review did not include fuzzing of path, metadata, tagging, or JSON parsers.
+- The review did not include sanitizer or Miri runs of transfer code.
+- The review did not include a formal threat model.
+
+#### Assessment Result
+
+Transfer reliability has the strongest evidence in the reviewed codebase. The implementation contains runtime checks for the main data-corruption cases visible in the code: source-side checksum/ETag calculation, S3-returned checksum/ETag comparison, multipart byte-count comparison, ordered multipart completion, cancellation handling, and best-effort multipart abort on failures. The local coverage report exercises these paths at the percentages listed above, and the gated e2e source exercises the same category of behavior against AWS when `cfg(e2e_test)` is enabled. This is evidence of active correctness controls, not proof that all transfer bugs are excluded.
+
+Non-transfer S3 API wrapper reliability has moderate evidence. The wrappers are narrow and mostly map to one SDK call each. Their main correctness controls are argument validation, centralized missing-resource classification, manual JSON input/output tests, and explicit warning behavior for the one two-step operation (`create-bucket --tagging`). The reviewed tests support command-shape, serialization, and error-classification behavior, but they do not make replacement or destructive operations reversible.
+
+Operator-error prevention has limited evidence. The command parser rejects malformed resource shapes and unsupported transfer directions, but a correctly parsed wrong bucket, key, version ID, policy file, or configuration file is still accepted. Destructive and replacement commands do not require confirmation or dry-run review.
+
+Based on the reviewed repository state, the reliability conclusion is that the implementation has concrete safeguards and tests for the highest-impact transfer correctness risks, and it contains a live-AWS e2e suite that is outside the default test path. The assessment cannot state that the latest live-AWS e2e run passed without run artifacts, that all bugs are excluded, or that destructive commands protect against a correctly parsed but unintended target.
 
 </details>
 
