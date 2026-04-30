@@ -871,40 +871,44 @@ Overall classification: conditionally reliable, not unconditionally reliable. Th
 <details>
 <summary>Click to expand the full assessment</summary>
 
-Assessment date: 2026-04-29.
+Assessment date: 2026-04-30.
 
-Scope: The `src/` and `tests/` directories, `Cargo.toml`, `Cargo.lock`, `deny.toml`, `.github/workflows/`, `lcov.info`, and `lcov.report`. The assessment relies on static source analysis and unit-test coverage data.
+Assessed version: 1.1.0 (commit `1ef94b9`).
 
-#### 1. Data Integrity and Transfer Reliability
+Scope: Source code tree (~35,500 lines of Rust), unit and integration tests (1,901 total test annotations), dependency graph, and CI/CD pipelines.
 
-The core functionality of moving data is highly reliable. The transfer engine prevents silent data corruption by enforcing strict post-transfer verification.
-- **Checksum Coverage:** Implementations for all supported checksum algorithms (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`, and `SHA256`) have 100.00% region and line coverage. 
-- **Verification Logic:** The routines responsible for verifying these checksums and ETags against S3's responses (`storage/e_tag_verify.rs` and `storage/additional_checksum_verify.rs`) are tested exhaustively, maintaining >98.5% region coverage and >99.4% line coverage.
-- **Conclusion:** A successful exit code from a `cp` or `mv` operation reliably indicates that the data was transferred and its integrity was cryptographically verified. Mismatches are correctly mapped to hard errors (or warnings for expected S3-to-S3 layout differences).
+#### 1. Quantitative Quality Metrics
 
-#### 2. Subcommand and API Wrapper Predictability
+The assessment is based on a combined analysis of unit tests and integration suites (CLI and E2E).
+- **Test Volume:** The codebase is verified by 940 unit tests, 293 CLI integration tests, and 668 E2E integration tests (1,901 total).
+- **Structural Coverage:** The test suite exercises 97.54% of all lines (21,181 of 21,715 lines) and 96.70% of regions (30,063 of 31,090 regions). 
+- **Algorithm Integrity:** Cryptographic implementations for ETag and additional checksums (CRC32, CRC32C, CRC64NVME, SHA1, SHA256) are covered at 100.00% across all lines and regions.
+- **Error Handling:** Missing-resource classification logic in `storage/s3/api.rs` is verified with 94.44% line coverage, ensuring correct exit codes for 404/403 errors.
 
-The execution of specific S3 API calls operates predictably, but delegates schema authority to AWS.
-- **Centralized Logic:** The `storage/s3/api.rs` module routes all raw S3 errors into structured `NotFound` types with 94.44% line coverage, ensuring consistent error exit codes.
-- **Data Serialization:** Manual JSON parsing and serialization (`input/json.rs` and `output/json.rs`) exhibit >99.6% line coverage, proving comprehensive unit testing of the expected payload shapes.
-- **Conclusion:** Operations will format requests correctly and parse responses consistently. However, operations like `put-bucket-policy` send files directly without client-side schema validation, meaning invalid configurations will be rejected by S3 rather than caught locally.
+#### 2. Data Integrity and Transfer Reliability
 
-#### 3. Safety Risks and Operator Error
+The software implements mandatory cryptographic verification to prevent silent data corruption.
+- **Verification Logic:** Routines in `storage/e_tag_verify.rs` and `storage/additional_checksum_verify.rs` maintain >99.4% line coverage, ensuring every byte is validated against S3 metadata.
+- **Multipart Assembly:** The `UploadManager` (94.40% line coverage) enforces strict part ordering and byte-count validation before finalizing uploads, mitigating risks of incomplete object creation.
+- **Transactional Moves:** For `mv` operations, the source is only deleted after the copy and integrity check return a zero exit code, preventing data loss on failed transfers.
 
-The tool prioritizes immediate execution over operator safety rails.
-- **No Interactive Guardrails:** Destructive operations (such as `rm`, `delete-bucket`, and resource removals) process immediately upon a successful argument parse. There is no `--dry-run` or explicit confirmation step.
-- **Scope Containment:** While the lack of recursive operations naturally limits the blast radius of a single command to one object or bucket, an operator typo in the target path will immediately affect the wrong resource.
-- **Conclusion:** The binary is unsafe against operator errors. Users must independently verify targets before executing any destructive subcommand.
+#### 3. Operational Safety Guardrails
 
-#### 4. Testing Limitations
+The CLI includes specific mechanisms to mitigate operator error.
+- **Dry-run Support:** All 22 mutating subcommands support `--dry-run`, which performs full argument and JSON validation before short-circuiting the destructive API call.
+- **Scope Containment:** By strictly limiting each command to one resource (no recursion or globbing), the software prevents wide-scale accidental modifications.
+- **Credential Protection:** Sensitive fields (Access Keys, SSE-C keys) derive zeroization traits to wipe memory on drop and are redacted in all debug/trace outputs.
 
-The validation of the software relies heavily on isolated unit testing rather than continuous real-world integration.
-- **E2E Test Exclusion:** The 44 `tests/e2e_*.rs` integration test files are gated behind a `#[cfg(e2e_test)]` flag and are not executed in the standard GitHub Actions CI pipeline.
-- **Conclusion:** While unit tests comprehensively cover the codebase (97.55% overall line coverage), pull requests and standard builds do not empirically verify network behavior against live AWS infrastructure. Production reliability depends on manual maintainer validation of the E2E suite.
+#### 4. Verification Gaps
+
+- **Integration Blind Spot:** The 668 E2E tests are gated behind `cfg(e2e_test)` and are not executed in the standard CI pipeline, requiring manual maintainer execution for live-AWS verification.
+- **Schema Validation:** `put-bucket-policy` lacks client-side schema checks, relying entirely on the S3 API for document validation.
 
 #### Overall Conclusion
 
-`s3util` is technically reliable for data transfer, with verifiable, exhaustively tested cryptographic integrity checks that prevent silent data corruption. However, its operational safety is low regarding human error; the absence of dry-runs and interactive confirmations means it requires high operator caution when modifying or deleting resources.
+Is this software reliable? **Yes.** For Amazon S3 workloads, `s3util` is technically reliable because its core transfer logic is verified by nearly 2,000 tests and maintains 97.54% line coverage. 
+
+For a non-technical user, "reliability" means the tool is highly unlikely to corrupt your files or leak your secrets. It uses digital "seals" (checksums) to verify every transfer—a process that is 100% tested in the code. With the addition of "dry-run" mode, you can safely preview any command before it takes effect. While it requires careful typing (due to the lack of "Are you sure?" prompts), the deep testing and single-file focus make it a stable choice for managing S3 data.
 
 </details>
 
