@@ -629,15 +629,15 @@ Human engineers authored the requirements, design specifications, and the s3sync
 
 ### Quality verification (by AI self-assessment)
 
-Measurements below are taken at v1.0.0 (commit `ff25a12` on `update/v1.0.0`, 2026-04-29). The coverage figures are sourced from `lcov.report` (`cargo llvm-cov`) and reflect the unit-test build only — the `--cfg e2e_test` integration suite runs separately and is not included in the report.
+Measurements below are taken at v1.1.0 (commit `48442da` on `update/v1.0.1`, 2026-04-30). The coverage figures are sourced from `lcov_report.txt` (`cargo llvm-cov`) and reflect the unit-test build only — the `--cfg e2e_test` integration suite runs separately and is not included in the report.
 
 | Metric                         | Value                                                         |
 |--------------------------------|---------------------------------------------------------------|
-| Production code                | ~35,000 lines of Rust across 131 source files in `src/`       |
-| Unit tests (in `src/`)         | 926 `#[test]` / `#[tokio::test]` annotations                  |
-| CLI integration tests          | 249 annotations across 38 `tests/cli_*.rs` files (no network access; run in CI) |
-| E2E integration tests          | 644 annotations across 44 `tests/e2e_*.rs` files (gated behind `--cfg e2e_test`; run only by the maintainer against live AWS) |
-| Code coverage (llvm-cov, unit-test build) | 96.69% regions (1019 / 30,832 missed), 95.45% functions (100 / 2,200 missed), 97.55% lines (527 / 21,526 missed) |
+| Production code                | ~35,500 lines of Rust across 131 source files in `src/`       |
+| Unit tests (in `src/`)         | 940 `#[test]` / `#[tokio::test]` annotations                  |
+| CLI integration tests          | 293 annotations across 40 `tests/cli_*.rs` files (no network access; run in CI) |
+| E2E integration tests          | 668 annotations across 45 `tests/e2e_*.rs` files (gated behind `--cfg e2e_test`; run only by the maintainer against live AWS) |
+| Code coverage (llvm-cov, unit-test build) | 96.70% regions (1,027 / 31,090 missed), 95.47% functions (100 / 2,208 missed), 97.54% lines (534 / 21,715 missed) |
 | Static analysis (clippy)       | 0 warnings (`cargo clippy --all-features`)                    |
 | Formatting                     | 0 diffs (`cargo fmt --all --check`)                           |
 | Supply chain (cargo-deny)      | Clean (`cargo deny -L error check`); runs per-PR in `ci.yml` and daily at 01:34 UTC in `cargo-deny.yml`; `advisories.ignore = []` |
