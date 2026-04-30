@@ -51,6 +51,7 @@ pub(crate) const DEFAULT_REQUEST_PAYER: bool = false;
 pub(crate) const DEFAULT_SOURCE_NO_SIGN_REQUEST: bool = false;
 pub(crate) const DEFAULT_SHOW_PROGRESS: bool = false;
 pub(crate) const DEFAULT_IF_NONE_MATCH: bool = false;
+pub(crate) const DEFAULT_DRY_RUN: bool = false;
 
 pub(crate) const NO_S3_STORAGE_SPECIFIED: &str = "either SOURCE or TARGET must be s3://\n";
 pub(crate) const BOTH_LOCAL_SPECIFIED: &str = "source and target cannot both be local paths\n";
@@ -108,6 +109,10 @@ pub struct CommonTransferArgs {
     /// Show progress bar.
     #[arg(long, env, default_value_t = DEFAULT_SHOW_PROGRESS, help_heading = "General")]
     pub show_progress: bool,
+
+    /// Show what would happen without performing any S3 mutating operation.
+    #[arg(long, env, default_value_t = DEFAULT_DRY_RUN, help_heading = "General")]
+    pub dry_run: bool,
 
     #[arg(long, env, default_value_t = DEFAULT_SERVER_SIDE_COPY, help_heading = "General",
     long_help = r#"Use server-side copy. This option is only available when both source and target are S3 storage.
@@ -950,17 +955,22 @@ pub(crate) fn build_config_from_common(
 ) -> Result<Config, String> {
     let original_common = common.clone();
 
-    let tracing_config =
-        common
-            .verbosity
-            .log_level()
-            .map(|log_level| crate::config::TracingConfig {
-                tracing_level: log_level,
-                json_tracing: common.json_tracing,
-                aws_sdk_tracing: common.aws_sdk_tracing,
-                span_events_tracing: common.span_events_tracing,
-                disable_color_tracing: common.disable_color_tracing,
-            });
+    // dry-run forces verbosity to at least info so the "[dry-run]" message is
+    // visible at the default WarnLevel. Levels already at debug/trace stay
+    // unchanged (per user spec: don't downgrade more-verbose-than-info).
+    let raw_level = common.verbosity.log_level();
+    let resolved_level = if common.dry_run {
+        Some(raw_level.map_or(log::Level::Info, |l| l.max(log::Level::Info)))
+    } else {
+        raw_level
+    };
+    let tracing_config = resolved_level.map(|tracing_level| crate::config::TracingConfig {
+        tracing_level,
+        json_tracing: common.json_tracing,
+        aws_sdk_tracing: common.aws_sdk_tracing,
+        span_events_tracing: common.span_events_tracing,
+        disable_color_tracing: common.disable_color_tracing,
+    });
 
     let storage_class = common
         .storage_class
@@ -1114,5 +1124,6 @@ pub(crate) fn build_config_from_common(
         is_stdio_source,
         is_stdio_target,
         no_fail_on_verify_error: false,
+        dry_run: common.dry_run,
     })
 }

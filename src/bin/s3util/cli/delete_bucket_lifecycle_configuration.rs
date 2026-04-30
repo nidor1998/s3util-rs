@@ -19,6 +19,10 @@ pub async fn run_delete_bucket_lifecycle_configuration(
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket lifecycle configuration.");
+        return Ok(());
+    }
     api::delete_bucket_lifecycle_configuration(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket lifecycle configuration deleted.");
     Ok(())

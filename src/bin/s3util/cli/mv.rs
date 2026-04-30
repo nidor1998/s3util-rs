@@ -44,6 +44,16 @@ async fn apply_mv_decision_tree(config: Config, phase: CopyPhase) -> Result<Exit
     let version_id = config.version_id.clone().or(outcome.source_version_id);
 
     let version_id_for_log = version_id.clone().unwrap_or_default();
+
+    if config.dry_run {
+        info!(
+            key = %phase.source_key,
+            version_id = %version_id_for_log,
+            "[dry-run] would delete source object."
+        );
+        return Ok(ExitStatus::Success);
+    }
+
     match phase
         .source_storage
         .delete_object(&phase.source_key, version_id)
@@ -315,6 +325,7 @@ mod tests {
             is_stdio_source: false,
             is_stdio_target: false,
             no_fail_on_verify_error: false,
+            dry_run: false,
         }
     }
 
@@ -676,6 +687,34 @@ mod tests {
     fn fake_source_storage_generate_copy_source_key_panics_unimplemented() {
         let fake = FakeSourceStorage::new(DeleteResult::Ok);
         let _ = fake.generate_copy_source_key("k", None);
+    }
+
+    #[tokio::test]
+    async fn dry_run_skips_source_delete() {
+        // With config.dry_run = true, apply_mv_decision_tree must short-circuit
+        // before the source `delete_object` call and return Success — even
+        // though every other gate has been satisfied. Asserts the [dry-run]
+        // path leaves the source untouched.
+        let mut config = minimal_config();
+        config.dry_run = true;
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let calls = fake.delete_calls.clone();
+        let token = create_pipeline_cancellation_token();
+        let phase = synth_phase(
+            Ok(TransferOutcome::default()),
+            false,
+            false,
+            Box::new(fake),
+            token,
+        );
+
+        let result = apply_mv_decision_tree(config, phase).await.unwrap();
+        assert!(matches!(result, ExitStatus::Success));
+        assert_eq!(
+            calls.lock().unwrap().len(),
+            0,
+            "dry-run must NOT call delete_object on source"
+        );
     }
 
     #[tokio::test]

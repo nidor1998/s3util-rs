@@ -17,6 +17,10 @@ pub async fn run_delete_bucket_encryption(
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket encryption.");
+        return Ok(());
+    }
     api::delete_bucket_encryption(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket encryption deleted.");
     Ok(())

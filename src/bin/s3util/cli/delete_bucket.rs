@@ -15,6 +15,10 @@ pub async fn run_delete_bucket(args: DeleteBucketArgs, client_config: ClientConf
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket.");
+        return Ok(());
+    }
     api::delete_bucket(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket deleted.");
     Ok(())

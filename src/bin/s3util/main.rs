@@ -92,7 +92,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -114,7 +114,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -136,7 +136,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -224,7 +224,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -246,7 +246,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -268,7 +268,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -312,7 +312,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -334,7 +334,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -378,7 +378,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -400,7 +400,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -446,7 +446,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -469,7 +469,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -513,7 +513,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -535,7 +535,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -579,7 +579,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -601,7 +601,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -645,7 +645,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -689,7 +689,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -711,7 +711,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -755,7 +755,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -777,7 +777,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }
@@ -821,7 +821,7 @@ async fn main() -> ExitCode {
                 return ExitCode::SUCCESS;
             }
 
-            let tracing_config = args.common.build_tracing_config();
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
             if let Some(tc) = &tracing_config {
                 tracing_init::init_tracing(tc);
             }

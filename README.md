@@ -29,6 +29,7 @@
     * [Metadata and tagging preservation](#metadata-and-tagging-preservation)
     * [Rate limiting](#rate-limiting)
     * [Observability](#observability)
+    * [Dry-run](#dry-run)
 - [Requirements](#requirements)
 - [Installation](#installation)
     * [Install from crates.io](#install-from-cratesio)
@@ -65,6 +66,7 @@
     * [--if-none-match](#--if-none-match)
     * [--source-no-sign-request](#--source-no-sign-request)
     * [--rate-limit-bandwidth](#--rate-limit-bandwidth)
+    * [--dry-run](#--dry-run)
     * [-v / -q](#-v---q)
     * [--aws-sdk-tracing](#--aws-sdk-tracing)
     * [--auto-complete-shell](#--auto-complete-shell)
@@ -236,6 +238,16 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 - Structured JSON tracing (`--json-tracing`) for log aggregation systems.
 - AWS SDK tracing (`--aws-sdk-tracing`) for deep troubleshooting.
 - Configurable verbosity (`-v`/`-vv`/`-vvv`, `-q`/`-qq`).
+
+### Dry-run
+
+`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rm`, `create-bucket`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
+
+To make the message visible at the default `WarnLevel`, `--dry-run` automatically raises the verbosity floor to **info**. Levels you've explicitly raised (`-vv` for debug, `-vvv` for trace) are preserved unchanged; lower levels (`-q`, even full silence with `-qqq`) are still bumped to info so the line stays visible.
+
+> **Important:** `--dry-run` performs only a **formal check**. It validates flags, parses config-file JSON, and confirms the binary can reach the point where the API call would have been issued. It does **not** verify any AWS-side state — it does not check whether the source object or bucket exists, whether your credentials are accepted, whether the target endpoint is reachable, or whether your IAM policy would have allowed the operation. A successful dry-run means "the request was well-formed and ready to send", not "the operation would have succeeded against AWS".
+
+`get-*` and `head-*` subcommands are read-only and do **not** expose `--dry-run`.
 
 ## Requirements
 
@@ -548,6 +560,10 @@ Access public S3 buckets anonymously — skips the entire AWS credential chain (
 ### --rate-limit-bandwidth
 
 Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB`, `GB`, `GiB`.
+
+### --dry-run
+
+Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rm`, `create-bucket`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
 
 ### -v / -q
 

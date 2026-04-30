@@ -45,6 +45,10 @@ pub async fn run_put_bucket_logging(
     let status = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket logging.");
+        return Ok(());
+    }
     api::put_bucket_logging(&client, &bucket, status).await?;
     info!(bucket = %bucket, "Bucket logging set.");
     Ok(())

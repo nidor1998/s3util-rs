@@ -23,6 +23,10 @@ pub async fn run_put_bucket_versioning(
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let status = args.versioning_status();
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, status = %status.as_str(), "[dry-run] would put bucket versioning.");
+        return Ok(());
+    }
     api::put_bucket_versioning(&client, &bucket, status.clone()).await?;
     info!(bucket = %bucket, status = %status.as_str(), "Bucket versioning set.");
     Ok(())

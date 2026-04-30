@@ -16,6 +16,16 @@ pub async fn run_rm(args: RmArgs, client_config: ClientConfig) -> Result<()> {
 
     let client = client_config.create_client().await;
 
+    if args.dry_run {
+        info!(
+            bucket = %bucket,
+            key = %key,
+            version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+            "[dry-run] would delete object."
+        );
+        return Ok(());
+    }
+
     api::delete_object(&client, &bucket, &key, args.source_version_id.as_deref()).await?;
     info!(
         bucket = %bucket,

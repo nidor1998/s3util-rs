@@ -19,6 +19,11 @@ pub async fn run_delete_bucket_tagging(
 
     let client = client_config.create_client().await;
 
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket tagging.");
+        return Ok(());
+    }
+
     api::delete_bucket_tagging(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket tagging deleted.");
     Ok(())

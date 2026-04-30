@@ -215,6 +215,30 @@ impl CommonClientArgs {
                 disable_color_tracing: self.disable_color_tracing,
             })
     }
+
+    /// Same as [`build_tracing_config`], but with `dry_run` forcing the level
+    /// to at least `Info` so the "[dry-run]" message is visible at the default
+    /// `WarnLevel`. Levels already above info (debug/trace) are left
+    /// unchanged. When `dry_run` is false, behaves identically to
+    /// `build_tracing_config`.
+    ///
+    /// [`build_tracing_config`]: Self::build_tracing_config
+    pub fn build_tracing_config_dry_run(&self, dry_run: bool) -> Option<TracingConfig> {
+        if !dry_run {
+            return self.build_tracing_config();
+        }
+        let tracing_level = self
+            .verbosity
+            .log_level()
+            .map_or(log::Level::Info, |l| l.max(log::Level::Info));
+        Some(TracingConfig {
+            tracing_level,
+            json_tracing: self.json_tracing,
+            aws_sdk_tracing: self.aws_sdk_tracing,
+            span_events_tracing: self.span_events_tracing,
+            disable_color_tracing: self.disable_color_tracing,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -353,5 +377,95 @@ mod tests {
         assert!(cfg.aws_sdk_tracing);
         assert!(cfg.span_events_tracing);
         assert!(cfg.disable_color_tracing);
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_false_matches_normal() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        let normal = cli.common.build_tracing_config();
+        let dry = cli.common.build_tracing_config_dry_run(false);
+        assert_eq!(
+            normal.map(|c| c.tracing_level),
+            dry.map(|c| c.tracing_level)
+        );
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_false_returns_none_when_silenced() {
+        let cli = TestCli::try_parse_from(["test", "-qqq"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(false);
+        assert!(cfg.is_none());
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_bumps_default_warn_to_info() {
+        let cli = TestCli::try_parse_from(["test"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert_eq!(cfg.tracing_level, log::Level::Info);
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_keeps_explicit_info() {
+        let cli = TestCli::try_parse_from(["test", "-v"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert_eq!(cfg.tracing_level, log::Level::Info);
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_preserves_debug() {
+        let cli = TestCli::try_parse_from(["test", "-vv"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert_eq!(
+            cfg.tracing_level,
+            log::Level::Debug,
+            "debug must not be downgraded to info"
+        );
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_preserves_trace() {
+        let cli = TestCli::try_parse_from(["test", "-vvv"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert_eq!(
+            cfg.tracing_level,
+            log::Level::Trace,
+            "trace must not be downgraded to info"
+        );
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_bumps_error_to_info() {
+        let cli = TestCli::try_parse_from(["test", "-q"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert_eq!(cfg.tracing_level, log::Level::Info);
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_bumps_silenced_to_info() {
+        // -qqq normally returns None; with dry_run we override that to Info
+        // so the [dry-run] message stays visible.
+        let cli = TestCli::try_parse_from(["test", "-qqq"]).unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true);
+        assert!(cfg.is_some(), "dry-run must override -qqq silencing");
+        assert_eq!(cfg.unwrap().tracing_level, log::Level::Info);
+    }
+
+    #[test]
+    fn build_tracing_config_dry_run_propagates_format_flags() {
+        let cli = TestCli::try_parse_from([
+            "test",
+            "--json-tracing",
+            "--aws-sdk-tracing",
+            "--span-events-tracing",
+            "--disable-color-tracing",
+            "-qqq",
+        ])
+        .unwrap();
+        let cfg = cli.common.build_tracing_config_dry_run(true).unwrap();
+        assert!(cfg.json_tracing);
+        assert!(cfg.aws_sdk_tracing);
+        assert!(cfg.span_events_tracing);
+        assert!(cfg.disable_color_tracing);
+        assert_eq!(cfg.tracing_level, log::Level::Info);
     }
 }

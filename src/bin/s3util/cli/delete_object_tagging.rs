@@ -19,6 +19,16 @@ pub async fn run_delete_object_tagging(
 
     let client = client_config.create_client().await;
 
+    if args.dry_run {
+        info!(
+            bucket = %bucket,
+            key = %key,
+            version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+            "[dry-run] would delete object tagging."
+        );
+        return Ok(());
+    }
+
     api::delete_object_tagging(&client, &bucket, &key, args.source_version_id.as_deref()).await?;
     info!(
         bucket = %bucket,
