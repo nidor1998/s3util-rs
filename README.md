@@ -181,6 +181,7 @@ Verification can be selectively disabled with `--disable-etag-verify`, `--disabl
 - Parallel part uploads/downloads (`--max-parallel-uploads`, default `16`).
 - `--auto-chunksize` matches the source multipart layout on S3→S3 copies so checksums line up end-to-end.
 - In-flight multipart uploads are aborted cleanly on ctrl-c.
+- Supports objects up to Amazon S3's [per-object size limit](https://docs.aws.amazon.com/AmazonS3/latest/userguide/UsingObjects.html) (currently 50 TB).
 
 ### All transfer directions
 
