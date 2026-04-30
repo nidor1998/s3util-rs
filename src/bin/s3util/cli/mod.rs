@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use anyhow::{Result, anyhow};
 use aws_sdk_s3::types::RequestPayer;
 use leaky_bucket::RateLimiter;
-use tracing::trace;
+use tracing::{info, trace};
 
 use s3util_rs::Config;
 use s3util_rs::storage::Storage;
@@ -191,6 +191,7 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
         resolved_target_display,
         source_key.clone(),
         target_key.clone(),
+        config.dry_run,
     );
 
     let has_warning = Arc::new(AtomicBool::new(false));
@@ -236,16 +237,25 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
             )
             .await;
 
-            let result = s3util_rs::transfer::local_to_s3::transfer(
-                &config,
-                source,
-                target,
-                &source_key,
-                &target_key,
-                cancellation_token.clone(),
-                stats_sender.clone(),
-            )
-            .await;
+            let result = if config.dry_run {
+                info!(
+                    source = %source_str,
+                    target = %target_str,
+                    "[dry-run] would copy object."
+                );
+                Ok(s3util_rs::transfer::TransferOutcome::default())
+            } else {
+                s3util_rs::transfer::local_to_s3::transfer(
+                    &config,
+                    source,
+                    target,
+                    &source_key,
+                    &target_key,
+                    cancellation_token.clone(),
+                    stats_sender.clone(),
+                )
+                .await
+            };
             (result, source_for_caller)
         }
         TransferDirection::S3ToLocal => {
@@ -282,16 +292,25 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
             )
             .await;
 
-            let result = s3util_rs::transfer::s3_to_local::transfer(
-                &config,
-                source,
-                target,
-                &source_key,
-                &target_key,
-                cancellation_token.clone(),
-                stats_sender.clone(),
-            )
-            .await;
+            let result = if config.dry_run {
+                info!(
+                    source = %source_str,
+                    target = %target_str,
+                    "[dry-run] would copy object."
+                );
+                Ok(s3util_rs::transfer::TransferOutcome::default())
+            } else {
+                s3util_rs::transfer::s3_to_local::transfer(
+                    &config,
+                    source,
+                    target,
+                    &source_key,
+                    &target_key,
+                    cancellation_token.clone(),
+                    stats_sender.clone(),
+                )
+                .await
+            };
             (result, source_for_caller)
         }
         TransferDirection::S3ToS3 => {
@@ -333,16 +352,25 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
             )
             .await;
 
-            let result = s3util_rs::transfer::s3_to_s3::transfer(
-                &config,
-                source,
-                target,
-                &source_key,
-                &target_key,
-                cancellation_token.clone(),
-                stats_sender.clone(),
-            )
-            .await;
+            let result = if config.dry_run {
+                info!(
+                    source = %source_str,
+                    target = %target_str,
+                    "[dry-run] would copy object."
+                );
+                Ok(s3util_rs::transfer::TransferOutcome::default())
+            } else {
+                s3util_rs::transfer::s3_to_s3::transfer(
+                    &config,
+                    source,
+                    target,
+                    &source_key,
+                    &target_key,
+                    cancellation_token.clone(),
+                    stats_sender.clone(),
+                )
+                .await
+            };
             (result, source_for_caller)
         }
         TransferDirection::StdioToS3 => {
@@ -381,15 +409,24 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
             )
             .await;
 
-            let result = s3util_rs::transfer::stdio_to_s3::transfer(
-                &config,
-                target,
-                &target_key,
-                tokio::io::stdin(),
-                cancellation_token.clone(),
-                stats_sender.clone(),
-            )
-            .await;
+            let result = if config.dry_run {
+                info!(
+                    source = %source_str,
+                    target = %target_str,
+                    "[dry-run] would copy object."
+                );
+                Ok(s3util_rs::transfer::TransferOutcome::default())
+            } else {
+                s3util_rs::transfer::stdio_to_s3::transfer(
+                    &config,
+                    target,
+                    &target_key,
+                    tokio::io::stdin(),
+                    cancellation_token.clone(),
+                    stats_sender.clone(),
+                )
+                .await
+            };
             (result, source_for_caller)
         }
         TransferDirection::S3ToStdio => {
@@ -413,15 +450,24 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
             .await;
             let source_for_caller = dyn_clone::clone_box(&*source);
 
-            let result = s3util_rs::transfer::s3_to_stdio::transfer(
-                &config,
-                source,
-                &source_key,
-                tokio::io::stdout(),
-                cancellation_token.clone(),
-                stats_sender.clone(),
-            )
-            .await;
+            let result = if config.dry_run {
+                info!(
+                    source = %source_str,
+                    target = %target_str,
+                    "[dry-run] would copy object."
+                );
+                Ok(s3util_rs::transfer::TransferOutcome::default())
+            } else {
+                s3util_rs::transfer::s3_to_stdio::transfer(
+                    &config,
+                    source,
+                    &source_key,
+                    tokio::io::stdout(),
+                    cancellation_token.clone(),
+                    stats_sender.clone(),
+                )
+                .await
+            };
             (result, source_for_caller)
         }
     };

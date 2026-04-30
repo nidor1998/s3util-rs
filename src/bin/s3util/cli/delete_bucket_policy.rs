@@ -18,6 +18,10 @@ pub async fn run_delete_bucket_policy(
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket policy.");
+        return Ok(());
+    }
     api::delete_bucket_policy(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket policy deleted.");
     Ok(())

@@ -17,6 +17,10 @@ pub async fn run_delete_bucket_cors(
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete bucket CORS configuration.");
+        return Ok(());
+    }
     api::delete_bucket_cors(&client, &bucket).await?;
     info!(bucket = %bucket, "Bucket CORS configuration deleted.");
     Ok(())

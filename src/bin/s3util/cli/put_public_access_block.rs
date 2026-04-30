@@ -41,6 +41,10 @@ pub async fn run_put_public_access_block(
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put public access block.");
+        return Ok(());
+    }
     api::put_public_access_block(&client, &bucket, cfg).await?;
     info!(bucket = %bucket, "Public access block set.");
     Ok(())

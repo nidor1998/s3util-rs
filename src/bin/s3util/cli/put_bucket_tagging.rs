@@ -26,6 +26,11 @@ pub async fn run_put_bucket_tagging(
 
     let client = client_config.create_client().await;
 
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket tagging.");
+        return Ok(());
+    }
+
     api::put_bucket_tagging(&client, &bucket, tagging).await?;
     info!(bucket = %bucket, "Bucket tagging set.");
     Ok(())

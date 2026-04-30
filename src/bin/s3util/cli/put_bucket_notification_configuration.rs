@@ -45,6 +45,10 @@ pub async fn run_put_bucket_notification_configuration(
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket notification configuration.");
+        return Ok(());
+    }
     api::put_bucket_notification_configuration(&client, &bucket, cfg).await?;
     info!(bucket = %bucket, "Bucket notification configuration set.");
     Ok(())

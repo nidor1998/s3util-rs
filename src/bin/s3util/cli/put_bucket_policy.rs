@@ -34,6 +34,10 @@ pub async fn run_put_bucket_policy(
     };
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket policy.");
+        return Ok(());
+    }
     api::put_bucket_policy(&client, &bucket, &policy_body).await?;
     info!(bucket = %bucket, "Bucket policy set.");
     Ok(())

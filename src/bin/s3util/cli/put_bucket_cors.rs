@@ -40,6 +40,10 @@ pub async fn run_put_bucket_cors(
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket CORS configuration.");
+        return Ok(());
+    }
     api::put_bucket_cors(&client, &bucket, cfg).await?;
     info!(bucket = %bucket, "Bucket CORS configuration set.");
     Ok(())

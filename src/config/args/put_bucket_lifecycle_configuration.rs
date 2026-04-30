@@ -25,6 +25,10 @@ pub struct PutBucketLifecycleConfigurationArgs {
     )]
     pub lifecycle_configuration: Option<String>,
 
+    /// Show what would happen without performing any S3 mutating operation.
+    #[arg(long, env, default_value_t = false, help_heading = "General")]
+    pub dry_run: bool,
+
     #[command(flatten)]
     pub common: CommonClientArgs,
 }

@@ -17,6 +17,10 @@ pub async fn run_delete_public_access_block(
         .bucket_name()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would delete public access block.");
+        return Ok(());
+    }
     api::delete_public_access_block(&client, &bucket).await?;
     info!(bucket = %bucket, "Public access block deleted.");
     Ok(())

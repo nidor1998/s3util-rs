@@ -118,7 +118,7 @@ pub struct Cli {
 
 #[derive(Subcommand, Clone, Debug)]
 pub enum Commands {
-    /// Copy objects from/to S3
+    /// Copy objects from/to S3 (or S3 to S3)
     #[command(display_order = 1)]
     Cp(CpArgs),
     /// Create an S3 bucket (general-purpose or directory bucket)

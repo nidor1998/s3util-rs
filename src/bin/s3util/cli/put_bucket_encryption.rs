@@ -41,6 +41,10 @@ pub async fn run_put_bucket_encryption(
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
+    if args.dry_run {
+        info!(bucket = %bucket, "[dry-run] would put bucket encryption.");
+        return Ok(());
+    }
     api::put_bucket_encryption(&client, &bucket, cfg).await?;
     info!(bucket = %bucket, "Bucket encryption set.");
     Ok(())

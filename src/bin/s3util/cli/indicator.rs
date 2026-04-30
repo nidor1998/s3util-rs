@@ -32,6 +32,7 @@ fn verification_status(
     (etag, checksum)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn show_indicator(
     stats_receiver: Receiver<SyncStatistics>,
     show_progress: bool,
@@ -40,6 +41,7 @@ pub fn show_indicator(
     resolved_target: String,
     source_key: String,
     target_key: String,
+    dry_run: bool,
 ) -> JoinHandle<()> {
     let progress_style = ProgressStyle::with_template("{wide_msg}").unwrap();
     let progress_text = ProgressBar::with_draw_target(Some(0), ProgressDrawTarget::stderr());
@@ -110,8 +112,13 @@ pub fn show_indicator(
                     }
 
                     if log_sync_summary && total_error_count == 0 {
+                        let message = if dry_run {
+                            "[dry-run] Transfer completed."
+                        } else {
+                            "Transfer completed."
+                        };
                         info!(
-                            message = "Transfer completed.",
+                            message = message,
                             source_key = source_key,
                             target_key = target_key,
                             transferred_byte = total_sync_bytes,
@@ -189,6 +196,7 @@ mod tests {
             String::new(),
             String::new(),
             String::new(),
+            false,
         );
 
         stats_sender
@@ -248,6 +256,7 @@ mod tests {
             String::new(),
             "src".to_string(),
             "dst".to_string(),
+            false,
         );
 
         stats_sender
@@ -303,6 +312,7 @@ mod tests {
             String::new(),
             "src".to_string(),
             "dst".to_string(),
+            false,
         );
 
         stats_sender
@@ -329,6 +339,7 @@ mod tests {
             "s3://bucket/resolved/key".to_string(),
             String::new(),
             String::new(),
+            false,
         );
 
         stats_sender
@@ -354,6 +365,7 @@ mod tests {
             String::new(),
             String::new(),
             String::new(),
+            false,
         );
 
         stats_sender
@@ -386,6 +398,7 @@ mod tests {
             String::new(),
             String::new(),
             String::new(),
+            false,
         );
 
         stats_sender

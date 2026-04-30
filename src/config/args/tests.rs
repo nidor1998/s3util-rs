@@ -1310,6 +1310,128 @@ mod tests {
         );
     }
 
+    // -----------------------------------------------------------------
+    // dry-run plumbing: build_config_from_common must (a) propagate the
+    // dry_run bool into Config and (b) force tracing_level to >= Info so
+    // the [dry-run] log line is visible at the default WarnLevel. The
+    // bump must NOT downgrade levels already above info (debug/trace).
+    // -----------------------------------------------------------------
+
+    fn cp_config(extra: &[&str]) -> Config {
+        let cli =
+            parse_from_args(args_with_extra("/tmp/source.txt", "s3://bucket/key", extra)).unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    #[test]
+    fn cp_dry_run_false_leaves_tracing_at_warn() {
+        let config = cp_config(&[]);
+        assert!(!config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Warn
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_bumps_warn_to_info() {
+        let config = cp_config(&["--dry-run"]);
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Info
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_keeps_explicit_info() {
+        let config = cp_config(&["--dry-run", "-v"]);
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Info
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_preserves_debug() {
+        let config = cp_config(&["--dry-run", "-vv"]);
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Debug,
+            "debug must not be downgraded to info"
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_preserves_trace() {
+        let config = cp_config(&["--dry-run", "-vvv"]);
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Trace,
+            "trace must not be downgraded to info"
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_bumps_error_to_info() {
+        let config = cp_config(&["--dry-run", "-q"]);
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Info
+        );
+    }
+
+    #[test]
+    fn cp_dry_run_true_overrides_silenced_qqq() {
+        // Without --dry-run, -qqq returns None (no global subscriber). With
+        // --dry-run, the bump produces Some(Info) so the [dry-run] line
+        // remains visible even when the user asked for full silence.
+        let config = cp_config(&["--dry-run", "-qqq"]);
+        assert!(config.dry_run);
+        let tc = config.tracing_config.expect("dry_run must override -qqq");
+        assert_eq!(tc.tracing_level, log::Level::Info);
+    }
+
+    #[test]
+    fn cp_dry_run_false_silenced_returns_none() {
+        let config = cp_config(&["-qqq"]);
+        assert!(!config.dry_run);
+        assert!(
+            config.tracing_config.is_none(),
+            "without dry_run, -qqq must still silence tracing"
+        );
+    }
+
+    #[test]
+    fn mv_dry_run_propagates_via_build_config() {
+        // mv has its own TryFrom that goes through build_config_from_common
+        // — confirm dry_run reaches Config on that path too.
+        let cli = parse_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "s3://src/k".to_string(),
+            "s3://dst/k".to_string(),
+            "--dry-run".to_string(),
+        ])
+        .unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(config.dry_run);
+        assert_eq!(
+            config.tracing_config.unwrap().tracing_level,
+            log::Level::Info
+        );
+    }
+
     #[test]
     fn build_config_clap_parse_error_propagates() {
         // A non-existent subcommand is a clap parse error, surfaced as Err
