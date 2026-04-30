@@ -5,6 +5,16 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.1.0] - 2026-04-30
+
+### Added
+
+- `--dry-run` flag on every command that changes S3 state (`cp`, `mv`, `rm`, `create-bucket`, all `put-*`, and all `delete-*`). Preview an invocation safely: argument validation, JSON parsing, and SDK setup run as normal, an info-level `[dry-run]` log line describes what would have happened, and the binary exits 0 without making any AWS-side change. Read-only commands (`get-*`, `head-*`) deliberately do not accept this flag. Verbosity is forced to at least info while `--dry-run` is set so the message is visible at default verbosity.
+
+### Changed
+
+- README clarifies that `cp` supports objects up to Amazon S3's per-object size limit (currently 50 TB).
+
 ## [1.0.0] - 2026-04-29
 
 ### Added
