@@ -23,15 +23,19 @@ const DEFAULT_TARGET_NO_SIGN_REQUEST: bool = false;
 #[derive(Parser, Clone, Debug)]
 pub struct CommonClientArgs {
     // === Tracing / Logging ===
+    /// Show trace as json format.
     #[arg(long, env, default_value_t = DEFAULT_JSON_TRACING, help_heading = "Tracing/Logging")]
     pub json_tracing: bool,
 
+    /// Enable aws sdk tracing.
     #[arg(long, env, default_value_t = DEFAULT_AWS_SDK_TRACING, help_heading = "Tracing/Logging")]
     pub aws_sdk_tracing: bool,
 
+    /// Show span event tracing.
     #[arg(long, env, default_value_t = DEFAULT_SPAN_EVENTS_TRACING, help_heading = "Tracing/Logging")]
     pub span_events_tracing: bool,
 
+    /// Disable ANSI terminal colors.
     #[arg(long, env, default_value_t = DEFAULT_DISABLE_COLOR_TRACING, help_heading = "Tracing/Logging")]
     pub disable_color_tracing: bool,
 
