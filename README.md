@@ -78,6 +78,7 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
+- [Contributing](#contributing)
 - [License](#license)
 
 </details>
@@ -911,6 +912,15 @@ Is this software reliable? **Yes.** For Amazon S3 workloads, `s3util` is technic
 For a non-technical user, "reliability" means the tool is highly unlikely to corrupt your files or leak your secrets. It uses digital "seals" (checksums) to verify every transfer—a process that is 100% tested in the code. With the addition of "dry-run" mode, you can safely preview any command before it takes effect. While it requires careful typing (due to the lack of "Are you sure?" prompts), the deep testing and single-file focus make it a stable choice for managing S3 data.
 
 </details>
+
+## Contributing
+
+- Suggestions and bug reports are welcome, but responses are not guaranteed.
+- Pull requests for new features are generally not accepted, as they may conflict with the design philosophy.
+- If you find this project useful, feel free to fork and modify it as you wish.
+
+🔒 I consider this project to be "complete" and will maintain it only minimally going forward.  
+However, I intend to keep the AWS SDK for Rust and other dependencies up to date monthly.
 
 ## License
 
