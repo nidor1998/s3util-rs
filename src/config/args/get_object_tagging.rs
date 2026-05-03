@@ -118,6 +118,13 @@ mod tests {
     }
 
     #[test]
+    fn bucket_key_rejects_non_s3_target() {
+        let a = parse(&["test", "get-object-tagging", "/tmp/local"]);
+        let err = a.bucket_key().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
+
+    #[test]
     fn accepts_source_version_id() {
         let a = parse(&[
             "test",

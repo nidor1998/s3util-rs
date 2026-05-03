@@ -3405,4 +3405,171 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket2).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
+
+    // -----------------------------------------------------------------
+    // cp --skip-existing for s3 → s3
+    // -----------------------------------------------------------------
+
+    fn run_s3util(args: &[&str]) -> std::process::Output {
+        std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn s3util")
+    }
+
+    /// `--skip-existing` must short-circuit when the target object exists,
+    /// regardless of whether the underlying transfer would have been a
+    /// client-side roundtrip or a server-side `CopyObject`. We assert both
+    /// in one test (the skip branch is upstream of the copy strategy, so
+    /// covering both paths in one test keeps the suite small).
+    #[tokio::test]
+    async fn s3_to_s3_skip_existing_skips_when_target_exists() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        // Source object differs from target so a buggy "non-skip" would
+        // overwrite the target's bytes (and thus its ETag).
+        helper.put_object(&bucket1, "key", b"source".to_vec()).await;
+        helper
+            .put_object(&bucket2, "key", b"target-original".to_vec())
+            .await;
+
+        let etag_before = helper
+            .head_object(&bucket2, "key", None)
+            .await
+            .e_tag()
+            .unwrap()
+            .to_string();
+
+        let source = format!("s3://{}/key", bucket1);
+        let target = format!("s3://{}/key", bucket2);
+
+        // Pass 1: client-side copy path.
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--source-region",
+            REGION,
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &source,
+            &target,
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when target exists; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let etag_after_client = helper
+            .head_object(&bucket2, "key", None)
+            .await
+            .e_tag()
+            .unwrap()
+            .to_string();
+        assert_eq!(
+            etag_before, etag_after_client,
+            "cp --skip-existing (client-side) must NOT have overwritten the target"
+        );
+
+        // Pass 2: same scenario, but with --server-side-copy. The early
+        // return is upstream of the copy strategy, so this should also
+        // skip without issuing the server-side CopyObject.
+        let output_ssc = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--server-side-copy",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--source-region",
+            REGION,
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &source,
+            &target,
+        ]);
+        assert!(
+            output_ssc.status.success(),
+            "cp --skip-existing --server-side-copy should exit 0 when target exists; stderr: {}",
+            String::from_utf8_lossy(&output_ssc.stderr)
+        );
+        let etag_after_ssc = helper
+            .head_object(&bucket2, "key", None)
+            .await
+            .e_tag()
+            .unwrap()
+            .to_string();
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+
+        assert_eq!(
+            etag_before, etag_after_ssc,
+            "cp --skip-existing --server-side-copy must NOT have overwritten the target"
+        );
+    }
+
+    #[tokio::test]
+    async fn s3_to_s3_skip_existing_proceeds_when_target_missing() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper.put_object(&bucket1, "key", b"data".to_vec()).await;
+
+        let source = format!("s3://{}/key", bucket1);
+        let target = format!("s3://{}/key", bucket2);
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--source-region",
+            REGION,
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &source,
+            &target,
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when target missing; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exists = helper.is_object_exist(&bucket2, "key", None).await;
+        let bytes = if exists {
+            helper.get_object_bytes(&bucket2, "key", None).await
+        } else {
+            Vec::new()
+        };
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+
+        assert!(
+            exists,
+            "cp --skip-existing must perform the copy when the target is missing"
+        );
+        assert_eq!(bytes, b"data", "copied object body must match the source");
+    }
 }

@@ -1972,4 +1972,129 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
+
+    // -----------------------------------------------------------------
+    // cp --skip-existing for s3 → local
+    // -----------------------------------------------------------------
+
+    fn run_s3util(args: &[&str]) -> std::process::Output {
+        std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn s3util")
+    }
+
+    #[tokio::test]
+    async fn s3_to_local_skip_existing_skips_when_local_file_exists() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Remote object differs from the local file so a buggy "non-skip"
+        // would be visible by the local file's contents being overwritten.
+        helper
+            .put_object(&bucket, "download.txt", b"remote-content".to_vec())
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let local_file =
+            TestHelper::create_test_file(&local_dir, "download.txt", b"existing-content");
+        let mtime_before = TestHelper::get_file_last_modified(local_file.to_str().unwrap());
+        let bytes_before = std::fs::read(&local_file).unwrap();
+
+        let source = format!("s3://{}/download.txt", bucket);
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--source-region",
+            REGION,
+            &source,
+            local_file.to_str().unwrap(),
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when local file exists; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let bytes_after = std::fs::read(&local_file).unwrap();
+        let mtime_after = TestHelper::get_file_last_modified(local_file.to_str().unwrap());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert_eq!(
+            bytes_after, b"existing-content",
+            "cp --skip-existing must NOT have downloaded over the existing local file"
+        );
+        assert_eq!(
+            bytes_before, bytes_after,
+            "local file contents changed despite --skip-existing"
+        );
+        assert_eq!(
+            mtime_before, mtime_after,
+            "local file mtime changed despite --skip-existing"
+        );
+    }
+
+    #[tokio::test]
+    async fn s3_to_local_skip_existing_proceeds_when_local_missing() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        helper
+            .put_object(&bucket, "download.txt", b"remote-data".to_vec())
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let local_file = local_dir.join("download.txt");
+        // Sanity: the destination must NOT exist before the run.
+        assert!(!local_file.exists());
+
+        let source = format!("s3://{}/download.txt", bucket);
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--source-region",
+            REGION,
+            &source,
+            local_file.to_str().unwrap(),
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when local missing; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exists = local_file.exists();
+        let content = if exists {
+            std::fs::read(&local_file).unwrap()
+        } else {
+            Vec::new()
+        };
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert!(
+            exists,
+            "cp --skip-existing must download when the local file is missing"
+        );
+        assert_eq!(
+            content, b"remote-data",
+            "downloaded contents must match the remote object"
+        );
+    }
 }

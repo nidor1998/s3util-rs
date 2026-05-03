@@ -105,4 +105,12 @@ mod tests {
         assert!(a.target.is_none());
         assert!(a.auto_complete_shell().is_some());
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target_via_parse() {
+        // /tmp/local passes check_storage_path; bucket_name surfaces TARGET_NOT_S3.
+        let a = parse(&["test", "head-bucket", "/tmp/local"]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

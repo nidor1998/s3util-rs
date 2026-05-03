@@ -349,4 +349,194 @@ mod tests {
         );
         assert_eq!(output.status.code(), Some(1));
     }
+
+    // -----------------------------------------------------------------
+    // create-bucket --if-not-exists
+    // -----------------------------------------------------------------
+
+    #[tokio::test]
+    async fn create_bucket_if_not_exists_skips_when_bucket_exists() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let output = run_s3util(&[
+            "create-bucket",
+            "--if-not-exists",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        // Bucket must still be there (and accessible) after the no-op create.
+        let still_exists = helper.is_bucket_exist(&bucket).await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            output.status.success(),
+            "create-bucket --if-not-exists must exit 0 when bucket exists; stderr: {stderr}"
+        );
+        assert!(
+            still_exists,
+            "create-bucket --if-not-exists must NOT delete or recreate the bucket"
+        );
+        // The "Bucket exists; skipping create." line is logged at info!
+        // level. Default verbosity for create-bucket is Warn, so the line is
+        // filtered out — silent-on-skip is the deliberate design choice. Use
+        // `-v` if you want to see it. Asserting only on observable side
+        // effects (exit 0 + bucket still present) keeps the test honest.
+    }
+
+    #[tokio::test]
+    async fn create_bucket_if_not_exists_proceeds_when_bucket_missing() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        let bucket_arg = format!("s3://{bucket}");
+
+        // No pre-existence sanity check here: HeadBucket on a fresh,
+        // never-created name primes AWS's negative-cache for a few seconds,
+        // which then makes the post-create HeadBucket transiently report
+        // 404 even though CreateBucket succeeded. The bucket name is
+        // freshly UUID-generated, so a real pre-existence collision is
+        // impossible.
+
+        let output = run_s3util(&[
+            "create-bucket",
+            "--if-not-exists",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exists_after = helper.is_bucket_exist(&bucket).await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            output.status.success(),
+            "create-bucket --if-not-exists must exit 0 on success; stderr: {stderr}"
+        );
+        assert!(
+            exists_after,
+            "create-bucket --if-not-exists must create the bucket when missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn create_bucket_if_not_exists_with_tagging_skips_when_exists() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        // Create the bucket WITHOUT tags so we can detect a buggy retroactive
+        // PutBucketTagging via the post-run get-bucket-tagging response.
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let output = run_s3util(&[
+            "create-bucket",
+            "--if-not-exists",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            "--tagging",
+            "team=sre",
+            &bucket_arg,
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        // Issue GetBucketTagging via the SDK directly. The early-return
+        // after the existence check means the tagging branch must NOT have
+        // run, so AWS should respond with NoSuchTagSet (the bucket exists
+        // but has no tags configured).
+        let tag_result = helper
+            .client
+            .get_bucket_tagging()
+            .bucket(&bucket)
+            .send()
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            output.status.success(),
+            "create-bucket --if-not-exists must exit 0 when bucket exists; stderr: {stderr}"
+        );
+
+        match tag_result {
+            Ok(out) => panic!(
+                "create-bucket --if-not-exists must NOT have applied tagging when the \
+                 bucket already exists; got TagSet: {:?}",
+                out.tag_set()
+            ),
+            Err(e) => {
+                use aws_smithy_types::error::metadata::ProvideErrorMetadata;
+                let code = e
+                    .as_service_error()
+                    .and_then(ProvideErrorMetadata::code)
+                    .unwrap_or("")
+                    .to_string();
+                assert_eq!(
+                    code, "NoSuchTagSet",
+                    "expected NoSuchTagSet (no tags applied); got error code: {code:?}; \
+                     full error: {e:?}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn create_bucket_if_not_exists_with_dry_run_does_not_create() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        let bucket_arg = format!("s3://{bucket}");
+
+        // Sanity: bucket must not pre-exist.
+        assert!(!helper.is_bucket_exist(&bucket).await);
+
+        let output = run_s3util(&[
+            "create-bucket",
+            "--dry-run",
+            "--if-not-exists",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            &bucket_arg,
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exists_after = helper.is_bucket_exist(&bucket).await;
+
+        // Defensive: in case the dry-run did create it (which would be a bug).
+        if exists_after {
+            helper.delete_bucket_with_cascade(&bucket).await;
+        }
+
+        assert!(
+            output.status.success(),
+            "create-bucket --dry-run --if-not-exists must exit 0; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("[dry-run]"),
+            "stderr must contain [dry-run] prefix; got: {stderr}"
+        );
+        assert!(
+            !exists_after,
+            "create-bucket --dry-run --if-not-exists must NOT create the bucket"
+        );
+    }
 }

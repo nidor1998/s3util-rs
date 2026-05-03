@@ -812,6 +812,47 @@ mod tests {
         assert!(build_profile_files(Some(&config_path), Some(&creds_path)).is_some());
     }
 
+    #[tokio::test]
+    async fn disable_stalled_stream_protection_branch_builds_client() {
+        // Exercises the `disable_stalled_stream_protection: true` arm in
+        // load_sdk_config, which uses StalledStreamProtectionConfig::disabled()
+        // instead of the enabled default. We don't need to make a real S3
+        // call — successful client construction proves the branch ran.
+        init_dummy_tracing_subscriber();
+
+        let client_config = ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: None,
+                aws_shared_credentials_file: None,
+            },
+            credential: crate::types::S3Credentials::NoSignRequest,
+            region: Some("us-east-1".to_string()),
+            endpoint_url: None,
+            force_path_style: false,
+            retry_config: crate::config::RetryConfig {
+                aws_max_attempts: 1,
+                initial_backoff_milliseconds: 0,
+            },
+            cli_timeout_config: crate::config::CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: true,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+            accelerate: false,
+            request_payer: None,
+        };
+
+        let client = client_config.create_client().await;
+        assert_eq!(
+            client.config().region().unwrap().to_string(),
+            "us-east-1".to_string()
+        );
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

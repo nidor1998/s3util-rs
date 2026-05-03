@@ -142,4 +142,17 @@ mod tests {
         assert!(a.bucket_logging_status.is_none());
         assert!(a.auto_complete_shell().is_some());
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target() {
+        // Local path slips past the value_parser; bucket_name must still reject it.
+        let a = parse(&[
+            "test",
+            "put-bucket-logging",
+            "/tmp/local",
+            "/tmp/logging.json",
+        ]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

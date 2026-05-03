@@ -2474,6 +2474,61 @@ mod tests {
         );
     }
 
+    #[test]
+    fn clear_system_meta_data_drops_each_field() {
+        // Every system metadata field that's set on the input must be cleared.
+        let get_object_output = GetObjectOutput::builder()
+            .content_disposition("attachment; filename=foo")
+            .content_encoding("gzip")
+            .content_language("en-US")
+            .content_type("application/json")
+            .cache_control("max-age=3600")
+            .expires_string("Wed, 21 Oct 2026 07:28:00 GMT")
+            .website_redirect_location("/redirect")
+            .build();
+        let cleared = UploadManager::clear_system_meta_data(get_object_output);
+        assert!(cleared.content_disposition().is_none());
+        assert!(cleared.content_encoding().is_none());
+        assert!(cleared.content_language().is_none());
+        assert!(cleared.content_type().is_none());
+        assert!(cleared.cache_control().is_none());
+        assert!(cleared.expires_string().is_none());
+        assert!(cleared.website_redirect_location().is_none());
+    }
+
+    #[test]
+    fn clear_system_meta_data_idempotent_on_empty_input() {
+        // Already-empty fields stay empty; no panic.
+        let cleared = UploadManager::clear_system_meta_data(GetObjectOutput::builder().build());
+        assert!(cleared.content_type().is_none());
+    }
+
+    #[test]
+    fn get_additional_checksum_from_put_result_each_algorithm_returns_none_when_missing() {
+        // For each algorithm, a builder without the matching field must return None
+        // — extends the SHA-256-only existing test to cover every arm.
+        let put = PutObjectOutput::builder().build();
+        assert!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Sha1))
+                .is_none()
+        );
+        assert!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Crc32))
+                .is_none()
+        );
+        assert!(
+            get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Crc32C))
+                .is_none()
+        );
+        assert!(
+            get_additional_checksum_from_put_object_result(
+                &put,
+                Some(ChecksumAlgorithm::Crc64Nvme)
+            )
+            .is_none()
+        );
+    }
+
     fn init_dummy_tracing_subscriber() {
         let _ = tracing_subscriber::fmt()
             .with_env_filter(

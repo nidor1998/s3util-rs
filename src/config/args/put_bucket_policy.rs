@@ -148,4 +148,16 @@ mod tests {
         assert!(a.policy.is_none());
         assert!(a.auto_complete_shell().is_some());
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target() {
+        let a = parse(&[
+            "test",
+            "put-bucket-policy",
+            "/tmp/local",
+            "/tmp/policy.json",
+        ]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

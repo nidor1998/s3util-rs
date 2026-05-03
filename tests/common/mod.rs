@@ -151,7 +151,7 @@ pub struct StatsCount {
 
 #[cfg(e2e_test)]
 pub struct TestHelper {
-    client: Client,
+    pub client: Client,
 }
 
 #[cfg(e2e_test)]

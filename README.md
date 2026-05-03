@@ -6,6 +6,8 @@
 ![MSRV](https://img.shields.io/badge/msrv-1.91.1-red)
 [![codecov](https://codecov.io/gh/nidor1998/s3util-rs/graph/badge.svg)](https://codecov.io/gh/nidor1998/s3util-rs)
 
+> **Note on issues:** This project continues to be maintained, and binaries will keep being released. However, to consolidate discussion across the [s3sync](https://github.com/nidor1998/s3sync) / [s3util-rs](https://github.com/nidor1998/s3util-rs) / [s3rm-rs](https://github.com/nidor1998/s3rm-rs) / [s3ls-rs](https://github.com/nidor1998/s3ls-rs) family, **please file new issues in the [s7cmd](https://github.com/nidor1998/s7cmd) repository** instead of here. [s7cmd](https://github.com/nidor1998/s7cmd) bundles these tools as subcommands built on the same underlying code, so its behavior matches the standalone binaries and it can be used in their place. **Before opening an issue, please read the Scope and Non-Goals sections in the READMEs of [s7cmd](https://github.com/nidor1998/s7cmd) and each project ([s3sync](https://github.com/nidor1998/s3sync) / [s3util-rs](https://github.com/nidor1998/s3util-rs) / [s3rm-rs](https://github.com/nidor1998/s3rm-rs) / [s3ls-rs](https://github.com/nidor1998/s3ls-rs))** — requests outside the documented scope will generally be declined. Existing issues in this repository will continue to be handled as usual.
+
 ## Tools for managing Amazon S3 objects and buckets
 
 `s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores, built on the official [AWS SDK for Rust](https://github.com/awslabs/aws-sdk-rust) (`aws-sdk-s3`). It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future [`s7cmd`](https://github.com/nidor1998/s7cmd) toolkit.
@@ -17,6 +19,7 @@
 
 - [Overview](#overview)
     * [Scope](#scope)
+    * [API call volume](#api-call-volume)
     * [Non-Goals](#non-goals)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
@@ -97,6 +100,33 @@ s3util is designed to cover **common single-object and bucket-management operati
 
 The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
 
+### API call volume
+
+`cp` and `mv` are optimized for parallel transfer and end-to-end
+verification, not for minimizing the number of S3 API calls per
+invocation. A single transfer can issue several requests beyond the
+obvious `GetObject` / `PutObject`:
+
+- `HeadObject` upfront (to discover size and the source's stored
+  ETag / additional checksum).
+- `GetObjectAttributes` and/or per-part `HeadObject` calls when
+  `--auto-chunksize` is set (one per source part, to align local
+  chunking with the source's part layout).
+- Up to `--max-parallel-uploads` concurrent ranged `GetObject`
+  requests on the download side, or `UploadPart` / `UploadPartCopy`
+  requests on the upload / server-side-copy side.
+- `CreateMultipartUpload` + `CompleteMultipartUpload` (plus
+  `AbortMultipartUpload` on cancellation) on multipart uploads.
+- A second `HeadObject` after a ranged GET when the object is a
+  composite-multipart source whose root composite checksum was
+  needed for verification.
+
+If keeping the API call count to a minimum is important to you (cost,
+rate limits, or audit-log volume), `s3util` is not the right tool —
+prefer the AWS CLI's `aws s3api put-object` / `get-object` for direct,
+single-call transfers without the verification and parallelism
+machinery.
+
 ### Non-Goals
 
 The following are explicitly out of scope and will not be added, regardless of demand:
@@ -111,6 +141,27 @@ The following are explicitly out of scope and will not be added, regardless of d
   to add or change it in s3util. Each request is evaluated only
   against s3util's own scope and design principles. Use that other
   tool if you need its specific surface.
+- Diagnosing or fixing performance degradation, resource exhaustion,
+  or errors caused by raising concurrency settings
+  (`--max-parallel-uploads` and similar tuning flags) above their
+  defaults. The documentation explicitly notes that these values
+  must be sized to the host and the target service; tuning them is
+  the operator's responsibility. Reports of the form "I raised
+  `--max-parallel-uploads` and it failed / slowed down / hit rate
+  limits" will be closed.
+- Resuming a failed or interrupted transfer. `s3util` does not
+  provide a resume feature for `cp` / `mv`, including for large
+  multipart uploads and downloads. There is no checkpoint file,
+  no part-list reuse, and no partial-progress state persisted
+  between invocations: if a transfer is interrupted (network
+  error, ctrl-c, process kill, host shutdown, etc.), the next
+  invocation re-transfers the whole object from the start.
+  In-flight multipart uploads are best-effort aborted on ctrl-c
+  and on error paths, but for crashes or other non-graceful
+  exits, cleaning up any leftover incomplete multipart uploads
+  (e.g. via a bucket lifecycle rule or
+  `aws s3api abort-multipart-upload`) is the operator's
+  responsibility.
 - A plugin or extension mechanism.
 
 Issues and pull requests requesting any of the above will be closed.
@@ -462,6 +513,15 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 
 `--auto-chunksize` issues additional `HeadObject` calls to discover the source's multipart layout and then mirrors it on the destination. This keeps the S3→S3 composite ETag and additional-checksum values identical end-to-end, at the cost of one extra `HeadObject` per part.
 
+> ⚠️ **Memory warning for `--auto-chunksize` on client-side download paths.**
+> On any path where `s3util` downloads parts itself instead of letting S3 copy them server-side — that is, **S3 → stdout**, **S3 → Local**, and **S3 → S3 *without* `--server-side-copy`** — `--auto-chunksize` instructs `s3util` to use the source object's actual per-part sizes as the download chunk size, instead of `--multipart-chunksize`. Each parallel worker allocates one chunk in memory while it downloads, so peak memory usage is approximately:
+>
+>     source's largest part size × --max-parallel-uploads
+>
+> If the source was uploaded with very large parts (for example, 1 GiB parts × 16 parallel workers ≈ 16 GiB), this can exhaust available memory. Either lower `--max-parallel-uploads` to bound the allocation, or omit `--auto-chunksize` and accept that the per-part composite ETag/checksum may not verify on the resulting download.
+>
+> `--server-side-copy` (S3 → S3 only) sidesteps this entirely: parts are copied server-to-server via `UploadPartCopy` and never materialize in `s3util`'s memory.
+
 ### Server-side copy detail
 
 `--server-side-copy` uses `CopyObject` (single-part) or `UploadPartCopy` (multipart). Server-side copy is only valid when both source and target endpoints can see each other in the same AWS region/account (with appropriate cross-account IAM). It is not compatible with stdin or local paths. SSE-C re-keying across a server-side copy is supported by supplying both `--source-sse-c-*` and `--target-sse-c-*` flags.
@@ -469,7 +529,7 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 ### stdin/stdout handling
 
 - **stdin → S3** reads up to `--multipart-threshold` bytes into an in-memory buffer. If EOF arrives first, the buffered bytes are issued as a single-part PUT with a correct `Content-Length`; otherwise the buffered prefix is chained with the rest of the stream and uploaded as a multipart.
-- **S3 → stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum.
+- **S3 → stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum. For large objects the download runs in parallel (up to `--max-parallel-uploads` concurrent ranged GETs); peak memory is roughly `--multipart-chunksize × --max-parallel-uploads`. With `--auto-chunksize` the chunk size becomes the source's actual per-part size — see the [Auto chunksize](#auto-chunksize) memory warning before using it on objects uploaded with very large parts.
 
 ### Express One Zone detail
 
@@ -525,7 +585,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 
 ### --max-parallel-uploads
 
-Number of parallel part uploads/downloads during multipart transfers. Default: `16`.
+Number of parallel part uploads/downloads during multipart transfers. Default: `16`. The default is sized for typical hosts and S3's per-prefix request behavior; if you raise it, you must size it to your host (peak memory is roughly `--multipart-chunksize × --max-parallel-uploads`) and to the target service's per-prefix request and bandwidth limits. Tuning is the operator's responsibility.
 
 ### --multipart-threshold / --multipart-chunksize
 

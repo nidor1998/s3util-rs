@@ -531,7 +531,7 @@ fn get_path_strings(source: &StoragePath, target: &StoragePath) -> (String, Stri
 /// Extract the full path as the key for each side.
 /// For cp, the full path is always passed to get_object/put_object.
 /// Storage instances are created with empty base paths.
-fn extract_keys(config: &Config) -> Result<(String, String)> {
+pub(super) fn extract_keys(config: &Config) -> Result<(String, String)> {
     let source_key = match &config.source {
         StoragePath::S3 { prefix, .. } => {
             if prefix.is_empty() {
@@ -678,6 +678,34 @@ mod tests {
         let (src, tgt) = get_path_strings(&stdio, &s3_with_prefix);
         assert_eq!(src, "-");
         assert_eq!(tgt, "s3://b/k/v");
+    }
+
+    #[test]
+    fn get_path_strings_target_s3_branches() {
+        // Cover the target arm for each of S3-with-prefix, S3-no-prefix,
+        // Local, and Stdio independently. The source arm is exercised by
+        // `get_path_strings_formats_each_storage_kind`.
+        let s3_with_prefix = StoragePath::S3 {
+            bucket: "tgt".to_string(),
+            prefix: "p/q".to_string(),
+        };
+        let s3_no_prefix = StoragePath::S3 {
+            bucket: "tgt".to_string(),
+            prefix: String::new(),
+        };
+        let local = StoragePath::Local(PathBuf::from("/x"));
+
+        let (_src, tgt) = get_path_strings(&local, &s3_with_prefix);
+        assert_eq!(tgt, "s3://tgt/p/q");
+
+        let (_src, tgt) = get_path_strings(&local, &s3_no_prefix);
+        assert_eq!(tgt, "s3://tgt");
+
+        let (_src, tgt) = get_path_strings(&local, &local);
+        assert_eq!(tgt, "/x");
+
+        let (_src, tgt) = get_path_strings(&local, &StoragePath::Stdio);
+        assert_eq!(tgt, "-");
     }
 
     #[test]

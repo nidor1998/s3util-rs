@@ -172,4 +172,17 @@ mod tests {
         ]);
         assert_eq!(a.tagging.as_deref(), Some("key1=val1&key2=val2"));
     }
+
+    #[test]
+    fn bucket_key_rejects_non_s3_target() {
+        let a = parse(&[
+            "test",
+            "put-object-tagging",
+            "/tmp/local",
+            "--tagging",
+            "k=v",
+        ]);
+        let err = a.bucket_key().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

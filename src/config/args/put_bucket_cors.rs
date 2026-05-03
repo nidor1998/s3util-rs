@@ -132,4 +132,13 @@ mod tests {
         assert!(a.cors_configuration.is_none());
         assert!(a.auto_complete_shell().is_some());
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target() {
+        // Local paths pass the up-front Url::parse value parser; bucket_name
+        // must still surface TARGET_NOT_S3 for them.
+        let a = parse(&["test", "put-bucket-cors", "/tmp/local", "/tmp/cors.json"]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

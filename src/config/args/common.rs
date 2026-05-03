@@ -1124,6 +1124,7 @@ pub(crate) fn build_config_from_common(
         is_stdio_source,
         is_stdio_target,
         no_fail_on_verify_error: false,
+        skip_existing: false,
         dry_run: common.dry_run,
     })
 }

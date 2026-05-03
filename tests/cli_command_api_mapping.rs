@@ -42,7 +42,7 @@ const COMMAND_ROUTES: &[CommandRoute] = &[
         cli_name: "create-bucket",
         runner: "run_create_bucket",
         runtime_file: Some("create_bucket.rs"),
-        api_calls: &["create_bucket", "put_bucket_tagging"],
+        api_calls: &["head_bucket", "create_bucket", "put_bucket_tagging"],
     },
     CommandRoute {
         variant: "DeleteBucket",
