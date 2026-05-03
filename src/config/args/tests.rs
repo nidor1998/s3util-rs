@@ -1433,6 +1433,36 @@ mod tests {
     }
 
     #[test]
+    fn cp_skip_existing_propagates_to_config() {
+        let config = build_config_from_args(args_with_extra(
+            "/tmp/source",
+            "s3://my-bucket/key",
+            &["--skip-existing"],
+        ))
+        .unwrap();
+        assert!(config.skip_existing);
+    }
+
+    #[test]
+    fn cp_skip_existing_default_false() {
+        let config =
+            build_config_from_args(args_with("/tmp/source", "s3://my-bucket/key")).unwrap();
+        assert!(!config.skip_existing);
+    }
+
+    #[test]
+    fn mv_skip_existing_default_false() {
+        // mv has no --skip-existing flag; the underlying Config field stays at
+        // its default value of false.
+        let cli = parse_from_args(vec!["s3util", "mv", "/tmp/a", "s3://b/k"]).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(!config.skip_existing);
+    }
+
+    #[test]
     fn build_config_clap_parse_error_propagates() {
         // A non-existent subcommand is a clap parse error, surfaced as Err
         // via `Cli::try_parse_from(...).map_err(...)?` at the top of

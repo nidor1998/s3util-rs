@@ -234,6 +234,35 @@ fn cp_invalid_endpoint_url_rejected() {
 }
 
 #[test]
+fn cp_skip_existing_with_stdio_target_rejected() {
+    let (ok, _stdout, stderr) = run(s3util().args(["cp", "--skip-existing", "s3://b/k", "-"]));
+    assert!(
+        !ok,
+        "cp --skip-existing with stdout target must exit non-zero"
+    );
+    assert!(
+        stderr.contains("stdout target"),
+        "expected stdout target error.\n--- stderr ---\n{stderr}"
+    );
+}
+
+#[test]
+fn cp_skip_existing_with_if_none_match_rejected() {
+    let (ok, _stdout, stderr) = run(s3util().args([
+        "cp",
+        "--skip-existing",
+        "--if-none-match",
+        "/tmp/a",
+        "s3://b/k",
+    ]));
+    assert!(!ok, "cp --skip-existing --if-none-match must exit non-zero");
+    assert!(
+        stderr.contains("--if-none-match"),
+        "expected --if-none-match error.\n--- stderr ---\n{stderr}"
+    );
+}
+
+#[test]
 fn invalid_subcommand_exits_with_error() {
     let (ok, _stdout, stderr) = run(s3util().args(["fly_to_the_moon"]));
     assert!(!ok, "unknown subcommand must exit non-zero");

@@ -2630,4 +2630,178 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
         let _ = std::fs::remove_dir_all(&local_dir);
     }
+
+    // -----------------------------------------------------------------
+    // cp --skip-existing: target object exists → no upload
+    // -----------------------------------------------------------------
+
+    fn run_s3util(args: &[&str]) -> std::process::Output {
+        std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(args)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn s3util")
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_skip_existing_skips_when_object_exists() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Pre-put the original object so the target already exists.
+        helper
+            .put_object(&bucket, "skip.txt", b"original".to_vec())
+            .await;
+
+        // Capture pre-existing ETag and last-modified to confirm the upload
+        // did NOT happen (a successful upload would replace these).
+        let head_before = helper.head_object(&bucket, "skip.txt", None).await;
+        let etag_before = head_before.e_tag().unwrap().to_string();
+        let mtime_before = head_before.last_modified().unwrap().secs();
+
+        // Local file with *different* content — if the upload were to run,
+        // the post-HEAD ETag would change.
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "skip.txt", b"new-content-should-not-upload");
+
+        let target = format!("s3://{}/skip.txt", bucket);
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when target exists; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        // ETag and last-modified must be unchanged — proves the upload was
+        // skipped, not just silently overwritten with the same bytes.
+        let head_after = helper.head_object(&bucket, "skip.txt", None).await;
+        let etag_after = head_after.e_tag().unwrap().to_string();
+        let mtime_after = head_after.last_modified().unwrap().secs();
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert_eq!(
+            etag_before, etag_after,
+            "cp --skip-existing must NOT have re-uploaded; ETag changed"
+        );
+        assert_eq!(
+            mtime_before, mtime_after,
+            "cp --skip-existing must NOT have re-uploaded; last-modified changed"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_skip_existing_proceeds_when_object_missing() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "skip.txt", b"data");
+
+        let target = format!("s3://{}/skip.txt", bucket);
+        let output = run_s3util(&[
+            "cp",
+            "--skip-existing",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+        assert!(
+            output.status.success(),
+            "cp --skip-existing should exit 0 when target missing; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let exists = helper.is_object_exist(&bucket, "skip.txt", None).await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert!(
+            exists,
+            "cp --skip-existing must upload when the target does not exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn local_to_s3_skip_existing_with_dry_run_does_not_upload() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        helper
+            .put_object(&bucket, "skip.txt", b"original".to_vec())
+            .await;
+
+        let etag_before = helper
+            .head_object(&bucket, "skip.txt", None)
+            .await
+            .e_tag()
+            .unwrap()
+            .to_string();
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "skip.txt", b"would-not-upload");
+
+        let target = format!("s3://{}/skip.txt", bucket);
+        let output = run_s3util(&[
+            "cp",
+            "--dry-run",
+            "--skip-existing",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            REGION,
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+
+        let etag_after = helper
+            .head_object(&bucket, "skip.txt", None)
+            .await
+            .e_tag()
+            .unwrap()
+            .to_string();
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert!(
+            output.status.success(),
+            "cp --dry-run --skip-existing should exit 0; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("[dry-run]"),
+            "stderr must contain [dry-run] prefix; got: {stderr}"
+        );
+        assert_eq!(
+            etag_before, etag_after,
+            "cp --dry-run --skip-existing must NOT modify the object"
+        );
+    }
 }

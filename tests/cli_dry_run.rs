@@ -145,6 +145,63 @@ fn mv_dry_run_exits_zero_and_logs_messages() {
     );
 }
 
+// ---------- cp --skip-existing under --dry-run ----------
+
+#[test]
+fn cp_dry_run_skip_existing_with_existing_local_target_logs_skip() {
+    // Existing local target → target_exists returns true → skip branch
+    // logs "[dry-run] would skip: target exists." and exits 0. Use an S3
+    // source so check_both_local doesn't reject the args; the skip branch
+    // returns before any AWS traffic is initiated.
+    let dst = tempfile::NamedTempFile::new().unwrap();
+    let (ok, _stdout, stderr, code) = run(s3util().args([
+        "cp",
+        "--dry-run",
+        "--skip-existing",
+        &format!("{FAKE_BUCKET}/key"),
+        dst.path().to_str().unwrap(),
+    ]));
+    assert!(
+        ok,
+        "cp --dry-run --skip-existing must exit 0; stderr={stderr}"
+    );
+    assert_eq!(code, Some(0));
+    assert!(
+        stderr.contains("[dry-run] would skip"),
+        "missing '[dry-run] would skip' in stderr: {stderr}"
+    );
+}
+
+#[test]
+fn cp_dry_run_skip_existing_with_missing_local_target_logs_would_copy() {
+    // Missing local target → target_exists returns false → skip branch
+    // does not fire → existing dry-run "would copy object." line is logged.
+    // Use an S3 source for the same reason as above; the dry-run path
+    // short-circuits before any actual SDK request is sent.
+    let dir = tempfile::tempdir().unwrap();
+    let dst = dir.path().join("missing-target.dat");
+    let (ok, _stdout, stderr, code) = run(s3util().args([
+        "cp",
+        "--dry-run",
+        "--skip-existing",
+        &format!("{FAKE_BUCKET}/key"),
+        dst.to_str().unwrap(),
+    ]));
+    assert!(
+        ok,
+        "cp --dry-run --skip-existing must exit 0; stderr={stderr}"
+    );
+    assert_eq!(code, Some(0));
+    assert!(
+        stderr.contains("[dry-run]"),
+        "missing [dry-run] marker in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("would copy object."),
+        "missing 'would copy object.' in stderr: {stderr}"
+    );
+}
+
 // ---------- rm (CommonClientArgs path) ----------
 
 #[test]

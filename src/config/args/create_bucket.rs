@@ -26,6 +26,20 @@ pub struct CreateBucketArgs {
     #[arg(long, env, default_value_t = false, help_heading = "General")]
     pub dry_run: bool,
 
+    /// Skip create if the bucket already exists.
+    #[arg(
+        long,
+        env,
+        default_value_t = false,
+        help_heading = "General",
+        long_help = r#"Skip the create if the bucket already exists.
+Issues HeadBucket first; if the bucket exists the command exits 0
+with no CreateBucket call. If HeadBucket fails for any reason other
+than bucket-not-found (e.g. access denied, region mismatch), the
+failure is surfaced."#
+    )]
+    pub if_not_exists: bool,
+
     #[command(flatten)]
     pub common: CommonClientArgs,
 }
@@ -122,5 +136,32 @@ mod tests {
         let a = parse(&["test", "create-bucket", "--auto-complete-shell", "bash"]);
         assert!(a.target.is_none());
         assert!(a.auto_complete_shell().is_some());
+    }
+
+    #[test]
+    fn parses_if_not_exists_flag() {
+        let a = parse(&["test", "create-bucket", "s3://my-bucket", "--if-not-exists"]);
+        assert!(a.if_not_exists);
+    }
+
+    #[test]
+    fn if_not_exists_defaults_to_false() {
+        let a = parse(&["test", "create-bucket", "s3://my-bucket"]);
+        assert!(!a.if_not_exists);
+    }
+
+    #[test]
+    fn if_not_exists_with_tagging_parses_successfully() {
+        let a = parse(&[
+            "test",
+            "create-bucket",
+            "s3://my-bucket",
+            "--if-not-exists",
+            "--tagging",
+            "env=prod&team=sre",
+        ]);
+        assert!(a.if_not_exists);
+        assert_eq!(a.tagging.as_deref(), Some("env=prod&team=sre"));
+        assert_eq!(a.bucket_name().unwrap(), "my-bucket");
     }
 }
