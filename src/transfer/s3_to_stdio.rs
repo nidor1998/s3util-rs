@@ -39,7 +39,14 @@ pub async fn transfer(
         return Ok(TransferOutcome::default());
     }
 
-    if config.max_parallel_uploads <= 1 {
+    // Don't short-circuit to transfer_serial when --auto-chunksize is on:
+    // the serial loop only knows uniform `multipart_chunksize` boundaries
+    // and would compute a composite ETag whose part layout doesn't match
+    // a multipart source's actual parts. transfer_parallel's chunk plan
+    // (built from get_object_parts_attributes / get_object_parts) is the
+    // only path that honors auto_chunksize — and it works fine with one
+    // worker (worker_count clamps to 1 below).
+    if config.max_parallel_uploads <= 1 && !config.transfer_config.auto_chunksize {
         return transfer_serial(
             config,
             source,
@@ -501,17 +508,30 @@ async fn ranged_get_into_buffer(
         if chunk.is_empty() {
             break;
         }
-        let take = chunk.len().min((size - filled) as usize);
-        buf.extend_from_slice(&chunk[..take]);
-        filled += take as u64;
-        let consumed = chunk.len();
-        reader.consume(consumed);
+        let chunk_len = chunk.len();
+        let remaining = (size - filled) as usize;
+        // S3 ranged GETs must return exactly the requested bytes; an
+        // over-read indicates corruption upstream or in transit.
+        // Surface it instead of silently truncating to `remaining`
+        // (which would both consume and drop the extra bytes, and
+        // let a wrong body still verify against a per-part hash
+        // computed only over the truncated prefix).
+        if chunk_len > remaining {
+            return Err(anyhow!(
+                "ranged_get_into_buffer: over-read for {range}: \
+                 expected {size} bytes, observed at least {} bytes",
+                filled + chunk_len as u64
+            ));
+        }
+        buf.extend_from_slice(chunk);
+        filled += chunk_len as u64;
+        reader.consume(chunk_len);
 
         // Rate limit BETWEEN reads (cancellable async await), not
         // INSIDE poll_read. The await yields control to the runtime
         // and can be observed by select! / cancellation right after.
         if let Some(limiter) = &rate_limit_bandwidth {
-            limiter.acquire(take).await;
+            limiter.acquire(chunk_len).await;
         }
 
         if filled >= size {
@@ -522,6 +542,24 @@ async fn ranged_get_into_buffer(
     if filled != size {
         return Err(anyhow!(
             "ranged_get_into_buffer: short read for {range}: expected {size}, got {filled}"
+        ));
+    }
+
+    // Defence against over-reads that align exactly to a BufReader chunk
+    // boundary: the in-loop check above only catches over-reads when a
+    // single read straddles `size`. If chunks happen to land such that
+    // we hit `filled == size` on a chunk-end, any extra upstream bytes
+    // are still buffered (or pending on the stream); peek once more to
+    // surface them as the same protocol-anomaly error.
+    let trailing = reader
+        .fill_buf()
+        .await
+        .context("ranged_get_into_buffer: post-read fill_buf failed")?;
+    if !trailing.is_empty() {
+        return Err(anyhow!(
+            "ranged_get_into_buffer: over-read for {range}: \
+             expected {size} bytes, observed at least {} additional byte(s)",
+            trailing.len()
         ));
     }
 
@@ -542,6 +580,26 @@ async fn transfer_parallel(
     }
 
     let source_size = head.content_length().unwrap_or(0) as u64;
+
+    // Zero-byte source: the chunk planner below can produce a
+    // (offset=0, size=0) entry on the non-multipart auto_chunksize
+    // branch (multipart_chunksize.min(0) == 0), after which the
+    // dispatcher's `offset + size - 1` underflows (debug panic;
+    // release wraps to u64::MAX → bogus range). The serial path
+    // handles empty bodies cleanly (one non-ranged GET, MD5 of the
+    // empty body, ETag verify if requested), so delegate.
+    if source_size == 0 {
+        return transfer_serial(
+            config,
+            source,
+            source_key,
+            writer,
+            cancellation_token,
+            stats_sender,
+        )
+        .await;
+    }
+
     let source_e_tag = head.e_tag().map(|e| e.to_string());
     let source_sse = head.server_side_encryption().cloned();
 
@@ -1199,6 +1257,12 @@ mod tests {
         fail_get_at_offsets: StdMutex<Vec<u64>>,
         // Map of "byte offset of part" → delay before responding.
         delay_get_at_offsets: StdMutex<HashMap<u64, Duration>>,
+        // Number of extra padding bytes appended to every ranged GET
+        // body (content_length / content_range stay as the requested
+        // values). Simulates a misbehaving upstream that delivers more
+        // body bytes than the range it claims to be returning. Default
+        // 0 leaves response sizes exact.
+        over_read_extra: StdMutex<usize>,
         head_calls: AtomicU32,
         head_first_part_calls: AtomicU32,
         get_object_parts_attributes_calls: AtomicU32,
@@ -1224,6 +1288,7 @@ mod tests {
                     force_empty_parts_attributes: StdMutex::new(false),
                     fail_get_at_offsets: StdMutex::new(Vec::new()),
                     delay_get_at_offsets: StdMutex::new(HashMap::new()),
+                    over_read_extra: StdMutex::new(0),
                     head_calls: AtomicU32::new(0),
                     head_first_part_calls: AtomicU32::new(0),
                     get_object_parts_attributes_calls: AtomicU32::new(0),
@@ -1296,6 +1361,15 @@ mod tests {
                 .lock()
                 .unwrap()
                 .insert(offset, delay);
+            self
+        }
+        /// Make every ranged GET return `extra` additional padding
+        /// bytes beyond what the range asks for. content_length and
+        /// content_range remain set to the requested size — the goal
+        /// is to simulate an upstream whose body length exceeds its
+        /// own range/content-length headers.
+        fn with_over_read(self, extra: usize) -> Self {
+            *self.inner.over_read_extra.lock().unwrap() = extra;
             self
         }
         fn head_calls(&self) -> u32 {
@@ -1378,7 +1452,11 @@ mod tests {
                         tokio::time::sleep(d).await;
                     }
                     let len = (end - start + 1) as usize;
-                    let slice = self.inner.body[start as usize..start as usize + len].to_vec();
+                    let mut slice = self.inner.body[start as usize..start as usize + len].to_vec();
+                    let extra = *self.inner.over_read_extra.lock().unwrap();
+                    if extra > 0 {
+                        slice.extend(std::iter::repeat_n(0xAAu8, extra));
+                    }
                     let cr = format!("bytes {start}-{end}/{}", self.inner.body.len());
                     (slice, len as i64, Some(cr))
                 } else {
@@ -2206,6 +2284,52 @@ mod tests {
         );
     }
 
+    /// REGRESSION: --auto-chunksize must take effect even when the user
+    /// has set --max-parallel-uploads 1. The dispatcher's
+    /// `max_parallel_uploads <= 1` short-circuit was unconditional and
+    /// landed every such invocation in `transfer_serial`, which only
+    /// knows uniform `multipart_chunksize` boundaries. On a multipart
+    /// source whose parts don't match `multipart_chunksize` (here: 2
+    /// parts of 3 MiB with default 8 MiB chunksize), the serial path
+    /// produced a composite hash over the wrong part layout — verify
+    /// failed with a bogus target ETag even though the body itself was
+    /// byte-correct. Pin the routing: with auto_chunksize on, even at
+    /// max_parallel_uploads=1 we must take the parallel path
+    /// (worker_count clamps to 1) so chunk boundaries come from the
+    /// source's actual parts list.
+    #[tokio::test]
+    async fn auto_chunksize_takes_parallel_path_even_when_max_parallel_uploads_is_one() {
+        let body: Vec<u8> = (0..6 * 1024 * 1024).map(|i| (i % 256) as u8).collect();
+        let mock = MockSource::new(body.clone())
+            .with_e_tag("\"abcdefabcdefabcdefabcdefabcdefab-2\"")
+            .with_parts(&[3 * 1024 * 1024, 3 * 1024 * 1024]);
+        let mut config = test_config(/* parallel */ 1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        config.transfer_config.auto_chunksize = true;
+
+        let (result, captured, _events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert_eq!(captured, body);
+        assert_eq!(
+            mock.head_calls(),
+            1,
+            "auto_chunksize must HEAD even at max_parallel_uploads=1 \
+             (the serial short-circuit must not swallow auto_chunksize)"
+        );
+        assert_eq!(
+            mock.get_object_parts_attributes_calls(),
+            1,
+            "auto_chunksize on a multipart source must fetch parts attributes"
+        );
+        assert_eq!(
+            mock.get_calls(),
+            2,
+            "auto_chunksize with 2 parts must issue 2 ranged GETs even \
+             at max_parallel_uploads=1 (1 worker draining 2 chunks), \
+             not a single non-ranged GET via the serial path"
+        );
+    }
+
     /// REGRESSION: when `get_object_parts_attributes` returns empty
     /// (real S3 behavior for sources uploaded WITHOUT
     /// --additional-checksum-algorithm), the chunk plan must fall
@@ -2317,6 +2441,57 @@ mod tests {
             mock.get_calls(),
             0,
             "no ranged GETs issued — we bail before the worker pool"
+        );
+    }
+
+    /// `ranged_get_into_buffer` previously took `chunk.len().min(remaining)`
+    /// and consumed the whole buffer, silently discarding any bytes the
+    /// upstream sent past the requested range. That hides a protocol /
+    /// data-source anomaly (S3 ranged GETs MUST return exactly the
+    /// requested bytes; an over-read means corruption upstream or in
+    /// transit). Pin the over-read guard: the transfer must hard-error
+    /// citing the requested range instead of silently truncating.
+    #[tokio::test]
+    async fn parallel_returns_err_when_ranged_get_returns_more_bytes_than_requested() {
+        // Single-chunk path (chunksize 16 MiB ≥ body 6 MiB) so the over-
+        // read shows up on exactly one ranged GET.
+        let body: Vec<u8> = (0..6 * 1024 * 1024).map(|i| (i & 0xFF) as u8).collect();
+        let mock = MockSource::new(body.clone()).with_over_read(1);
+        let config = test_config(/* parallel */ 4, 5 * 1024 * 1024, 16 * 1024 * 1024);
+
+        let (result, _captured, _events) = run_transfer(config, mock).await;
+
+        let err =
+            result.expect_err("transfer must error when GET returns more bytes than requested");
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("over-read"),
+            "error must explain the over-read; got: {msg}"
+        );
+    }
+
+    /// auto_chunksize=true on a non-multipart, zero-byte object built a
+    /// chunk plan of `[(0, 0)]`, then the dispatcher computed
+    /// `0 + 0 - 1` (debug: panic; release: u64::MAX → bogus range
+    /// `bytes=0-18446744073709551615`). Empty-body transfers must
+    /// succeed without hitting the parallel chunk-plan path.
+    #[tokio::test]
+    async fn auto_chunksize_zero_byte_singlepart_source_does_not_underflow() {
+        let mock = MockSource::new(Vec::new())
+            // Empty-object MD5 — singlepart-shaped (no `-N` suffix), so
+            // the multipart parts-fetch branch is skipped and we fall
+            // into the size-derived chunk planner.
+            .with_e_tag("\"d41d8cd98f00b204e9800998ecf8427e\"");
+        let mut config = test_config(/* parallel */ 4, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        config.transfer_config.auto_chunksize = true;
+
+        let (result, captured, _events) = run_transfer(config, mock).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert!(
+            captured.is_empty(),
+            "captured bytes for an empty source must be empty, got {} byte(s)",
+            captured.len()
         );
     }
 }
