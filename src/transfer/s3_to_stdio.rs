@@ -658,6 +658,21 @@ async fn transfer_parallel(
                 chunks_vec.push((offset, size));
                 offset += size;
             }
+            // The parts list is the only thing telling us where the per-part
+            // hash boundaries are; HEAD's content_length is the only thing
+            // telling us how many bytes the source actually contains. If
+            // those disagree, downloading the parts-list range would emit a
+            // truncated body to stdout while still producing a per-part /
+            // composite ETag that verifies against the source. Refuse the
+            // transfer so the user sees an error instead of silent
+            // truncation under exit 0.
+            if offset != source_size {
+                return Err(anyhow!(
+                    "auto_chunksize: parts list (sum={offset}) does not match \
+                     source content_length ({source_size}); refusing to download \
+                     to avoid silent truncation."
+                ));
+            }
             chunks_vec
         } else {
             let first_chunk_size = multipart_chunksize.min(source_size);
