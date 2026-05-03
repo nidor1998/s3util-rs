@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-05-03
+
+### Added
+
+- `cp --skip-existing`: pre-flight check skips the transfer when the target object (S3 `HeadObject`) or local file already exists, exiting 0 without copying. Useful for re-runnable scripts that don't want to overwrite. Rejected in combination with `--if-none-match` (opposite intent) and with stdout target (no notion of "exists"). Target SSE-C credentials are honored on the HEAD so encrypted targets are still classifiable. Honored under `--dry-run` (the HEAD itself is read-only). Skip messages log at info level (visible with `-v`).
+- `create-bucket --if-not-exists`: pre-flight `HeadBucket` skips the `CreateBucket` call when the bucket already exists, exiting 0. The `--tagging` step is intentionally not applied to a pre-existing bucket — this invocation didn't create it.
+- Parallel download path for `s3://… → -` (S3 to stdout). With `--max-parallel-uploads > 1`, large objects are fetched via concurrent ranged `GetObject` requests while preserving exact byte ordering on the output stream. Previously, S3-to-stdout downloads were strictly serial.
+- `cp --auto-chunksize` is now supported for the S3-to-stdout direction. Chunk boundaries align with the source's actual part sizes (read via `GetObjectAttributes`, falling back to per-part `HeadObject`), so the streamed bytes verify against the source's composite ETag exactly. The auto-chunksize path always uses the parallel pipeline.
+
+### Changed
+
+- README: clarified scope and operator responsibility. Resume of failed transfers, concurrency tuning beyond defaults (e.g., raising `--max-parallel-uploads` past safe limits for the host or the target's per-prefix capacity), and per-invocation API call minimization are explicitly out of scope. For workflows where API call count is the primary concern, `aws s3api` is recommended.
+- README: added a memory warning for `--auto-chunksize` on client-side download paths (S3 → stdout, S3 → local, S3 → S3 without `--server-side-copy`). Peak memory ≈ the source's largest part size × `--max-parallel-uploads`. `--server-side-copy` sidesteps the issue (parts are copied via `UploadPartCopy` and never materialize locally).
+- README: added a one-sentence sizing note on `--max-parallel-uploads` (host memory + target's per-prefix limits).
+- README: added a top-of-file pointer asking new issues to be filed in the [s7cmd](https://github.com/nidor1998/s7cmd) umbrella repository so discussion across `s3sync` / `s3util-rs` / `s3rm-rs` / `s3ls-rs` stays in one place. Maintenance and releases continue here; existing issues are unaffected.
+
 ## [1.1.1] - 2026-05-02
 
 ### Fixed
