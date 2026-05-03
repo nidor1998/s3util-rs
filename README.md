@@ -17,6 +17,7 @@
 
 - [Overview](#overview)
     * [Scope](#scope)
+    * [API call volume](#api-call-volume)
     * [Non-Goals](#non-goals)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
@@ -96,6 +97,33 @@ For object transfers in particular, `s3util` emphasizes high reliability, high p
 s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy, lifecycle, encryption, CORS, public-access-block, website, logging, notifications). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
 The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
+
+### API call volume
+
+`cp` and `mv` are optimized for parallel transfer and end-to-end
+verification, not for minimizing the number of S3 API calls per
+invocation. A single transfer can issue several requests beyond the
+obvious `GetObject` / `PutObject`:
+
+- `HeadObject` upfront (to discover size and the source's stored
+  ETag / additional checksum).
+- `GetObjectAttributes` and/or per-part `HeadObject` calls when
+  `--auto-chunksize` is set (one per source part, to align local
+  chunking with the source's part layout).
+- Up to `--max-parallel-uploads` concurrent ranged `GetObject`
+  requests on the download side, or `UploadPart` / `UploadPartCopy`
+  requests on the upload / server-side-copy side.
+- `CreateMultipartUpload` + `CompleteMultipartUpload` (plus
+  `AbortMultipartUpload` on cancellation) on multipart uploads.
+- A second `HeadObject` after a ranged GET when the object is a
+  composite-multipart source whose root composite checksum was
+  needed for verification.
+
+If keeping the API call count to a minimum is important to you (cost,
+rate limits, or audit-log volume), `s3util` is not the right tool —
+prefer the AWS CLI's `aws s3api put-object` / `get-object` for direct,
+single-call transfers without the verification and parallelism
+machinery.
 
 ### Non-Goals
 
