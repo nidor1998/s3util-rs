@@ -139,6 +139,14 @@ The following are explicitly out of scope and will not be added, regardless of d
   to add or change it in s3util. Each request is evaluated only
   against s3util's own scope and design principles. Use that other
   tool if you need its specific surface.
+- Diagnosing or fixing performance degradation, resource exhaustion,
+  or errors caused by raising concurrency settings
+  (`--max-parallel-uploads` and similar tuning flags) above their
+  defaults. The documentation explicitly notes that these values
+  must be sized to the host and the target service; tuning them is
+  the operator's responsibility. Reports of the form "I raised
+  `--max-parallel-uploads` and it failed / slowed down / hit rate
+  limits" will be closed.
 - A plugin or extension mechanism.
 
 Issues and pull requests requesting any of the above will be closed.
@@ -562,7 +570,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 
 ### --max-parallel-uploads
 
-Number of parallel part uploads/downloads during multipart transfers. Default: `16`.
+Number of parallel part uploads/downloads during multipart transfers. Default: `16`. The default is sized for typical hosts and S3's per-prefix request behavior; if you raise it, you must size it to your host (peak memory is roughly `--multipart-chunksize × --max-parallel-uploads`) and to the target service's per-prefix request and bandwidth limits. Tuning is the operator's responsibility.
 
 ### --multipart-threshold / --multipart-chunksize
 
