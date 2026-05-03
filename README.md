@@ -462,6 +462,15 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 
 `--auto-chunksize` issues additional `HeadObject` calls to discover the source's multipart layout and then mirrors it on the destination. This keeps the S3→S3 composite ETag and additional-checksum values identical end-to-end, at the cost of one extra `HeadObject` per part.
 
+> ⚠️ **Memory warning for `--auto-chunksize` on client-side download paths.**
+> On any path where `s3util` downloads parts itself instead of letting S3 copy them server-side — that is, **S3 → stdout**, **S3 → Local**, and **S3 → S3 *without* `--server-side-copy`** — `--auto-chunksize` instructs `s3util` to use the source object's actual per-part sizes as the download chunk size, instead of `--multipart-chunksize`. Each parallel worker allocates one chunk in memory while it downloads, so peak memory usage is approximately:
+>
+>     source's largest part size × --max-parallel-uploads
+>
+> If the source was uploaded with very large parts (for example, 1 GiB parts × 16 parallel workers ≈ 16 GiB), this can exhaust available memory. Either lower `--max-parallel-uploads` to bound the allocation, or omit `--auto-chunksize` and accept that the per-part composite ETag/checksum may not verify on the resulting download.
+>
+> `--server-side-copy` (S3 → S3 only) sidesteps this entirely: parts are copied server-to-server via `UploadPartCopy` and never materialize in `s3util`'s memory.
+
 ### Server-side copy detail
 
 `--server-side-copy` uses `CopyObject` (single-part) or `UploadPartCopy` (multipart). Server-side copy is only valid when both source and target endpoints can see each other in the same AWS region/account (with appropriate cross-account IAM). It is not compatible with stdin or local paths. SSE-C re-keying across a server-side copy is supported by supplying both `--source-sse-c-*` and `--target-sse-c-*` flags.
@@ -469,7 +478,7 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 ### stdin/stdout handling
 
 - **stdin → S3** reads up to `--multipart-threshold` bytes into an in-memory buffer. If EOF arrives first, the buffered bytes are issued as a single-part PUT with a correct `Content-Length`; otherwise the buffered prefix is chained with the rest of the stream and uploaded as a multipart.
-- **S3 → stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum.
+- **S3 → stdout** streams bytes straight to stdout. ETag and any requested additional checksum are computed inline from the streamed bytes and verified against the S3-reported values — the same verification as `S3 → Local`. A mismatch is logged as a warning (exit 3), or as an error if the configured additional checksum is a full-object checksum. For large objects the download runs in parallel (up to `--max-parallel-uploads` concurrent ranged GETs); peak memory is roughly `--multipart-chunksize × --max-parallel-uploads`. With `--auto-chunksize` the chunk size becomes the source's actual per-part size — see the [Auto chunksize](#auto-chunksize) memory warning before using it on objects uploaded with very large parts.
 
 ### Express One Zone detail
 
