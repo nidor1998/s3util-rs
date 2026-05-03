@@ -149,6 +149,19 @@ The following are explicitly out of scope and will not be added, regardless of d
   the operator's responsibility. Reports of the form "I raised
   `--max-parallel-uploads` and it failed / slowed down / hit rate
   limits" will be closed.
+- Resuming a failed or interrupted transfer. `s3util` does not
+  provide a resume feature for `cp` / `mv`, including for large
+  multipart uploads and downloads. There is no checkpoint file,
+  no part-list reuse, and no partial-progress state persisted
+  between invocations: if a transfer is interrupted (network
+  error, ctrl-c, process kill, host shutdown, etc.), the next
+  invocation re-transfers the whole object from the start.
+  In-flight multipart uploads are best-effort aborted on ctrl-c
+  and on error paths, but for crashes or other non-graceful
+  exits, cleaning up any leftover incomplete multipart uploads
+  (e.g. via a bucket lifecycle rule or
+  `aws s3api abort-multipart-upload`) is the operator's
+  responsibility.
 - A plugin or extension mechanism.
 
 Issues and pull requests requesting any of the above will be closed.
