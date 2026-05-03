@@ -151,4 +151,11 @@ mod tests {
         ]);
         assert!(a.enable_additional_checksum);
     }
+
+    #[test]
+    fn bucket_key_rejects_non_s3_target() {
+        let a = parse(&["test", "head-object", "/tmp/local"]);
+        let err = a.bucket_key().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

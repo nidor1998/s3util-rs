@@ -202,6 +202,44 @@ fn cp_dry_run_skip_existing_with_missing_local_target_logs_would_copy() {
     );
 }
 
+// ---------- cp dry-run via stdio (StdioToS3 / S3ToStdio) ----------
+
+#[test]
+fn cp_dry_run_stdio_to_s3_exits_zero_and_logs_message() {
+    // Stdio source ("-") with S3 target ⇒ StdioToS3 direction. Under
+    // --dry-run, the would-copy line must fire and no AWS call is made.
+    let target = format!("{FAKE_BUCKET}/key");
+    let (ok, _stdout, stderr, code) = run(s3util().args(["cp", "--dry-run", "-", &target]));
+    assert!(ok, "cp --dry-run from stdio must exit 0; stderr={stderr}");
+    assert_eq!(code, Some(0));
+    assert!(
+        stderr.contains("[dry-run]"),
+        "missing [dry-run] marker: {stderr}"
+    );
+    assert!(
+        stderr.contains("would copy object."),
+        "stdio→s3 dry-run must log 'would copy object.': {stderr}"
+    );
+}
+
+#[test]
+fn cp_dry_run_s3_to_stdio_exits_zero_and_logs_message() {
+    // S3 source with stdio target ("-") ⇒ S3ToStdio direction. Under
+    // --dry-run, no GetObject is issued.
+    let source = format!("{FAKE_BUCKET}/key");
+    let (ok, _stdout, stderr, code) = run(s3util().args(["cp", "--dry-run", &source, "-"]));
+    assert!(ok, "cp --dry-run to stdio must exit 0; stderr={stderr}");
+    assert_eq!(code, Some(0));
+    assert!(
+        stderr.contains("[dry-run]"),
+        "missing [dry-run] marker: {stderr}"
+    );
+    assert!(
+        stderr.contains("would copy object."),
+        "s3→stdio dry-run must log 'would copy object.': {stderr}"
+    );
+}
+
 // ---------- rm (CommonClientArgs path) ----------
 
 #[test]

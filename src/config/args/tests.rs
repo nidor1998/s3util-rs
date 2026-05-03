@@ -450,6 +450,50 @@ mod tests {
     }
 
     #[test]
+    fn full_object_checksum_accepts_crc32() {
+        // Positive case: --full-object-checksum + CRC32 must build successfully,
+        // exercising the fall-through past the SHA1/SHA256 reject branch.
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "CRC32",
+            ],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn full_object_checksum_accepts_crc32c() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "CRC32C",
+            ],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn full_object_checksum_accepts_crc64nvme() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "CRC64NVME",
+            ],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
     fn full_object_checksum_rejects_sha256() {
         let result = build_config_from_args(args_with_extra(
             "/tmp/src",
@@ -669,6 +713,17 @@ mod tests {
         // Bare filename → parent is "" → treated as cwd → check skipped.
         let result = build_config_from_args(args_with("s3://my-bucket/key", "out.bin"));
         assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn target_root_separator_alone_passes() {
+        // Degenerate input "/": ends with separator, pops to empty string,
+        // which short-circuits to Ok before any try_exists call. Verifies
+        // the early-return guard for the root directory.
+        if cfg!(unix) {
+            let result = build_config_from_args(args_with("s3://my-bucket/key", "/"));
+            assert!(result.is_ok(), "{:?}", result.err());
+        }
     }
 
     #[test]

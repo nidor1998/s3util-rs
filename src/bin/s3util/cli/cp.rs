@@ -173,4 +173,26 @@ mod tests {
             "expected missing path to be reported as not exists"
         );
     }
+
+    fn build_s3_target_config_without_client() -> Config {
+        // S3 target but with target_client_config left as None — exercises
+        // the defensive "internal error" branch in target_exists.
+        let mut config = build_local_target_config("ignored");
+        config.target = StoragePath::S3 {
+            bucket: "tgt".to_string(),
+            prefix: "k".to_string(),
+        };
+        config
+    }
+
+    #[tokio::test]
+    async fn target_exists_s3_without_client_config_errors() {
+        let config = build_s3_target_config_without_client();
+        let err = target_exists(&config).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(
+            msg.contains("internal error"),
+            "expected internal error, got: {msg}"
+        );
+    }
 }

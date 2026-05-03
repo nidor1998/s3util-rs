@@ -1769,6 +1769,62 @@ mod tests {
         (result, bytes, events)
     }
 
+    /// Like `run_transfer`, but pre-cancels the token so the transfer
+    /// short-circuits at the first `is_cancelled()` check.
+    async fn run_transfer_with_cancelled_token(
+        config: Config,
+        mock: MockSource,
+    ) -> (Result<TransferOutcome>, Vec<u8>) {
+        let writer = VecWriter::new();
+        let buf = writer.buf();
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let mock_source: Storage = Box::new(mock);
+        let result = transfer(&config, mock_source, "k", writer, token, stats_tx).await;
+
+        let bytes = buf.lock().unwrap().clone();
+        (result, bytes)
+    }
+
+    #[tokio::test]
+    async fn serial_path_returns_default_when_cancelled_before_start() {
+        // Cancellation flagged before transfer() runs ⇒ short-circuit at the
+        // first `is_cancelled()` guard inside `transfer_serial`.
+        let body: Vec<u8> = vec![0x42; 1024];
+        let mock = MockSource::new(body);
+        let config = test_config(1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+
+        let (result, captured) = run_transfer_with_cancelled_token(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "cancellation must yield default outcome");
+        assert!(
+            captured.is_empty(),
+            "cancelled transfer must not write anything"
+        );
+        // No GET issued — transfer never reached source.get_object.
+        assert_eq!(mock.get_calls(), 0);
+    }
+
+    #[tokio::test]
+    async fn parallel_path_returns_default_when_cancelled_before_start() {
+        // Cancel before parallel dispatcher even runs.
+        let body: Vec<u8> = vec![0x42; 24 * 1024 * 1024];
+        let mock = MockSource::new(body);
+        let config = test_config(4, 8 * 1024 * 1024, 8 * 1024 * 1024);
+
+        let (result, captured) = run_transfer_with_cancelled_token(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "cancellation must yield default outcome");
+        assert!(
+            captured.is_empty(),
+            "cancelled transfer must not write anything"
+        );
+        assert_eq!(mock.head_calls(), 0);
+        assert_eq!(mock.get_calls(), 0);
+    }
+
     #[tokio::test]
     async fn serial_path_writes_full_body_to_stdout_when_max_parallel_uploads_is_one() {
         // 4 KiB body, max_parallel_uploads=1 → existing serial loop runs end-to-end.

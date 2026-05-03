@@ -114,4 +114,11 @@ mod tests {
         ]);
         assert!(a.policy_only);
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target() {
+        let a = parse(&["test", "get-bucket-policy", "/tmp/local"]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

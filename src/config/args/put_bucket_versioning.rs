@@ -207,4 +207,15 @@ mod tests {
         assert!(!a.enabled);
         assert!(!a.suspended);
     }
+
+    #[test]
+    fn bucket_name_rejects_non_s3_target() {
+        // The value_parser permits a wider set of paths than this command
+        // should accept (e.g., a local path passes Url::parse). Confirm
+        // bucket_name surfaces TARGET_NOT_S3 for a Local path that slipped
+        // past the up-front parser.
+        let a = parse(&["test", "put-bucket-versioning", "/tmp/local", "--enabled"]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

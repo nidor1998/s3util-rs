@@ -132,4 +132,11 @@ mod tests {
         ]);
         assert_eq!(a.source_version_id.as_deref(), Some("abc123"));
     }
+
+    #[test]
+    fn bucket_key_rejects_non_s3_target() {
+        let a = parse(&["test", "delete-object-tagging", "/tmp/local"]);
+        let err = a.bucket_key().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
 }

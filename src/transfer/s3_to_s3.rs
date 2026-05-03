@@ -640,6 +640,27 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transfer_returns_default_when_cancelled_before_start() {
+        // Token cancelled before transfer() runs ⇒ transfer returns the default
+        // outcome immediately, without making any source/target call.
+        let config = minimal_config(false);
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        // Default outcome ⇒ no version-id captured because no head_object ran.
+        assert_eq!(outcome.source_version_id, None);
+    }
+
+    #[tokio::test]
     async fn transfer_captures_source_version_id_in_server_side_copy_mode() {
         // Server-side copy bypasses the source GET — version-id capture comes
         // from the head_object response identically to the download+upload path.

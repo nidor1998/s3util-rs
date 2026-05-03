@@ -95,6 +95,16 @@ mod tests {
     }
 
     #[test]
+    fn bucket_name_rejects_non_s3_target_via_parse() {
+        // Parse explicitly, bypassing the defensive `if let Ok` shape above —
+        // /tmp/foo is accepted by check_storage_path so the parse succeeds and
+        // bucket_name() must surface the TARGET_NOT_S3 error.
+        let a = parse(&["test", "get-bucket-tagging", "/tmp/local"]);
+        let err = a.bucket_name().unwrap_err();
+        assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
+
+    #[test]
     fn missing_positional_with_auto_complete_shell_is_ok() {
         let a = parse(&[
             "test",
