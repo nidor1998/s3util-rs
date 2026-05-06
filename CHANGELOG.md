@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `head-object` output now includes `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and `ChecksumXXHASH128` when S3 returns the corresponding `x-amz-checksum-*` response header. Previously these five checksums were stripped from the JSON output, so objects uploaded with one of those algorithms appeared to have no checksum.
+- `put-bucket-logging`: `TargetGrants` is now applied to the bucket as written. Previously the field parsed without error but was silently dropped, so the bucket ended up configured as if you had not specified it. AWS CLI v2 input that includes `TargetGrants` (canonical user / `AmazonCustomerByEmail` / `Group` URI grantees with `FULL_CONTROL` / `READ` / `WRITE` permission) now round-trips correctly.
+- `get-bucket-logging` output now includes `TargetGrants` per `LoggingEnabled` when the bucket has them configured.
+- `put-bucket-lifecycle-configuration`: the `Date` field on `Expiration` and `Transitions` now accepts the ISO 8601 date-only form (`YYYY-MM-DD`, interpreted as midnight UTC), matching what AWS CLI v2 accepts. Previously only full RFC 3339 timestamps with a time component were accepted.
+
+### Changed
+
+- `get-bucket-versioning` output now emits only `MFADelete` (the casing AWS CLI v2 uses), not the additional legacy `MfaDelete` key. Scripts that read `MFADelete` are unaffected; scripts that read the duplicate `MfaDelete` key need to switch to `MFADelete`.
+
 ## [1.3.0] - 2026-05-06
 
 ### Added

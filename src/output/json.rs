@@ -44,8 +44,7 @@ pub fn get_bucket_policy_to_json(out: &GetBucketPolicyOutput) -> Value {
 /// When versioning has never been configured, S3 returns no `Status` element
 /// and the SDK populates neither `status()` nor `mfa_delete()` → emits `{}`.
 /// Otherwise emits `{"Status": "Enabled"|"Suspended"}` and, when present,
-/// both `{"MFADelete": "Enabled"|"Disabled"}` (the AWS-CLI/SDK casing) and
-/// `{"MfaDelete": ...}` (the literal S3 XML tag name).
+/// `{"MFADelete": "Enabled"|"Disabled"}` (the casing AWS CLI v2 emits).
 pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
     let mut map = Map::new();
     if let Some(status) = out.status() {
@@ -55,9 +54,10 @@ pub fn get_bucket_versioning_to_json(out: &GetBucketVersioningOutput) -> Value {
         );
     }
     if let Some(mfa) = out.mfa_delete() {
-        let v = Value::String(mfa.as_str().to_string());
-        map.insert("MFADelete".to_string(), v.clone());
-        map.insert("MfaDelete".to_string(), v);
+        map.insert(
+            "MFADelete".to_string(),
+            Value::String(mfa.as_str().to_string()),
+        );
     }
     Value::Object(map)
 }
@@ -248,6 +248,24 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     if let Some(v) = out.checksum_crc64_nvme() {
         map.insert(
             "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_sha512() {
+        map.insert("ChecksumSHA512".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_md5() {
+        map.insert("ChecksumMD5".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash64() {
+        map.insert("ChecksumXXHASH64".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash3() {
+        map.insert("ChecksumXXHASH3".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash128() {
+        map.insert(
+            "ChecksumXXHASH128".to_string(),
             Value::String(v.to_string()),
         );
     }
@@ -759,9 +777,9 @@ fn serialize_routing_rule(rr: &aws_sdk_s3::types::RoutingRule) -> Value {
 /// logging is set on the bucket (S3 returns success with an empty body in
 /// that case — there is no `NoSuchLoggingConfiguration` error code).
 ///
-/// `TargetGrants` is intentionally omitted from the output — buckets with
-/// the modern bucket-owner-enforced Object Ownership setting reject grants,
-/// and the field is rarely populated in practice.
+/// `TargetGrants` is rendered as an array when the SDK populates a non-empty
+/// list. Each grant emits `Grantee` (with its `Type` plus the populated
+/// identity fields) and `Permission`.
 pub fn get_bucket_logging_to_json(out: &GetBucketLoggingOutput) -> Value {
     let mut top = Map::new();
     if let Some(le) = out.logging_enabled() {
@@ -791,9 +809,48 @@ pub fn get_bucket_logging_to_json(out: &GetBucketLoggingOutput) -> Value {
             }
             inner.insert("TargetObjectKeyFormat".to_string(), Value::Object(fmt_map));
         }
+        if !le.target_grants().is_empty() {
+            let arr: Vec<Value> = le
+                .target_grants()
+                .iter()
+                .map(serialize_target_grant)
+                .collect();
+            inner.insert("TargetGrants".to_string(), Value::Array(arr));
+        }
         top.insert("LoggingEnabled".to_string(), Value::Object(inner));
     }
     Value::Object(top)
+}
+
+fn serialize_target_grant(g: &aws_sdk_s3::types::TargetGrant) -> Value {
+    let mut m = Map::new();
+    if let Some(grantee) = g.grantee() {
+        let mut gm = Map::new();
+        gm.insert(
+            "Type".to_string(),
+            Value::String(grantee.r#type().as_str().to_string()),
+        );
+        if let Some(v) = grantee.display_name() {
+            gm.insert("DisplayName".to_string(), Value::String(v.to_string()));
+        }
+        if let Some(v) = grantee.email_address() {
+            gm.insert("EmailAddress".to_string(), Value::String(v.to_string()));
+        }
+        if let Some(v) = grantee.id() {
+            gm.insert("ID".to_string(), Value::String(v.to_string()));
+        }
+        if let Some(v) = grantee.uri() {
+            gm.insert("URI".to_string(), Value::String(v.to_string()));
+        }
+        m.insert("Grantee".to_string(), Value::Object(gm));
+    }
+    if let Some(p) = g.permission() {
+        m.insert(
+            "Permission".to_string(),
+            Value::String(p.as_str().to_string()),
+        );
+    }
+    Value::Object(m)
 }
 
 /// Serialise a `GetBucketNotificationConfigurationOutput` to AWS CLI v2
@@ -1281,9 +1338,6 @@ mod tests {
         let json = get_bucket_versioning_to_json(&out);
         assert_eq!(json["Status"], Value::String("Enabled".into()));
         assert_eq!(json["MFADelete"], Value::String("Enabled".into()));
-        // `MfaDelete` is the literal S3 XML tag name; emitted alongside
-        // the AWS-CLI/SDK-cased `MFADelete`.
-        assert_eq!(json["MfaDelete"], Value::String("Enabled".into()));
     }
 
     // ----- get_bucket_tagging_to_json tests -----
@@ -3646,5 +3700,197 @@ mod tests {
                 .get("BlockedEncryptionTypes")
                 .is_none()
         );
+    }
+
+    // ----- HeadObject: extra checksum fields (SHA512, MD5, XXHASH64/3/128) -----
+
+    #[test]
+    fn head_object_with_checksum_sha512() {
+        let out = HeadObjectOutput::builder()
+            .checksum_sha512("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumSHA512"],
+            Value::String("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_checksum_md5() {
+        let out = HeadObjectOutput::builder()
+            .checksum_md5("MD5BASE64ENCODED==")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumMD5"],
+            Value::String("MD5BASE64ENCODED==".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_checksum_xxhash64() {
+        let out = HeadObjectOutput::builder()
+            .checksum_xxhash64("XXHASH64BASE64==")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumXXHASH64"],
+            Value::String("XXHASH64BASE64==".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_checksum_xxhash3() {
+        let out = HeadObjectOutput::builder()
+            .checksum_xxhash3("XXHASH3BASE64==")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumXXHASH3"],
+            Value::String("XXHASH3BASE64==".into())
+        );
+    }
+
+    #[test]
+    fn head_object_with_checksum_xxhash128() {
+        let out = HeadObjectOutput::builder()
+            .checksum_xxhash128("XXHASH128BASE64==")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ChecksumXXHASH128"],
+            Value::String("XXHASH128BASE64==".into())
+        );
+    }
+
+    #[test]
+    fn head_object_omits_extra_checksums_when_absent() {
+        // Empty output ⇒ none of the new checksum keys appear.
+        let out = HeadObjectOutput::builder().build();
+        let json = head_object_to_json(&out);
+        for key in [
+            "ChecksumSHA512",
+            "ChecksumMD5",
+            "ChecksumXXHASH64",
+            "ChecksumXXHASH3",
+            "ChecksumXXHASH128",
+        ] {
+            assert!(json.get(key).is_none(), "{key} must be omitted when absent");
+        }
+    }
+
+    // ----- get_bucket_versioning_to_json: only MFADelete is emitted -----
+
+    #[test]
+    fn get_bucket_versioning_emits_only_mfadelete_not_mfadelete_xml_form() {
+        // AWS CLI v2 emits only `MFADelete`; the literal-XML `MfaDelete`
+        // duplicate previously rendered here is no longer produced.
+        let out = GetBucketVersioningOutput::builder()
+            .status(BucketVersioningStatus::Enabled)
+            .mfa_delete(MfaDeleteStatus::Enabled)
+            .build();
+        let json = get_bucket_versioning_to_json(&out);
+        assert_eq!(json["MFADelete"], Value::String("Enabled".into()));
+        assert!(
+            json.get("MfaDelete").is_none(),
+            "MfaDelete duplicate must not be emitted"
+        );
+    }
+
+    // ----- get_bucket_logging_to_json: TargetGrants -----
+
+    #[test]
+    fn get_bucket_logging_with_target_grants_canonical_user() {
+        use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+        use aws_sdk_s3::types::{
+            BucketLogsPermission, Grantee, LoggingEnabled, TargetGrant, Type as GranteeType,
+        };
+        let grantee = Grantee::builder()
+            .r#type(GranteeType::CanonicalUser)
+            .id("abcd1234")
+            .display_name("alice")
+            .build()
+            .unwrap();
+        let grant = TargetGrant::builder()
+            .grantee(grantee)
+            .permission(BucketLogsPermission::FullControl)
+            .build();
+        let le = LoggingEnabled::builder()
+            .target_bucket("log-bucket")
+            .target_prefix("logs/")
+            .target_grants(grant)
+            .build()
+            .unwrap();
+        let out = GetBucketLoggingOutput::builder()
+            .logging_enabled(le)
+            .build();
+        let json = get_bucket_logging_to_json(&out);
+        let grants = json["LoggingEnabled"]["TargetGrants"]
+            .as_array()
+            .expect("TargetGrants must be array");
+        assert_eq!(grants.len(), 1);
+        assert_eq!(
+            grants[0]["Permission"],
+            Value::String("FULL_CONTROL".into())
+        );
+        let grantee_json = &grants[0]["Grantee"];
+        assert_eq!(grantee_json["Type"], Value::String("CanonicalUser".into()));
+        assert_eq!(grantee_json["ID"], Value::String("abcd1234".into()));
+        assert_eq!(grantee_json["DisplayName"], Value::String("alice".into()));
+        assert!(grantee_json.get("EmailAddress").is_none());
+        assert!(grantee_json.get("URI").is_none());
+    }
+
+    #[test]
+    fn get_bucket_logging_with_target_grants_group_uri() {
+        use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+        use aws_sdk_s3::types::{
+            BucketLogsPermission, Grantee, LoggingEnabled, TargetGrant, Type as GranteeType,
+        };
+        let grantee = Grantee::builder()
+            .r#type(GranteeType::Group)
+            .uri("http://acs.amazonaws.com/groups/s3/LogDelivery")
+            .build()
+            .unwrap();
+        let grant = TargetGrant::builder()
+            .grantee(grantee)
+            .permission(BucketLogsPermission::Write)
+            .build();
+        let le = LoggingEnabled::builder()
+            .target_bucket("log-bucket")
+            .target_prefix("logs/")
+            .target_grants(grant)
+            .build()
+            .unwrap();
+        let out = GetBucketLoggingOutput::builder()
+            .logging_enabled(le)
+            .build();
+        let json = get_bucket_logging_to_json(&out);
+        let grants = &json["LoggingEnabled"]["TargetGrants"];
+        assert_eq!(grants[0]["Grantee"]["Type"], Value::String("Group".into()));
+        assert_eq!(
+            grants[0]["Grantee"]["URI"],
+            Value::String("http://acs.amazonaws.com/groups/s3/LogDelivery".into())
+        );
+        assert_eq!(grants[0]["Permission"], Value::String("WRITE".into()));
+    }
+
+    #[test]
+    fn get_bucket_logging_omits_target_grants_when_empty() {
+        // The SDK's accessor returns an empty slice when target_grants is None
+        // OR Some(vec![]); both cases must omit the key from the JSON output.
+        use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+        use aws_sdk_s3::types::LoggingEnabled;
+        let le = LoggingEnabled::builder()
+            .target_bucket("log-bucket")
+            .target_prefix("logs/")
+            .build()
+            .unwrap();
+        let out = GetBucketLoggingOutput::builder()
+            .logging_enabled(le)
+            .build();
+        let json = get_bucket_logging_to_json(&out);
+        assert!(json["LoggingEnabled"].get("TargetGrants").is_none());
     }
 }

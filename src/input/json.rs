@@ -14,10 +14,11 @@
 use anyhow::Result;
 use aws_sdk_s3::types::{
     AbortIncompleteMultipartUpload, AccessControlTranslation, BlockedEncryptionTypes,
-    BucketLifecycleConfiguration, BucketLoggingStatus, Condition, CorsConfiguration, CorsRule,
-    DeleteMarkerReplication, DeleteMarkerReplicationStatus, Destination, EncryptionConfiguration,
-    EncryptionType, ErrorDocument, Event, EventBridgeConfiguration, ExistingObjectReplication,
-    ExistingObjectReplicationStatus, ExpirationStatus, FilterRule, FilterRuleName, IndexDocument,
+    BucketLifecycleConfiguration, BucketLoggingStatus, BucketLogsPermission, Condition,
+    CorsConfiguration, CorsRule, DeleteMarkerReplication, DeleteMarkerReplicationStatus,
+    Destination, EncryptionConfiguration, EncryptionType, ErrorDocument, Event,
+    EventBridgeConfiguration, ExistingObjectReplication, ExistingObjectReplicationStatus,
+    ExpirationStatus, FilterRule, FilterRuleName, Grantee, IndexDocument,
     LambdaFunctionConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleAndOperator,
     LifecycleRuleFilter, LoggingEnabled, Metrics, MetricsStatus, NoncurrentVersionExpiration,
     NoncurrentVersionTransition, NotificationConfiguration, NotificationConfigurationFilter,
@@ -28,8 +29,8 @@ use aws_sdk_s3::types::{
     ReplicationTimeStatus, ReplicationTimeValue, RoutingRule, S3KeyFilter, ServerSideEncryption,
     ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
     SimplePrefix, SourceSelectionCriteria, SseKmsEncryptedObjects, SseKmsEncryptedObjectsStatus,
-    StorageClass, Tag as SdkTag, TargetObjectKeyFormat, TopicConfiguration, Transition,
-    TransitionStorageClass, WebsiteConfiguration,
+    StorageClass, Tag as SdkTag, TargetGrant, TargetObjectKeyFormat, TopicConfiguration,
+    Transition, TransitionStorageClass, Type as GranteeType, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
 use serde::Deserialize;
@@ -296,8 +297,17 @@ impl AbortIncompleteMultipartUploadJson {
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime> {
-    DateTime::from_str(s, aws_smithy_types::date_time::Format::DateTime)
-        .map_err(|e| anyhow::anyhow!("invalid RFC3339 timestamp {s:?}: {e}"))
+    // S3 documents Lifecycle/Transition `Date` as ISO 8601, which admits
+    // bare `YYYY-MM-DD`; the smithy parser only accepts full RFC 3339, so
+    // promote a date-only string to midnight UTC before delegating.
+    let bytes = s.as_bytes();
+    let normalised = if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' {
+        format!("{s}T00:00:00Z")
+    } else {
+        s.to_string()
+    };
+    DateTime::from_str(&normalised, aws_smithy_types::date_time::Format::DateTime)
+        .map_err(|e| anyhow::anyhow!("invalid ISO 8601 timestamp {s:?}: {e}"))
 }
 
 /// Mirror of `ServerSideEncryptionConfiguration` for the AWS-CLI input shape.
@@ -592,10 +602,10 @@ impl RedirectJson {
 /// not expose a `DeleteBucketLogging` API; this is the documented way
 /// to remove a logging configuration.
 ///
-/// `TargetGrants` is intentionally not modelled — buckets that use the
-/// bucket-owner-enforced Object Ownership setting (the modern default)
-/// reject target grants, and the partitioned/simple-prefix configuration
-/// covers the common use case.
+/// `TargetGrants` is supported for AWS-CLI shape parity. Buckets using the
+/// bucket-owner-enforced Object Ownership setting reject target grants
+/// server-side, but the field is accepted at parse time so users can lift
+/// existing AWS-CLI inputs unchanged.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(non_snake_case)]
 pub struct BucketLoggingStatusJson {
@@ -608,6 +618,29 @@ pub struct LoggingEnabledJson {
     pub TargetBucket: String,
     pub TargetPrefix: String,
     pub TargetObjectKeyFormat: Option<TargetObjectKeyFormatJson>,
+    pub TargetGrants: Option<Vec<TargetGrantJson>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct TargetGrantJson {
+    pub Grantee: Option<GranteeJson>,
+    /// `FULL_CONTROL`, `READ`, or `WRITE`. Unknown values are passed
+    /// through to the SDK enum; S3 will reject them server-side.
+    pub Permission: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct GranteeJson {
+    pub DisplayName: Option<String>,
+    pub EmailAddress: Option<String>,
+    pub ID: Option<String>,
+    pub URI: Option<String>,
+    /// `CanonicalUser`, `AmazonCustomerByEmail`, or `Group`. Unknown
+    /// values are passed through to the SDK enum; S3 will reject them
+    /// server-side.
+    pub Type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -653,6 +686,43 @@ impl LoggingEnabledJson {
             .target_prefix(self.TargetPrefix);
         if let Some(fmt) = self.TargetObjectKeyFormat {
             b = b.target_object_key_format(fmt.into_sdk());
+        }
+        if let Some(grants) = self.TargetGrants {
+            for g in grants {
+                b = b.target_grants(g.into_sdk()?);
+            }
+        }
+        Ok(b.build()?)
+    }
+}
+
+impl TargetGrantJson {
+    fn into_sdk(self) -> Result<TargetGrant> {
+        let mut b = TargetGrant::builder();
+        if let Some(g) = self.Grantee {
+            b = b.grantee(g.into_sdk()?);
+        }
+        if let Some(p) = self.Permission {
+            b = b.permission(BucketLogsPermission::from(p.as_str()));
+        }
+        Ok(b.build())
+    }
+}
+
+impl GranteeJson {
+    fn into_sdk(self) -> Result<Grantee> {
+        let mut b = Grantee::builder().r#type(GranteeType::from(self.Type.as_str()));
+        if let Some(v) = self.DisplayName {
+            b = b.display_name(v);
+        }
+        if let Some(v) = self.EmailAddress {
+            b = b.email_address(v);
+        }
+        if let Some(v) = self.ID {
+            b = b.id(v);
+        }
+        if let Some(v) = self.URI {
+            b = b.uri(v);
         }
         Ok(b.build()?)
     }
@@ -2596,5 +2666,186 @@ mod tests {
         let cfg = parsed.into_sdk().unwrap();
         let nvt = &cfg.rules()[0].noncurrent_version_transitions()[0];
         assert!(nvt.newer_noncurrent_versions().is_none());
+    }
+
+    // ----- parse_rfc3339: ISO 8601 date-only support -----
+
+    #[test]
+    fn lifecycle_expiration_with_date_only_into_sdk_treats_as_midnight_utc() {
+        // S3 documents Lifecycle `Date` as ISO 8601, which permits a bare
+        // `YYYY-MM-DD`; the parser must lift it to midnight UTC.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Expiration":{"Date":"2030-01-02"}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0]
+            .expiration()
+            .expect("expiration")
+            .date()
+            .expect("date set");
+        // 2030-01-02T00:00:00Z == 1_893_542_400 epoch seconds.
+        assert_eq!(date.secs(), 1_893_542_400);
+    }
+
+    #[test]
+    fn lifecycle_transition_with_date_only_into_sdk_treats_as_midnight_utc() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Transitions":[{"Date":"2030-01-02","StorageClass":"GLACIER"}]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0].transitions()[0].date().expect("date set");
+        assert_eq!(date.secs(), 1_893_542_400);
+    }
+
+    #[test]
+    fn lifecycle_expiration_full_rfc3339_still_parses() {
+        // Regression: the date-only branch must not reject full timestamps.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Expiration":{"Date":"2030-01-02T03:04:05Z"}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0]
+            .expiration()
+            .expect("expiration")
+            .date()
+            .expect("date set");
+        assert_eq!(date.secs(), 1_893_553_445);
+    }
+
+    #[test]
+    fn lifecycle_invalid_date_only_format_still_errors() {
+        // `2030-1-2` is neither RFC 3339 nor 10 chars with the right shape;
+        // must surface as an error rather than silently constructing a date.
+        let json = r#"{"Rules":[{"Status":"Enabled","Expiration":{"Date":"2030-1-2"}}]}"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let res = parsed.into_sdk();
+        assert!(res.is_err(), "malformed date must error");
+    }
+
+    // ----- TargetGrants in put-bucket-logging -----
+
+    #[test]
+    fn logging_into_sdk_preserves_target_grants_canonical_user() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"CanonicalUser",
+                  "ID":"abcd1234",
+                  "DisplayName":"alice"
+                },
+                "Permission":"FULL_CONTROL"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let le = cfg.logging_enabled().expect("logging_enabled");
+        let grants = le.target_grants();
+        assert_eq!(grants.len(), 1);
+        let g = &grants[0];
+        let grantee = g.grantee().expect("grantee");
+        assert_eq!(grantee.r#type().as_str(), "CanonicalUser");
+        assert_eq!(grantee.id(), Some("abcd1234"));
+        assert_eq!(grantee.display_name(), Some("alice"));
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("FULL_CONTROL"));
+    }
+
+    #[test]
+    fn logging_into_sdk_preserves_target_grants_group_uri() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"Group",
+                  "URI":"http://acs.amazonaws.com/groups/s3/LogDelivery"
+                },
+                "Permission":"WRITE"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let g = &cfg.logging_enabled().unwrap().target_grants()[0];
+        let grantee = g.grantee().unwrap();
+        assert_eq!(grantee.r#type().as_str(), "Group");
+        assert_eq!(
+            grantee.uri(),
+            Some("http://acs.amazonaws.com/groups/s3/LogDelivery")
+        );
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("WRITE"));
+    }
+
+    #[test]
+    fn logging_into_sdk_target_grants_amazon_customer_by_email() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"AmazonCustomerByEmail",
+                  "EmailAddress":"alice@example.com"
+                },
+                "Permission":"READ"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let g = &cfg.logging_enabled().unwrap().target_grants()[0];
+        let grantee = g.grantee().unwrap();
+        assert_eq!(grantee.r#type().as_str(), "AmazonCustomerByEmail");
+        assert_eq!(grantee.email_address(), Some("alice@example.com"));
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("READ"));
+    }
+
+    #[test]
+    fn logging_into_sdk_no_target_grants_yields_empty_slice() {
+        // Absent in JSON ⇒ SDK target_grants accessor is empty.
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/"
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert!(cfg.logging_enabled().unwrap().target_grants().is_empty());
+    }
+
+    #[test]
+    fn logging_into_sdk_target_grants_missing_type_errors() {
+        // `Type` is required on Grantee — serde must reject at parse time.
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[{"Grantee":{"ID":"abcd"},"Permission":"READ"}]
+          }
+        }"#;
+        assert!(serde_json::from_str::<BucketLoggingStatusJson>(json).is_err());
     }
 }
