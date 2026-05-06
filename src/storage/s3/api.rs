@@ -161,6 +161,11 @@ const GET_BUCKET_REQUEST_PAYMENT_NOT_FOUND_CODES: &[&str] = &[];
 /// but no policy is attached (so there is no policy status to return).
 /// `NoSuchBucket` is handled separately.
 const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"];
+/// S3 error codes that `restore-object` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--source-version-id` is set. `NoSuchBucket` is handled
+/// separately by `classify_not_found` and mapped to `BucketNotFound`.
+const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -1183,7 +1188,9 @@ pub async fn get_bucket_policy_status(
 }
 
 /// Issue `RestoreObject` against `bucket`/`key` with the given restore request.
-/// Returns the SDK response on success.
+/// Returns the SDK response on success, `HeadError::BucketNotFound` when S3
+/// returns `NoSuchBucket`, `HeadError::NotFound` when S3 returns `NoSuchKey`
+/// or `NoSuchVersion`, and `HeadError::Other` for any other failure.
 ///
 /// If `version_id` is provided, the restore targets that specific version.
 pub async fn restore_object(
@@ -1192,7 +1199,7 @@ pub async fn restore_object(
     key: &str,
     version_id: Option<&str>,
     restore_request: RestoreRequest,
-) -> Result<RestoreObjectOutput> {
+) -> Result<RestoreObjectOutput, HeadError> {
     let mut req = client
         .restore_object()
         .bucket(bucket)
@@ -1201,9 +1208,17 @@ pub async fn restore_object(
     if let Some(v) = version_id {
         req = req.version_id(v);
     }
-    req.send()
-        .await
-        .with_context(|| format!("restore-object on s3://{bucket}/{key}"))
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, RESTORE_OBJECT_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(
+                anyhow::Error::new(e).context(format!("restore-object on s3://{bucket}/{key}")),
+            ),
+        }
+    })
 }
 
 #[cfg(test)]
@@ -1355,6 +1370,14 @@ mod tests {
         assert_eq!(
             GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES,
             &["NoSuchBucketPolicy"]
+        );
+    }
+
+    #[test]
+    fn restore_object_not_found_codes_pinned() {
+        assert_eq!(
+            RESTORE_OBJECT_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion"]
         );
     }
 

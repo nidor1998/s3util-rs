@@ -54,10 +54,10 @@ mod tests {
         assert_eq!(out.status.code(), Some(1));
     }
 
-    /// restore-object on a non-existent object should fail with exit 1
-    /// (S3 returns NoSuchKey).
+    /// restore-object on a non-existent object should exit 4
+    /// (S3 returns NoSuchKey → NotFound).
     #[tokio::test]
-    async fn restore_missing_object_exits_1() {
+    async fn restore_missing_object_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -77,12 +77,16 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
 
         assert!(!out.status.success());
-        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "missing object must exit 4 (NoSuchKey)"
+        );
     }
 
-    /// restore-object on a non-existent bucket should fail with exit 1.
+    /// restore-object on a non-existent bucket should exit 4 (NoSuchBucket).
     #[tokio::test]
-    async fn restore_on_missing_bucket_exits_1() {
+    async fn restore_on_missing_bucket_exits_4() {
         let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
         let object_arg = format!("s3://{nonexistent}/key");
         let out = run_s3util(&[
@@ -95,7 +99,11 @@ mod tests {
         ]);
 
         assert!(!out.status.success());
-        assert_eq!(out.status.code(), Some(1));
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "missing bucket must exit 4 (NoSuchBucket)"
+        );
     }
 
     /// restore-object accepts all three tiers (Standard, Bulk, Expedited) at

@@ -1053,7 +1053,7 @@ async fn main() -> ExitCode {
             let client_config = args.common.build_client_config();
 
             let exit_code = match cli::run_restore_object(args, client_config).await {
-                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Ok(status) => status.code(),
                 Err(e) => {
                     tracing::error!(error = format!("{e:#}"));
                     cli::EXIT_CODE_ERROR

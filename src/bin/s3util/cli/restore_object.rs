@@ -4,17 +4,21 @@ use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::restore_object::RestoreObjectArgs;
-use s3util_rs::storage::s3::api;
+use s3util_rs::storage::s3::api::{self, HeadError};
+
+use super::ExitStatus;
 
 /// Runtime entry for `s3util restore-object s3://<BUCKET>/<KEY> --days N --tier T`.
 ///
 /// Builds the SDK client from `client_config`, builds a `RestoreRequest`
 /// from `--days` and `--tier`, and issues `RestoreObject`. Exits silently
-/// on success.
+/// on success. Returns `ExitStatus::NotFound` (exit code 4) when S3 reports
+/// `NoSuchBucket` (logged as "bucket … not found") or `NoSuchKey` /
+/// `NoSuchVersion` (logged as "object … not found").
 pub async fn run_restore_object(
     args: RestoreObjectArgs,
     client_config: ClientConfig,
-) -> Result<()> {
+) -> Result<ExitStatus> {
     let (bucket, key) = args
         .bucket_key()
         .map_err(|e| anyhow::anyhow!("{}", e.trim_end()))?;
@@ -42,21 +46,34 @@ pub async fn run_restore_object(
             tier = ?args.tier,
             "[dry-run] would restore object."
         );
-        return Ok(());
+        return Ok(ExitStatus::Success);
     }
-    api::restore_object(
+    match api::restore_object(
         &client,
         &bucket,
         &key,
         args.source_version_id.as_deref(),
         restore_request,
     )
-    .await?;
-    info!(
-        bucket = %bucket,
-        key = %key,
-        version_id = %args.source_version_id.as_deref().unwrap_or_default(),
-        "Restore initiated."
-    );
-    Ok(())
+    .await
+    {
+        Ok(_) => {
+            info!(
+                bucket = %bucket,
+                key = %key,
+                version_id = %args.source_version_id.as_deref().unwrap_or_default(),
+                "Restore initiated."
+            );
+            Ok(ExitStatus::Success)
+        }
+        Err(HeadError::BucketNotFound) => {
+            tracing::error!("bucket s3://{bucket} not found");
+            Ok(ExitStatus::NotFound)
+        }
+        Err(HeadError::NotFound) => {
+            tracing::error!("object s3://{bucket}/{key} not found");
+            Ok(ExitStatus::NotFound)
+        }
+        Err(HeadError::Other(e)) => Err(e),
+    }
 }

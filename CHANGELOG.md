@@ -13,7 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - New transfer-acceleration subcommands: `get-bucket-accelerate-configuration`, `put-bucket-accelerate-configuration`. Read and toggle (`Enabled` / `Suspended`) S3 Transfer Acceleration on a bucket.
 - New requester-pays subcommands: `get-bucket-request-payment`, `put-bucket-request-payment`. Read and switch a bucket between owner-pays (default) and requester-pays billing.
 - `get-bucket-policy-status`: report whether a bucket policy makes the bucket public, as `{"PolicyStatus": {"IsPublic": true|false}}`.
-- `restore-object`: initiate a restore of an archived (S3 Glacier-class) object so it becomes readable for `--days N`. Retrieval tier selectable via `--tier <Standard|Bulk|Expedited>`; specific object versions selectable via `--source-version-id`. Honors `--dry-run`.
+- `restore-object`: initiate a restore of an archived (S3 Glacier-class) object so it becomes readable for `--days N`. Retrieval tier selectable via `--tier <Standard|Bulk|Expedited>`; specific object versions selectable via `--source-version-id`. Honors `--dry-run`. Exits 4 (NotFound) when S3 reports `NoSuchBucket`, `NoSuchKey`, or `NoSuchVersion`, matching `head-object` and `get-object-tagging`; other failures still exit 1.
 
 ### Fixed
 
