@@ -13,13 +13,13 @@
 
 use anyhow::Result;
 use aws_sdk_s3::types::{
-    AbortIncompleteMultipartUpload, AccessControlTranslation, BucketLifecycleConfiguration,
-    BucketLoggingStatus, Condition, CorsConfiguration, CorsRule, DeleteMarkerReplication,
-    DeleteMarkerReplicationStatus, Destination, EncryptionConfiguration, ErrorDocument, Event,
-    EventBridgeConfiguration, ExistingObjectReplication, ExistingObjectReplicationStatus,
-    ExpirationStatus, FilterRule, FilterRuleName, IndexDocument, LambdaFunctionConfiguration,
-    LifecycleExpiration, LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter,
-    LoggingEnabled, Metrics, MetricsStatus, NoncurrentVersionExpiration,
+    AbortIncompleteMultipartUpload, AccessControlTranslation, BlockedEncryptionTypes,
+    BucketLifecycleConfiguration, BucketLoggingStatus, Condition, CorsConfiguration, CorsRule,
+    DeleteMarkerReplication, DeleteMarkerReplicationStatus, Destination, EncryptionConfiguration,
+    EncryptionType, ErrorDocument, Event, EventBridgeConfiguration, ExistingObjectReplication,
+    ExistingObjectReplicationStatus, ExpirationStatus, FilterRule, FilterRuleName, IndexDocument,
+    LambdaFunctionConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleAndOperator,
+    LifecycleRuleFilter, LoggingEnabled, Metrics, MetricsStatus, NoncurrentVersionExpiration,
     NoncurrentVersionTransition, NotificationConfiguration, NotificationConfigurationFilter,
     OwnerOverride, PartitionDateSource, PartitionedPrefix, Protocol,
     PublicAccessBlockConfiguration, QueueConfiguration, Redirect, RedirectAllRequestsTo,
@@ -63,6 +63,8 @@ pub struct LifecycleRuleJson {
 pub struct LifecycleRuleFilterJson {
     pub Prefix: Option<String>,
     pub Tag: Option<TagJson>,
+    pub ObjectSizeGreaterThan: Option<i64>,
+    pub ObjectSizeLessThan: Option<i64>,
     pub And: Option<LifecycleRuleAndOperatorJson>,
 }
 
@@ -71,6 +73,8 @@ pub struct LifecycleRuleFilterJson {
 pub struct LifecycleRuleAndOperatorJson {
     pub Prefix: Option<String>,
     pub Tags: Option<Vec<TagJson>>,
+    pub ObjectSizeGreaterThan: Option<i64>,
+    pub ObjectSizeLessThan: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -93,6 +97,7 @@ pub struct LifecycleExpirationJson {
 #[allow(non_snake_case)]
 pub struct NoncurrentVersionExpirationJson {
     pub NoncurrentDays: Option<i32>,
+    pub NewerNoncurrentVersions: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -108,6 +113,7 @@ pub struct TransitionJson {
 pub struct NoncurrentVersionTransitionJson {
     pub NoncurrentDays: Option<i32>,
     pub StorageClass: Option<String>,
+    pub NewerNoncurrentVersions: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -173,16 +179,22 @@ impl LifecycleRuleJson {
 
 impl LifecycleRuleFilterJson {
     fn into_sdk(self) -> Result<LifecycleRuleFilter> {
-        // S3 lifecycle Filter is a one-of (Prefix XOR Tag XOR And); when
-        // multiple are supplied, the SDK builder accepts the last setter.
-        // We honour AWS-CLI semantics by passing values as-is and letting
-        // S3 reject bad combinations.
+        // S3 lifecycle Filter is a one-of (Prefix XOR Tag XOR ObjectSize* XOR
+        // And); when multiple are supplied, the SDK builder accepts the last
+        // setter. We honour AWS-CLI semantics by passing values as-is and
+        // letting S3 reject bad combinations.
         let mut b = LifecycleRuleFilter::builder();
         if let Some(p) = self.Prefix {
             b = b.prefix(p);
         }
         if let Some(t) = self.Tag {
             b = b.tag(SdkTag::builder().key(t.Key).value(t.Value).build()?);
+        }
+        if let Some(n) = self.ObjectSizeGreaterThan {
+            b = b.object_size_greater_than(n);
+        }
+        if let Some(n) = self.ObjectSizeLessThan {
+            b = b.object_size_less_than(n);
         }
         if let Some(and) = self.And {
             b = b.and(and.into_sdk()?);
@@ -201,6 +213,12 @@ impl LifecycleRuleAndOperatorJson {
             for t in tags {
                 b = b.tags(SdkTag::builder().key(t.Key).value(t.Value).build()?);
             }
+        }
+        if let Some(n) = self.ObjectSizeGreaterThan {
+            b = b.object_size_greater_than(n);
+        }
+        if let Some(n) = self.ObjectSizeLessThan {
+            b = b.object_size_less_than(n);
         }
         Ok(b.build())
     }
@@ -227,6 +245,9 @@ impl NoncurrentVersionExpirationJson {
         let mut b = NoncurrentVersionExpiration::builder();
         if let Some(n) = self.NoncurrentDays {
             b = b.noncurrent_days(n);
+        }
+        if let Some(n) = self.NewerNoncurrentVersions {
+            b = b.newer_noncurrent_versions(n);
         }
         b.build()
     }
@@ -256,6 +277,9 @@ impl NoncurrentVersionTransitionJson {
         }
         if let Some(sc) = self.StorageClass {
             b = b.storage_class(TransitionStorageClass::from(sc.as_str()));
+        }
+        if let Some(n) = self.NewerNoncurrentVersions {
+            b = b.newer_noncurrent_versions(n);
         }
         b.build()
     }
@@ -289,6 +313,7 @@ pub struct ServerSideEncryptionConfigurationJson {
 pub struct ServerSideEncryptionRuleJson {
     pub ApplyServerSideEncryptionByDefault: Option<ApplyServerSideEncryptionByDefaultJson>,
     pub BucketKeyEnabled: Option<bool>,
+    pub BlockedEncryptionTypes: Option<BlockedEncryptionTypesJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -297,6 +322,16 @@ pub struct ApplyServerSideEncryptionByDefaultJson {
     /// `AES256` or `aws:kms` or `aws:kms:dsse`.
     pub SSEAlgorithm: String,
     pub KMSMasterKeyID: Option<String>,
+}
+
+/// Mirror of `BlockedEncryptionTypes`. `EncryptionType` values are
+/// `NONE` and `SSE-C` (currently only SSE-C is supported by S3).
+/// Unknown values are passed through to the SDK enum; S3 will reject
+/// them server-side.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct BlockedEncryptionTypesJson {
+    pub EncryptionType: Option<Vec<String>>,
 }
 
 impl ServerSideEncryptionConfigurationJson {
@@ -328,6 +363,15 @@ impl ServerSideEncryptionRuleJson {
         }
         if let Some(bke) = self.BucketKeyEnabled {
             b = b.bucket_key_enabled(bke);
+        }
+        if let Some(bet) = self.BlockedEncryptionTypes {
+            let mut bb = BlockedEncryptionTypes::builder();
+            if let Some(types) = bet.EncryptionType {
+                for t in types {
+                    bb = bb.encryption_type(EncryptionType::from(t.as_str()));
+                }
+            }
+            b = b.blocked_encryption_types(bb.build());
         }
         Ok(b.build())
     }
@@ -2328,5 +2372,229 @@ mod tests {
         // ReplicationRuleStatus::Unknown(...) — exact variant is opaque, but
         // as_str round-trips back to the original value.
         assert_eq!(cfg.rules()[0].status().as_str(), "UnknownState");
+    }
+
+    // ----- Lifecycle Filter ObjectSize predicates -----
+
+    #[test]
+    fn lifecycle_filter_with_object_size_greater_than_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"ObjectSizeGreaterThan": 1048576},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert_eq!(f.object_size_greater_than(), Some(1_048_576));
+        assert!(f.object_size_less_than().is_none());
+    }
+
+    #[test]
+    fn lifecycle_filter_with_object_size_less_than_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"ObjectSizeLessThan": 5368709120},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert_eq!(f.object_size_less_than(), Some(5_368_709_120));
+    }
+
+    #[test]
+    fn lifecycle_filter_and_with_object_size_predicates_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"And":{
+              "Prefix":"data/",
+              "Tags":[{"Key":"a","Value":"1"}],
+              "ObjectSizeGreaterThan": 1024,
+              "ObjectSizeLessThan": 1073741824
+            }},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().expect("and");
+        assert_eq!(and.prefix(), Some("data/"));
+        assert_eq!(and.tags().len(), 1);
+        assert_eq!(and.object_size_greater_than(), Some(1024));
+        assert_eq!(and.object_size_less_than(), Some(1_073_741_824));
+    }
+
+    // ----- NewerNoncurrentVersions -----
+
+    #[test]
+    fn lifecycle_noncurrent_version_expiration_with_newer_versions_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionExpiration":{"NoncurrentDays":30,"NewerNoncurrentVersions":3}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let n = cfg.rules()[0]
+            .noncurrent_version_expiration()
+            .expect("noncurrent version expiration");
+        assert_eq!(n.noncurrent_days(), Some(30));
+        assert_eq!(n.newer_noncurrent_versions(), Some(3));
+    }
+
+    #[test]
+    fn lifecycle_noncurrent_version_transition_with_newer_versions_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionTransitions":[
+              {"NoncurrentDays":7,"StorageClass":"GLACIER","NewerNoncurrentVersions":2}
+            ]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let nvt = &cfg.rules()[0].noncurrent_version_transitions()[0];
+        assert_eq!(nvt.noncurrent_days(), Some(7));
+        assert_eq!(nvt.newer_noncurrent_versions(), Some(2));
+    }
+
+    // ----- BlockedEncryptionTypes round-trip -----
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{"EncryptionType":["SSE-C"]}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        let bet = r.blocked_encryption_types().expect("blocked types");
+        assert_eq!(bet.encryption_type().len(), 1);
+        assert_eq!(bet.encryption_type()[0].as_str(), "SSE-C");
+    }
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_empty_list_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        let bet = r.blocked_encryption_types().expect("blocked types");
+        assert!(bet.encryption_type().is_empty());
+    }
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_multiple_into_sdk() {
+        // Multiple values, including the unknown-pass-through case.
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{"EncryptionType":["SSE-C","NONE","FUTURE"]}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let bet = cfg.rules()[0]
+            .blocked_encryption_types()
+            .expect("blocked types");
+        let strs: Vec<&str> = bet.encryption_type().iter().map(|e| e.as_str()).collect();
+        assert_eq!(strs, vec!["SSE-C", "NONE", "FUTURE"]);
+    }
+
+    #[test]
+    fn encryption_without_blocked_encryption_types_into_sdk_is_none() {
+        // Absent in JSON ⇒ SDK rule has no blocked_encryption_types.
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert!(cfg.rules()[0].blocked_encryption_types().is_none());
+    }
+
+    // ----- Lifecycle Filter ObjectSize predicates: absence ⇒ SDK None -----
+
+    #[test]
+    fn lifecycle_filter_without_object_size_predicates_into_sdk_is_none() {
+        // Absent in JSON ⇒ SDK filter has neither object-size predicate set.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"Prefix":"data/"},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert!(f.object_size_greater_than().is_none());
+        assert!(f.object_size_less_than().is_none());
+    }
+
+    #[test]
+    fn lifecycle_filter_and_without_object_size_predicates_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"And":{"Prefix":"data/","Tags":[{"Key":"a","Value":"1"}]}},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().expect("and");
+        assert!(and.object_size_greater_than().is_none());
+        assert!(and.object_size_less_than().is_none());
+    }
+
+    // ----- NewerNoncurrentVersions: absence ⇒ SDK None -----
+
+    #[test]
+    fn lifecycle_noncurrent_version_expiration_without_newer_versions_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionExpiration":{"NoncurrentDays":30}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let n = cfg.rules()[0]
+            .noncurrent_version_expiration()
+            .expect("noncurrent version expiration");
+        assert_eq!(n.noncurrent_days(), Some(30));
+        assert!(n.newer_noncurrent_versions().is_none());
+    }
+
+    #[test]
+    fn lifecycle_noncurrent_version_transition_without_newer_versions_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionTransitions":[{"NoncurrentDays":7,"StorageClass":"GLACIER"}]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let nvt = &cfg.rules()[0].noncurrent_version_transitions()[0];
+        assert!(nvt.newer_noncurrent_versions().is_none());
     }
 }

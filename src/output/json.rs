@@ -144,6 +144,9 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     if let Some(v) = out.content_language() {
         map.insert("ContentLanguage".to_string(), Value::String(v.to_string()));
     }
+    if let Some(v) = out.content_range() {
+        map.insert("ContentRange".to_string(), Value::String(v.to_string()));
+    }
     if let Some(v) = out.cache_control() {
         map.insert("CacheControl".to_string(), Value::String(v.to_string()));
     }
@@ -334,15 +337,23 @@ pub fn head_bucket_to_json(out: &HeadBucketOutput) -> Value {
 /// Serialise a `GetBucketLifecycleConfigurationOutput` to AWS CLI v2
 /// `--output json` shape.
 ///
-/// Top level: `{"Rules": [ … ]}` (always emits `Rules`, as `[]` if empty).
-/// Each rule emits its present fields with PascalCase keys; absent fields
-/// are omitted (never `null`).
+/// Top level: `{"Rules": [ … ], "TransitionDefaultMinimumObjectSize": "…"}`
+/// (always emits `Rules`, as `[]` if empty). `TransitionDefaultMinimumObjectSize`
+/// is the bucket-level default minimum object size for transitions, emitted
+/// only when the SDK populates it. Each rule emits its present fields with
+/// PascalCase keys; absent fields are omitted (never `null`).
 pub fn get_bucket_lifecycle_configuration_to_json(
     out: &GetBucketLifecycleConfigurationOutput,
 ) -> Value {
     let mut map = Map::new();
     let rules: Vec<Value> = out.rules().iter().map(serialize_lifecycle_rule).collect();
     map.insert("Rules".to_string(), Value::Array(rules));
+    if let Some(tdmos) = out.transition_default_minimum_object_size() {
+        map.insert(
+            "TransitionDefaultMinimumObjectSize".to_string(),
+            Value::String(tdmos.as_str().to_string()),
+        );
+    }
     Value::Object(map)
 }
 
@@ -375,6 +386,12 @@ fn serialize_lifecycle_rule(r: &aws_sdk_s3::types::LifecycleRule) -> Value {
                 Value::Number(serde_json::Number::from(d)),
             );
         }
+        if let Some(d) = n.newer_noncurrent_versions() {
+            nm.insert(
+                "NewerNoncurrentVersions".to_string(),
+                Value::Number(serde_json::Number::from(d)),
+            );
+        }
         m.insert("NoncurrentVersionExpiration".to_string(), Value::Object(nm));
     }
     if !r.transitions().is_empty() {
@@ -397,6 +414,12 @@ fn serialize_lifecycle_rule(r: &aws_sdk_s3::types::LifecycleRule) -> Value {
                     nm.insert(
                         "StorageClass".to_string(),
                         Value::String(sc.as_str().to_string()),
+                    );
+                }
+                if let Some(d) = n.newer_noncurrent_versions() {
+                    nm.insert(
+                        "NewerNoncurrentVersions".to_string(),
+                        Value::Number(serde_json::Number::from(d)),
                     );
                 }
                 Value::Object(nm)
@@ -434,6 +457,18 @@ fn serialize_lifecycle_filter(f: &aws_sdk_s3::types::LifecycleRuleFilter) -> Val
         tm.insert("Value".to_string(), Value::String(t.value().to_string()));
         m.insert("Tag".to_string(), Value::Object(tm));
     }
+    if let Some(n) = f.object_size_greater_than() {
+        m.insert(
+            "ObjectSizeGreaterThan".to_string(),
+            Value::Number(serde_json::Number::from(n)),
+        );
+    }
+    if let Some(n) = f.object_size_less_than() {
+        m.insert(
+            "ObjectSizeLessThan".to_string(),
+            Value::Number(serde_json::Number::from(n)),
+        );
+    }
     if let Some(and) = f.and() {
         let mut am = Map::new();
         if let Some(p) = and.prefix() {
@@ -451,6 +486,18 @@ fn serialize_lifecycle_filter(f: &aws_sdk_s3::types::LifecycleRuleFilter) -> Val
                 })
                 .collect();
             am.insert("Tags".to_string(), Value::Array(arr));
+        }
+        if let Some(n) = and.object_size_greater_than() {
+            am.insert(
+                "ObjectSizeGreaterThan".to_string(),
+                Value::Number(serde_json::Number::from(n)),
+            );
+        }
+        if let Some(n) = and.object_size_less_than() {
+            am.insert(
+                "ObjectSizeLessThan".to_string(),
+                Value::Number(serde_json::Number::from(n)),
+            );
         }
         m.insert("And".to_string(), Value::Object(am));
     }
@@ -527,6 +574,18 @@ pub fn get_bucket_encryption_to_json(out: &GetBucketEncryptionOutput) -> Value {
                 }
                 if let Some(b) = r.bucket_key_enabled() {
                     rm.insert("BucketKeyEnabled".to_string(), Value::Bool(b));
+                }
+                if let Some(bet) = r.blocked_encryption_types() {
+                    let mut bm = Map::new();
+                    if !bet.encryption_type().is_empty() {
+                        let arr: Vec<Value> = bet
+                            .encryption_type()
+                            .iter()
+                            .map(|e| Value::String(e.as_str().to_string()))
+                            .collect();
+                        bm.insert("EncryptionType".to_string(), Value::Array(arr));
+                    }
+                    rm.insert("BlockedEncryptionTypes".to_string(), Value::Object(bm));
                 }
                 Value::Object(rm)
             })
@@ -1088,6 +1147,8 @@ fn serialize_destination(d: &aws_sdk_s3::types::Destination) -> Value {
 /// emits `{"Status": "Enabled"|"Suspended"}` when configured, or `{}` when
 /// acceleration has never been set on the bucket (S3 returns success with
 /// an empty body in that case — there is no per-resource NotFound code).
+/// `RequestCharged` is included when the SDK surfaces it (Requester Pays
+/// buckets where the caller paid for the request).
 pub fn get_bucket_accelerate_configuration_to_json(
     out: &GetBucketAccelerateConfigurationOutput,
 ) -> Value {
@@ -1096,6 +1157,12 @@ pub fn get_bucket_accelerate_configuration_to_json(
         map.insert(
             "Status".to_string(),
             Value::String(status.as_str().to_string()),
+        );
+    }
+    if let Some(rc) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(rc.as_str().to_string()),
         );
     }
     Value::Object(map)
@@ -3119,6 +3186,465 @@ mod tests {
             json["PolicyStatus"],
             Value::Object(Map::new()),
             "missing IsPublic must be omitted from inner object"
+        );
+    }
+
+    // ----- Lifecycle Filter ObjectSize predicates (output) -----
+
+    #[test]
+    fn get_bucket_lifecycle_filter_with_object_size_predicates_emits_them() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, LifecycleRuleFilter};
+        let filter = LifecycleRuleFilter::builder()
+            .object_size_greater_than(1024)
+            .object_size_less_than(1_048_576)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let f = &json["Rules"][0]["Filter"];
+        assert_eq!(f["ObjectSizeGreaterThan"], Value::Number(1024i64.into()));
+        assert_eq!(f["ObjectSizeLessThan"], Value::Number(1_048_576i64.into()));
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_filter_and_with_object_size_predicates_emits_them() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{
+            ExpirationStatus, LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter,
+        };
+        let and = LifecycleRuleAndOperator::builder()
+            .prefix("data/")
+            .object_size_greater_than(1024)
+            .object_size_less_than(1_048_576)
+            .build();
+        let filter = LifecycleRuleFilter::builder().and(and).build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let and_obj = &json["Rules"][0]["Filter"]["And"];
+        assert_eq!(and_obj["Prefix"], Value::String("data/".into()));
+        assert_eq!(
+            and_obj["ObjectSizeGreaterThan"],
+            Value::Number(1024i64.into())
+        );
+        assert_eq!(
+            and_obj["ObjectSizeLessThan"],
+            Value::Number(1_048_576i64.into())
+        );
+    }
+
+    // ----- NewerNoncurrentVersions (output) -----
+
+    #[test]
+    fn get_bucket_lifecycle_noncurrent_version_expiration_emits_newer_noncurrent_versions() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, NoncurrentVersionExpiration};
+        let nve = NoncurrentVersionExpiration::builder()
+            .noncurrent_days(30)
+            .newer_noncurrent_versions(3)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .noncurrent_version_expiration(nve)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let nve_json = &json["Rules"][0]["NoncurrentVersionExpiration"];
+        assert_eq!(nve_json["NoncurrentDays"], Value::Number(30i32.into()));
+        assert_eq!(
+            nve_json["NewerNoncurrentVersions"],
+            Value::Number(3i32.into())
+        );
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_noncurrent_version_transition_emits_newer_noncurrent_versions() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{
+            ExpirationStatus, LifecycleRule, NoncurrentVersionTransition, TransitionStorageClass,
+        };
+        let nvt = NoncurrentVersionTransition::builder()
+            .noncurrent_days(7)
+            .storage_class(TransitionStorageClass::Glacier)
+            .newer_noncurrent_versions(2)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .noncurrent_version_transitions(nvt)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let arr = json["Rules"][0]["NoncurrentVersionTransitions"]
+            .as_array()
+            .expect("NoncurrentVersionTransitions must be array");
+        assert_eq!(arr[0]["NoncurrentDays"], Value::Number(7i32.into()));
+        assert_eq!(
+            arr[0]["NewerNoncurrentVersions"],
+            Value::Number(2i32.into())
+        );
+    }
+
+    // ----- TransitionDefaultMinimumObjectSize -----
+
+    #[test]
+    fn get_bucket_lifecycle_emits_transition_default_minimum_object_size() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::TransitionDefaultMinimumObjectSize;
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .set_rules(Some(vec![]))
+            .transition_default_minimum_object_size(
+                TransitionDefaultMinimumObjectSize::AllStorageClasses128K,
+            )
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        assert_eq!(
+            json["TransitionDefaultMinimumObjectSize"],
+            Value::String("all_storage_classes_128K".into())
+        );
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_omits_transition_default_minimum_object_size_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .set_rules(Some(vec![]))
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        assert!(
+            json.get("TransitionDefaultMinimumObjectSize").is_none(),
+            "absent field must be omitted"
+        );
+    }
+
+    // ----- get_bucket_accelerate_configuration RequestCharged -----
+
+    #[test]
+    fn get_bucket_accelerate_emits_request_charged() {
+        use aws_sdk_s3::types::{BucketAccelerateStatus, RequestCharged};
+        let out = GetBucketAccelerateConfigurationOutput::builder()
+            .status(BucketAccelerateStatus::Enabled)
+            .request_charged(RequestCharged::Requester)
+            .build();
+        let json = get_bucket_accelerate_configuration_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Enabled".into()));
+        assert_eq!(json["RequestCharged"], Value::String("requester".into()));
+    }
+
+    #[test]
+    fn get_bucket_accelerate_omits_request_charged_when_absent() {
+        use aws_sdk_s3::types::BucketAccelerateStatus;
+        let out = GetBucketAccelerateConfigurationOutput::builder()
+            .status(BucketAccelerateStatus::Enabled)
+            .build();
+        let json = get_bucket_accelerate_configuration_to_json(&out);
+        assert!(json.get("RequestCharged").is_none());
+    }
+
+    // ----- BlockedEncryptionTypes output -----
+
+    #[test]
+    fn get_bucket_encryption_emits_blocked_encryption_types() {
+        use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+        use aws_sdk_s3::types::{
+            BlockedEncryptionTypes, EncryptionType, ServerSideEncryption,
+            ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
+            ServerSideEncryptionRule,
+        };
+        let d = ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build()
+            .unwrap();
+        let bet = BlockedEncryptionTypes::builder()
+            .encryption_type(EncryptionType::SseC)
+            .build();
+        let r = ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(d)
+            .blocked_encryption_types(bet)
+            .build();
+        let cfg = ServerSideEncryptionConfiguration::builder()
+            .rules(r)
+            .build()
+            .unwrap();
+        let out = GetBucketEncryptionOutput::builder()
+            .server_side_encryption_configuration(cfg)
+            .build();
+        let json = get_bucket_encryption_to_json(&out);
+        let inner = &json["ServerSideEncryptionConfiguration"];
+        assert_eq!(
+            inner["Rules"][0]["BlockedEncryptionTypes"]["EncryptionType"],
+            Value::Array(vec![Value::String("SSE-C".into())])
+        );
+    }
+
+    // ----- HeadObject ContentRange -----
+
+    #[test]
+    fn head_object_with_content_range() {
+        let out = HeadObjectOutput::builder()
+            .content_range("bytes 0-1023/2048")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
+            json["ContentRange"],
+            Value::String("bytes 0-1023/2048".into())
+        );
+    }
+
+    #[test]
+    fn head_object_omits_content_range_when_absent() {
+        let out = HeadObjectOutput::builder().e_tag("\"x\"").build();
+        let json = head_object_to_json(&out);
+        assert!(json.get("ContentRange").is_none());
+    }
+
+    // ----- ObjectSize predicates: omitted when absent (output) -----
+
+    #[test]
+    fn get_bucket_lifecycle_filter_omits_object_size_predicates_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, LifecycleRuleFilter};
+        let filter = LifecycleRuleFilter::builder().prefix("data/").build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let f = &json["Rules"][0]["Filter"];
+        assert!(f.get("ObjectSizeGreaterThan").is_none());
+        assert!(f.get("ObjectSizeLessThan").is_none());
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_filter_and_omits_object_size_predicates_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{
+            ExpirationStatus, LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter,
+        };
+        let and = LifecycleRuleAndOperator::builder().prefix("data/").build();
+        let filter = LifecycleRuleFilter::builder().and(and).build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let and_obj = &json["Rules"][0]["Filter"]["And"];
+        assert!(and_obj.get("ObjectSizeGreaterThan").is_none());
+        assert!(and_obj.get("ObjectSizeLessThan").is_none());
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_filter_emits_only_greater_than_when_only_greater_set() {
+        // Lower bound only: render must include `ObjectSizeGreaterThan` and
+        // omit `ObjectSizeLessThan`.
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, LifecycleRuleFilter};
+        let filter = LifecycleRuleFilter::builder()
+            .object_size_greater_than(2048)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let f = &json["Rules"][0]["Filter"];
+        assert_eq!(f["ObjectSizeGreaterThan"], Value::Number(2048i64.into()));
+        assert!(f.get("ObjectSizeLessThan").is_none());
+    }
+
+    // ----- NewerNoncurrentVersions: omitted when absent (output) -----
+
+    #[test]
+    fn get_bucket_lifecycle_noncurrent_version_expiration_omits_newer_versions_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{ExpirationStatus, LifecycleRule, NoncurrentVersionExpiration};
+        let nve = NoncurrentVersionExpiration::builder()
+            .noncurrent_days(30)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .noncurrent_version_expiration(nve)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let nve_json = &json["Rules"][0]["NoncurrentVersionExpiration"];
+        assert!(nve_json.get("NewerNoncurrentVersions").is_none());
+    }
+
+    #[test]
+    fn get_bucket_lifecycle_noncurrent_version_transition_omits_newer_versions_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::{
+            ExpirationStatus, LifecycleRule, NoncurrentVersionTransition, TransitionStorageClass,
+        };
+        let nvt = NoncurrentVersionTransition::builder()
+            .noncurrent_days(7)
+            .storage_class(TransitionStorageClass::Glacier)
+            .build();
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .noncurrent_version_transitions(nvt)
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        let nvt_json = &json["Rules"][0]["NoncurrentVersionTransitions"][0];
+        assert!(nvt_json.get("NewerNoncurrentVersions").is_none());
+    }
+
+    // ----- TransitionDefaultMinimumObjectSize: VariesByStorageClass variant -----
+
+    #[test]
+    fn get_bucket_lifecycle_transition_default_minimum_varies_by_storage_class() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::types::TransitionDefaultMinimumObjectSize;
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .set_rules(Some(vec![]))
+            .transition_default_minimum_object_size(
+                TransitionDefaultMinimumObjectSize::VariesByStorageClass,
+            )
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        assert_eq!(
+            json["TransitionDefaultMinimumObjectSize"],
+            Value::String("varies_by_storage_class".into())
+        );
+    }
+
+    // ----- BlockedEncryptionTypes: more output coverage -----
+
+    #[test]
+    fn get_bucket_encryption_blocked_encryption_types_multiple_values() {
+        use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+        use aws_sdk_s3::types::{
+            BlockedEncryptionTypes, EncryptionType, ServerSideEncryption,
+            ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
+            ServerSideEncryptionRule,
+        };
+        let d = ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build()
+            .unwrap();
+        let bet = BlockedEncryptionTypes::builder()
+            .encryption_type(EncryptionType::SseC)
+            .encryption_type(EncryptionType::None)
+            .build();
+        let r = ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(d)
+            .blocked_encryption_types(bet)
+            .build();
+        let cfg = ServerSideEncryptionConfiguration::builder()
+            .rules(r)
+            .build()
+            .unwrap();
+        let out = GetBucketEncryptionOutput::builder()
+            .server_side_encryption_configuration(cfg)
+            .build();
+        let json = get_bucket_encryption_to_json(&out);
+        let arr = &json["ServerSideEncryptionConfiguration"]["Rules"][0]["BlockedEncryptionTypes"]
+            ["EncryptionType"];
+        assert_eq!(
+            arr,
+            &Value::Array(vec![
+                Value::String("SSE-C".into()),
+                Value::String("NONE".into()),
+            ])
+        );
+    }
+
+    #[test]
+    fn get_bucket_encryption_blocked_encryption_types_empty_inner_emits_empty_object() {
+        // SDK populates BlockedEncryptionTypes with no encryption_type entries
+        // ⇒ render `"BlockedEncryptionTypes": {}` (mirrors the omit-empty-array
+        // pattern used elsewhere in this file).
+        use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+        use aws_sdk_s3::types::{
+            BlockedEncryptionTypes, ServerSideEncryption, ServerSideEncryptionByDefault,
+            ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+        };
+        let d = ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build()
+            .unwrap();
+        let bet = BlockedEncryptionTypes::builder().build();
+        let r = ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(d)
+            .blocked_encryption_types(bet)
+            .build();
+        let cfg = ServerSideEncryptionConfiguration::builder()
+            .rules(r)
+            .build()
+            .unwrap();
+        let out = GetBucketEncryptionOutput::builder()
+            .server_side_encryption_configuration(cfg)
+            .build();
+        let json = get_bucket_encryption_to_json(&out);
+        let bet_obj =
+            &json["ServerSideEncryptionConfiguration"]["Rules"][0]["BlockedEncryptionTypes"];
+        assert_eq!(bet_obj, &Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_encryption_omits_blocked_encryption_types_when_absent() {
+        use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+        use aws_sdk_s3::types::{
+            ServerSideEncryption, ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration,
+            ServerSideEncryptionRule,
+        };
+        let d = ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(ServerSideEncryption::Aes256)
+            .build()
+            .unwrap();
+        let r = ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(d)
+            .build();
+        let cfg = ServerSideEncryptionConfiguration::builder()
+            .rules(r)
+            .build()
+            .unwrap();
+        let out = GetBucketEncryptionOutput::builder()
+            .server_side_encryption_configuration(cfg)
+            .build();
+        let json = get_bucket_encryption_to_json(&out);
+        assert!(
+            json["ServerSideEncryptionConfiguration"]["Rules"][0]
+                .get("BlockedEncryptionTypes")
+                .is_none()
         );
     }
 }
