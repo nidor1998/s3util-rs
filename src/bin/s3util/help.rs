@@ -16,7 +16,7 @@ use s3util_rs::config::args::Cli;
 /// Subcommand → category. Order within a category is the display order.
 /// Subcommands not listed here fall under "Other".
 const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Object Operations", &["cp", "mv", "rm"]),
+    ("Object Operations", &["cp", "mv", "rm", "restore-object"]),
     (
         "Object Metadata",
         &[
@@ -44,11 +44,31 @@ const CATEGORIES: &[(&str, &[&str])] = &[
             "get-bucket-policy",
             "put-bucket-policy",
             "delete-bucket-policy",
+            "get-bucket-policy-status",
         ],
     ),
     (
         "Bucket Versioning",
         &["get-bucket-versioning", "put-bucket-versioning"],
+    ),
+    (
+        "Bucket Replication",
+        &[
+            "get-bucket-replication",
+            "put-bucket-replication",
+            "delete-bucket-replication",
+        ],
+    ),
+    (
+        "Bucket Transfer Acceleration",
+        &[
+            "get-bucket-accelerate-configuration",
+            "put-bucket-accelerate-configuration",
+        ],
+    ),
+    (
+        "Bucket Request Payment",
+        &["get-bucket-request-payment", "put-bucket-request-payment"],
     ),
     (
         "Bucket Lifecycle Configuration",

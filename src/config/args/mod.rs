@@ -17,16 +17,21 @@ pub mod delete_bucket_cors;
 pub mod delete_bucket_encryption;
 pub mod delete_bucket_lifecycle_configuration;
 pub mod delete_bucket_policy;
+pub mod delete_bucket_replication;
 pub mod delete_bucket_tagging;
 pub mod delete_bucket_website;
 pub mod delete_object_tagging;
 pub mod delete_public_access_block;
+pub mod get_bucket_accelerate_configuration;
 pub mod get_bucket_cors;
 pub mod get_bucket_encryption;
 pub mod get_bucket_lifecycle_configuration;
 pub mod get_bucket_logging;
 pub mod get_bucket_notification_configuration;
 pub mod get_bucket_policy;
+pub mod get_bucket_policy_status;
+pub mod get_bucket_replication;
+pub mod get_bucket_request_payment;
 pub mod get_bucket_tagging;
 pub mod get_bucket_versioning;
 pub mod get_bucket_website;
@@ -35,17 +40,21 @@ pub mod get_public_access_block;
 pub mod head_bucket;
 pub mod head_object;
 pub mod mv;
+pub mod put_bucket_accelerate_configuration;
 pub mod put_bucket_cors;
 pub mod put_bucket_encryption;
 pub mod put_bucket_lifecycle_configuration;
 pub mod put_bucket_logging;
 pub mod put_bucket_notification_configuration;
 pub mod put_bucket_policy;
+pub mod put_bucket_replication;
+pub mod put_bucket_request_payment;
 pub mod put_bucket_tagging;
 pub mod put_bucket_versioning;
 pub mod put_bucket_website;
 pub mod put_object_tagging;
 pub mod put_public_access_block;
+pub mod restore_object;
 pub mod rm;
 pub mod value_parser;
 
@@ -59,16 +68,21 @@ pub use delete_bucket_cors::DeleteBucketCorsArgs;
 pub use delete_bucket_encryption::DeleteBucketEncryptionArgs;
 pub use delete_bucket_lifecycle_configuration::DeleteBucketLifecycleConfigurationArgs;
 pub use delete_bucket_policy::DeleteBucketPolicyArgs;
+pub use delete_bucket_replication::DeleteBucketReplicationArgs;
 pub use delete_bucket_tagging::DeleteBucketTaggingArgs;
 pub use delete_bucket_website::DeleteBucketWebsiteArgs;
 pub use delete_object_tagging::DeleteObjectTaggingArgs;
 pub use delete_public_access_block::DeletePublicAccessBlockArgs;
+pub use get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationArgs;
 pub use get_bucket_cors::GetBucketCorsArgs;
 pub use get_bucket_encryption::GetBucketEncryptionArgs;
 pub use get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationArgs;
 pub use get_bucket_logging::GetBucketLoggingArgs;
 pub use get_bucket_notification_configuration::GetBucketNotificationConfigurationArgs;
 pub use get_bucket_policy::GetBucketPolicyArgs;
+pub use get_bucket_policy_status::GetBucketPolicyStatusArgs;
+pub use get_bucket_replication::GetBucketReplicationArgs;
+pub use get_bucket_request_payment::GetBucketRequestPaymentArgs;
 pub use get_bucket_tagging::GetBucketTaggingArgs;
 pub use get_bucket_versioning::GetBucketVersioningArgs;
 pub use get_bucket_website::GetBucketWebsiteArgs;
@@ -77,17 +91,21 @@ pub use get_public_access_block::GetPublicAccessBlockArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
+pub use put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationArgs;
 pub use put_bucket_cors::PutBucketCorsArgs;
 pub use put_bucket_encryption::PutBucketEncryptionArgs;
 pub use put_bucket_lifecycle_configuration::PutBucketLifecycleConfigurationArgs;
 pub use put_bucket_logging::PutBucketLoggingArgs;
 pub use put_bucket_notification_configuration::PutBucketNotificationConfigurationArgs;
 pub use put_bucket_policy::PutBucketPolicyArgs;
+pub use put_bucket_replication::PutBucketReplicationArgs;
+pub use put_bucket_request_payment::PutBucketRequestPaymentArgs;
 pub use put_bucket_tagging::PutBucketTaggingArgs;
 pub use put_bucket_versioning::PutBucketVersioningArgs;
 pub use put_bucket_website::PutBucketWebsiteArgs;
 pub use put_object_tagging::PutObjectTaggingArgs;
 pub use put_public_access_block::PutPublicAccessBlockArgs;
+pub use restore_object::RestoreObjectArgs;
 pub use rm::RmArgs;
 
 // Re-exports kept here so existing callers that reference
@@ -147,6 +165,9 @@ pub enum Commands {
     /// Delete the bucket policy from an S3 bucket
     #[command(display_order = 13)]
     DeleteBucketPolicy(DeleteBucketPolicyArgs),
+    /// Delete the replication configuration from an S3 bucket
+    #[command(display_order = 41)]
+    DeleteBucketReplication(DeleteBucketReplicationArgs),
     /// Delete all tags from an S3 bucket
     #[command(display_order = 16)]
     DeleteBucketTagging(DeleteBucketTaggingArgs),
@@ -159,6 +180,9 @@ pub enum Commands {
     /// Delete the public-access-block configuration from an S3 bucket
     #[command(display_order = 30)]
     DeletePublicAccessBlock(DeletePublicAccessBlockArgs),
+    /// Retrieve the Transfer Acceleration configuration of an S3 bucket and print it as JSON
+    #[command(display_order = 42)]
+    GetBucketAccelerateConfiguration(GetBucketAccelerateConfigurationArgs),
     /// Retrieve the CORS configuration of an S3 bucket and print it as JSON
     #[command(display_order = 26)]
     GetBucketCors(GetBucketCorsArgs),
@@ -177,6 +201,15 @@ pub enum Commands {
     /// Retrieve the bucket policy of an S3 bucket and print it as JSON
     #[command(display_order = 12)]
     GetBucketPolicy(GetBucketPolicyArgs),
+    /// Retrieve the policy status of an S3 bucket (whether it makes the bucket public) and print it as JSON
+    #[command(display_order = 46)]
+    GetBucketPolicyStatus(GetBucketPolicyStatusArgs),
+    /// Retrieve the replication configuration of an S3 bucket and print it as JSON
+    #[command(display_order = 39)]
+    GetBucketReplication(GetBucketReplicationArgs),
+    /// Retrieve the request-payment configuration of an S3 bucket and print it as JSON
+    #[command(display_order = 44)]
+    GetBucketRequestPayment(GetBucketRequestPaymentArgs),
     /// Retrieve the tags of an S3 bucket and print them as JSON
     #[command(display_order = 15)]
     GetBucketTagging(GetBucketTaggingArgs),
@@ -201,6 +234,9 @@ pub enum Commands {
     /// Move objects from/to S3 (copy then delete source)
     #[command(display_order = 2)]
     Mv(MvArgs),
+    /// Set the Transfer Acceleration configuration on an S3 bucket
+    #[command(display_order = 43)]
+    PutBucketAccelerateConfiguration(PutBucketAccelerateConfigurationArgs),
     /// Set the CORS configuration on an S3 bucket
     #[command(display_order = 25)]
     PutBucketCors(PutBucketCorsArgs),
@@ -225,6 +261,12 @@ pub enum Commands {
     /// Set the bucket policy on an S3 bucket
     #[command(display_order = 11)]
     PutBucketPolicy(PutBucketPolicyArgs),
+    /// Set the replication configuration on an S3 bucket
+    #[command(display_order = 40)]
+    PutBucketReplication(PutBucketReplicationArgs),
+    /// Set the request-payment configuration on an S3 bucket (Requester or BucketOwner)
+    #[command(display_order = 45)]
+    PutBucketRequestPayment(PutBucketRequestPaymentArgs),
     /// Replace all tags on an S3 bucket
     #[command(display_order = 14)]
     PutBucketTagging(PutBucketTaggingArgs),
@@ -240,6 +282,9 @@ pub enum Commands {
     /// Set the public-access-block configuration on an S3 bucket
     #[command(display_order = 28)]
     PutPublicAccessBlock(PutPublicAccessBlockArgs),
+    /// Restore an archived S3 object
+    #[command(display_order = 38)]
+    RestoreObject(RestoreObjectArgs),
     /// Delete a single S3 object
     #[command(display_order = 3)]
     Rm(RmArgs),
@@ -285,6 +330,10 @@ where
             "build_config_from_args is for cp/mv only; delete-bucket-policy is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::DeleteBucketReplication(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-bucket-replication is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::DeleteBucketTagging(_) => Err(
             "build_config_from_args is for cp/mv only; delete-bucket-tagging is dispatched in main.rs"
                 .to_string(),
@@ -299,6 +348,10 @@ where
         ),
         Commands::DeletePublicAccessBlock(_) => Err(
             "build_config_from_args is for cp/mv only; delete-public-access-block is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketAccelerateConfiguration(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-accelerate-configuration is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::GetBucketCors(_) => Err(
@@ -323,6 +376,18 @@ where
         ),
         Commands::GetBucketPolicy(_) => Err(
             "build_config_from_args is for cp/mv only; get-bucket-policy is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketPolicyStatus(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-policy-status is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketReplication(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-replication is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetBucketRequestPayment(_) => Err(
+            "build_config_from_args is for cp/mv only; get-bucket-request-payment is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::GetBucketTagging(_) => Err(
@@ -354,6 +419,10 @@ where
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::PutBucketAccelerateConfiguration(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-accelerate-configuration is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::PutBucketCors(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-cors is dispatched in main.rs"
                 .to_string(),
@@ -378,6 +447,14 @@ where
             "build_config_from_args is for cp/mv only; put-bucket-policy is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::PutBucketReplication(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-replication is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutBucketRequestPayment(_) => Err(
+            "build_config_from_args is for cp/mv only; put-bucket-request-payment is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::PutBucketTagging(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-tagging is dispatched in main.rs"
                 .to_string(),
@@ -396,6 +473,10 @@ where
         ),
         Commands::PutPublicAccessBlock(_) => Err(
             "build_config_from_args is for cp/mv only; put-public-access-block is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::RestoreObject(_) => Err(
+            "build_config_from_args is for cp/mv only; restore-object is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::Rm(_) => {

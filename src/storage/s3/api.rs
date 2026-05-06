@@ -15,17 +15,22 @@ use aws_sdk_s3::operation::delete_bucket_cors::DeleteBucketCorsOutput;
 use aws_sdk_s3::operation::delete_bucket_encryption::DeleteBucketEncryptionOutput;
 use aws_sdk_s3::operation::delete_bucket_lifecycle::DeleteBucketLifecycleOutput;
 use aws_sdk_s3::operation::delete_bucket_policy::DeleteBucketPolicyOutput;
+use aws_sdk_s3::operation::delete_bucket_replication::DeleteBucketReplicationOutput;
 use aws_sdk_s3::operation::delete_bucket_tagging::DeleteBucketTaggingOutput;
 use aws_sdk_s3::operation::delete_bucket_website::DeleteBucketWebsiteOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
 use aws_sdk_s3::operation::delete_public_access_block::DeletePublicAccessBlockOutput;
+use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_cors::GetBucketCorsOutput;
 use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
 use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
 use aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
+use aws_sdk_s3::operation::get_bucket_policy_status::GetBucketPolicyStatusOutput;
+use aws_sdk_s3::operation::get_bucket_replication::GetBucketReplicationOutput;
+use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOutput;
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
@@ -33,22 +38,27 @@ use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::put_bucket_cors::PutBucketCorsOutput;
 use aws_sdk_s3::operation::put_bucket_encryption::PutBucketEncryptionOutput;
 use aws_sdk_s3::operation::put_bucket_lifecycle_configuration::PutBucketLifecycleConfigurationOutput;
 use aws_sdk_s3::operation::put_bucket_logging::PutBucketLoggingOutput;
 use aws_sdk_s3::operation::put_bucket_notification_configuration::PutBucketNotificationConfigurationOutput;
 use aws_sdk_s3::operation::put_bucket_policy::PutBucketPolicyOutput;
+use aws_sdk_s3::operation::put_bucket_replication::PutBucketReplicationOutput;
+use aws_sdk_s3::operation::put_bucket_request_payment::PutBucketRequestPaymentOutput;
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
+use aws_sdk_s3::operation::restore_object::RestoreObjectOutput;
 use aws_sdk_s3::types::{
-    BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint, BucketLoggingStatus,
-    BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration, CreateBucketConfiguration,
-    DataRedundancy, LocationInfo, LocationType, NotificationConfiguration,
-    PublicAccessBlockConfiguration, ServerSideEncryptionConfiguration, Tagging,
+    AccelerateConfiguration, BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint,
+    BucketLoggingStatus, BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration,
+    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
+    NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
+    RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration, Tagging,
     VersioningConfiguration, WebsiteConfiguration,
 };
 
@@ -130,6 +140,27 @@ const GET_BUCKET_LOGGING_NOT_FOUND_CODES: &[&str] = &[];
 /// (there is no per-resource NotFound error code), so the only NotFound
 /// case is `NoSuchBucket`, which `classify_not_found` handles separately.
 const GET_BUCKET_NOTIFICATION_CONFIGURATION_NOT_FOUND_CODES: &[&str] = &[];
+/// S3 error codes that `get-bucket-replication` treats as a subresource
+/// NotFound. `ReplicationConfigurationNotFoundError` covers the case
+/// where the bucket exists but no replication rules are configured.
+const GET_BUCKET_REPLICATION_NOT_FOUND_CODES: &[&str] = &["ReplicationConfigurationNotFoundError"];
+/// S3 error codes that `get-bucket-accelerate-configuration` treats as a
+/// subresource NotFound. Mirrors `get-bucket-versioning`:
+/// `GetBucketAccelerateConfiguration` returns success with an empty body
+/// when acceleration has never been configured (no per-resource NotFound
+/// error code), so the only NotFound case is `NoSuchBucket`, which
+/// `classify_not_found` handles separately.
+const GET_BUCKET_ACCELERATE_CONFIGURATION_NOT_FOUND_CODES: &[&str] = &[];
+/// S3 error codes that `get-bucket-request-payment` treats as a subresource
+/// NotFound. The API always returns a `Payer` value (defaults to
+/// `BucketOwner` for new buckets); the only NotFound case is `NoSuchBucket`,
+/// which `classify_not_found` handles separately.
+const GET_BUCKET_REQUEST_PAYMENT_NOT_FOUND_CODES: &[&str] = &[];
+/// S3 error codes that `get-bucket-policy-status` treats as a subresource
+/// NotFound. `NoSuchBucketPolicy` covers the case where the bucket exists
+/// but no policy is attached (so there is no policy status to return).
+/// `NoSuchBucket` is handled separately.
+const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -977,6 +1008,204 @@ pub async fn put_bucket_notification_configuration(
         .with_context(|| format!("put-bucket-notification-configuration on s3://{bucket}"))
 }
 
+/// Issue `GetBucketReplication` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns
+/// `ReplicationConfigurationNotFoundError` (the bucket exists but no
+/// replication rules are configured), and `HeadError::Other` for any
+/// other failure.
+pub async fn get_bucket_replication(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketReplicationOutput, HeadError> {
+    client
+        .get_bucket_replication()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_REPLICATION_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-bucket-replication on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketReplication` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_bucket_replication(
+    client: &Client,
+    bucket: &str,
+    cfg: ReplicationConfiguration,
+) -> Result<PutBucketReplicationOutput> {
+    client
+        .put_bucket_replication()
+        .bucket(bucket)
+        .replication_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-replication on s3://{bucket}"))
+}
+
+/// Issue `DeleteBucketReplication` for `bucket`. Returns the SDK response
+/// on success.
+pub async fn delete_bucket_replication(
+    client: &Client,
+    bucket: &str,
+) -> Result<DeleteBucketReplicationOutput> {
+    client
+        .delete_bucket_replication()
+        .bucket(bucket)
+        .send()
+        .await
+        .with_context(|| format!("delete-bucket-replication on s3://{bucket}"))
+}
+
+/// Issue `GetBucketAccelerateConfiguration` for `bucket`. Returns the SDK
+/// response on success, `HeadError::BucketNotFound` when S3 returns
+/// `NoSuchBucket`, and `HeadError::Other` for any other failure.
+///
+/// `GetBucketAccelerateConfiguration` returns success with an empty body
+/// when acceleration has never been configured — that is `Ok`, not
+/// NotFound, mirroring `get_bucket_versioning`.
+pub async fn get_bucket_accelerate_configuration(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketAccelerateConfigurationOutput, HeadError> {
+    client
+        .get_bucket_accelerate_configuration()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_ACCELERATE_CONFIGURATION_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                    "get-bucket-accelerate-configuration on s3://{bucket}"
+                ))),
+            }
+        })
+}
+
+/// Issue `PutBucketAccelerateConfiguration` for `bucket` with the given
+/// configuration. Returns the SDK response on success.
+pub async fn put_bucket_accelerate_configuration(
+    client: &Client,
+    bucket: &str,
+    cfg: AccelerateConfiguration,
+) -> Result<PutBucketAccelerateConfigurationOutput> {
+    client
+        .put_bucket_accelerate_configuration()
+        .bucket(bucket)
+        .accelerate_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-accelerate-configuration on s3://{bucket}"))
+}
+
+/// Issue `GetBucketRequestPayment` for `bucket`. Returns the SDK response
+/// on success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// and `HeadError::Other` for any other failure.
+pub async fn get_bucket_request_payment(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketRequestPaymentOutput, HeadError> {
+    client
+        .get_bucket_request_payment()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_REQUEST_PAYMENT_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-bucket-request-payment on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `PutBucketRequestPayment` for `bucket` with the given configuration.
+/// Returns the SDK response on success.
+pub async fn put_bucket_request_payment(
+    client: &Client,
+    bucket: &str,
+    cfg: RequestPaymentConfiguration,
+) -> Result<PutBucketRequestPaymentOutput> {
+    client
+        .put_bucket_request_payment()
+        .bucket(bucket)
+        .request_payment_configuration(cfg)
+        .send()
+        .await
+        .with_context(|| format!("put-bucket-request-payment on s3://{bucket}"))
+}
+
+/// Issue `GetBucketPolicyStatus` for `bucket`. Returns the SDK response on
+/// success, `HeadError::BucketNotFound` when S3 returns `NoSuchBucket`,
+/// `HeadError::NotFound` when S3 returns `NoSuchBucketPolicy` (the bucket
+/// exists but no policy is attached, so there is no policy status), and
+/// `HeadError::Other` for any other failure.
+pub async fn get_bucket_policy_status(
+    client: &Client,
+    bucket: &str,
+) -> Result<GetBucketPolicyStatusOutput, HeadError> {
+    client
+        .get_bucket_policy_status()
+        .bucket(bucket)
+        .send()
+        .await
+        .map_err(|e| {
+            let code = e
+                .as_service_error()
+                .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+            match classify_not_found(code, GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES) {
+                Some(he) => he,
+                None => HeadError::Other(
+                    anyhow::Error::new(e)
+                        .context(format!("get-bucket-policy-status on s3://{bucket}")),
+                ),
+            }
+        })
+}
+
+/// Issue `RestoreObject` against `bucket`/`key` with the given restore request.
+/// Returns the SDK response on success.
+///
+/// If `version_id` is provided, the restore targets that specific version.
+pub async fn restore_object(
+    client: &Client,
+    bucket: &str,
+    key: &str,
+    version_id: Option<&str>,
+    restore_request: RestoreRequest,
+) -> Result<RestoreObjectOutput> {
+    let mut req = client
+        .restore_object()
+        .bucket(bucket)
+        .key(key)
+        .restore_request(restore_request);
+    if let Some(v) = version_id {
+        req = req.version_id(v);
+    }
+    req.send()
+        .await
+        .with_context(|| format!("restore-object on s3://{bucket}/{key}"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1099,6 +1328,34 @@ mod tests {
     fn get_bucket_notification_configuration_not_found_codes_pinned() {
         let empty: &[&str] = &[];
         assert_eq!(GET_BUCKET_NOTIFICATION_CONFIGURATION_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn get_bucket_replication_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_REPLICATION_NOT_FOUND_CODES,
+            &["ReplicationConfigurationNotFoundError"]
+        );
+    }
+
+    #[test]
+    fn get_bucket_accelerate_configuration_not_found_codes_pinned() {
+        let empty: &[&str] = &[];
+        assert_eq!(GET_BUCKET_ACCELERATE_CONFIGURATION_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn get_bucket_request_payment_not_found_codes_pinned() {
+        let empty: &[&str] = &[];
+        assert_eq!(GET_BUCKET_REQUEST_PAYMENT_NOT_FOUND_CODES, empty);
+    }
+
+    #[test]
+    fn get_bucket_policy_status_not_found_codes_pinned() {
+        assert_eq!(
+            GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES,
+            &["NoSuchBucketPolicy"]
+        );
     }
 
     #[test]

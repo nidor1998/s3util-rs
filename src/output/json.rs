@@ -5,12 +5,16 @@
 //! `aws s3api --output json` surface 1-to-1 (PascalCase, omission semantics,
 //! double-encoded `Policy`, etc.).
 
+use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_cors::GetBucketCorsOutput;
 use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
 use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
 use aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_policy::GetBucketPolicyOutput;
+use aws_sdk_s3::operation::get_bucket_policy_status::GetBucketPolicyStatusOutput;
+use aws_sdk_s3::operation::get_bucket_replication::GetBucketReplicationOutput;
+use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOutput;
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
@@ -884,6 +888,245 @@ pub fn get_public_access_block_to_json(out: &GetPublicAccessBlockOutput) -> Valu
             "PublicAccessBlockConfiguration".to_string(),
             Value::Object(inner),
         );
+    }
+    Value::Object(top)
+}
+
+/// Serialise a `GetBucketReplicationOutput` to AWS CLI v2 `--output json` shape.
+///
+/// Top level: `{"ReplicationConfiguration": { "Role": "...", "Rules": [...] }}`.
+/// When the bucket has no replication configuration, the API returns an
+/// `ReplicationConfigurationNotFoundError` (mapped to NotFound by the
+/// caller) — so this function never emits an empty `{}`; it always wraps
+/// a present configuration. Absent or empty optional fields are omitted.
+pub fn get_bucket_replication_to_json(out: &GetBucketReplicationOutput) -> Value {
+    let mut top = Map::new();
+    if let Some(cfg) = out.replication_configuration() {
+        let mut inner = Map::new();
+        inner.insert("Role".to_string(), Value::String(cfg.role().to_string()));
+        let rules: Vec<Value> = cfg.rules().iter().map(serialize_replication_rule).collect();
+        inner.insert("Rules".to_string(), Value::Array(rules));
+        top.insert("ReplicationConfiguration".to_string(), Value::Object(inner));
+    }
+    Value::Object(top)
+}
+
+fn serialize_replication_rule(r: &aws_sdk_s3::types::ReplicationRule) -> Value {
+    let mut m = Map::new();
+    if let Some(id) = r.id() {
+        m.insert("ID".to_string(), Value::String(id.to_string()));
+    }
+    if let Some(p) = r.priority() {
+        m.insert(
+            "Priority".to_string(),
+            Value::Number(serde_json::Number::from(p)),
+        );
+    }
+    #[allow(deprecated)]
+    if let Some(prefix) = r.prefix() {
+        m.insert("Prefix".to_string(), Value::String(prefix.to_string()));
+    }
+    if let Some(f) = r.filter() {
+        m.insert("Filter".to_string(), serialize_replication_filter(f));
+    }
+    m.insert(
+        "Status".to_string(),
+        Value::String(r.status().as_str().to_string()),
+    );
+    if let Some(ssc) = r.source_selection_criteria() {
+        m.insert(
+            "SourceSelectionCriteria".to_string(),
+            serialize_source_selection_criteria(ssc),
+        );
+    }
+    if let Some(eor) = r.existing_object_replication() {
+        let mut em = Map::new();
+        em.insert(
+            "Status".to_string(),
+            Value::String(eor.status().as_str().to_string()),
+        );
+        m.insert("ExistingObjectReplication".to_string(), Value::Object(em));
+    }
+    if let Some(d) = r.destination() {
+        m.insert("Destination".to_string(), serialize_destination(d));
+    }
+    if let Some(dmr) = r.delete_marker_replication() {
+        let mut dm = Map::new();
+        if let Some(s) = dmr.status() {
+            dm.insert("Status".to_string(), Value::String(s.as_str().to_string()));
+        }
+        m.insert("DeleteMarkerReplication".to_string(), Value::Object(dm));
+    }
+    Value::Object(m)
+}
+
+fn serialize_replication_filter(f: &aws_sdk_s3::types::ReplicationRuleFilter) -> Value {
+    let mut m = Map::new();
+    if let Some(prefix) = f.prefix() {
+        m.insert("Prefix".to_string(), Value::String(prefix.to_string()));
+    }
+    if let Some(t) = f.tag() {
+        let mut tm = Map::new();
+        tm.insert("Key".to_string(), Value::String(t.key().to_string()));
+        tm.insert("Value".to_string(), Value::String(t.value().to_string()));
+        m.insert("Tag".to_string(), Value::Object(tm));
+    }
+    if let Some(a) = f.and() {
+        let mut am = Map::new();
+        if let Some(prefix) = a.prefix() {
+            am.insert("Prefix".to_string(), Value::String(prefix.to_string()));
+        }
+        if !a.tags().is_empty() {
+            let tags: Vec<Value> = a
+                .tags()
+                .iter()
+                .map(|t| {
+                    let mut tm = Map::new();
+                    tm.insert("Key".to_string(), Value::String(t.key().to_string()));
+                    tm.insert("Value".to_string(), Value::String(t.value().to_string()));
+                    Value::Object(tm)
+                })
+                .collect();
+            am.insert("Tags".to_string(), Value::Array(tags));
+        }
+        m.insert("And".to_string(), Value::Object(am));
+    }
+    Value::Object(m)
+}
+
+fn serialize_source_selection_criteria(s: &aws_sdk_s3::types::SourceSelectionCriteria) -> Value {
+    let mut m = Map::new();
+    if let Some(sse) = s.sse_kms_encrypted_objects() {
+        let mut em = Map::new();
+        em.insert(
+            "Status".to_string(),
+            Value::String(sse.status().as_str().to_string()),
+        );
+        m.insert("SseKmsEncryptedObjects".to_string(), Value::Object(em));
+    }
+    if let Some(rm) = s.replica_modifications() {
+        let mut em = Map::new();
+        em.insert(
+            "Status".to_string(),
+            Value::String(rm.status().as_str().to_string()),
+        );
+        m.insert("ReplicaModifications".to_string(), Value::Object(em));
+    }
+    Value::Object(m)
+}
+
+fn serialize_destination(d: &aws_sdk_s3::types::Destination) -> Value {
+    let mut m = Map::new();
+    m.insert("Bucket".to_string(), Value::String(d.bucket().to_string()));
+    if let Some(a) = d.account() {
+        m.insert("Account".to_string(), Value::String(a.to_string()));
+    }
+    if let Some(sc) = d.storage_class() {
+        m.insert(
+            "StorageClass".to_string(),
+            Value::String(sc.as_str().to_string()),
+        );
+    }
+    if let Some(act) = d.access_control_translation() {
+        let mut am = Map::new();
+        am.insert(
+            "Owner".to_string(),
+            Value::String(act.owner().as_str().to_string()),
+        );
+        m.insert("AccessControlTranslation".to_string(), Value::Object(am));
+    }
+    if let Some(ec) = d.encryption_configuration() {
+        let mut em = Map::new();
+        if let Some(k) = ec.replica_kms_key_id() {
+            em.insert("ReplicaKmsKeyID".to_string(), Value::String(k.to_string()));
+        }
+        m.insert("EncryptionConfiguration".to_string(), Value::Object(em));
+    }
+    if let Some(rt) = d.replication_time() {
+        let mut rm = Map::new();
+        rm.insert(
+            "Status".to_string(),
+            Value::String(rt.status().as_str().to_string()),
+        );
+        if let Some(t) = rt.time()
+            && let Some(min) = t.minutes()
+        {
+            let mut tm = Map::new();
+            tm.insert(
+                "Minutes".to_string(),
+                Value::Number(serde_json::Number::from(min)),
+            );
+            rm.insert("Time".to_string(), Value::Object(tm));
+        }
+        m.insert("ReplicationTime".to_string(), Value::Object(rm));
+    }
+    if let Some(metrics) = d.metrics() {
+        let mut mm = Map::new();
+        mm.insert(
+            "Status".to_string(),
+            Value::String(metrics.status().as_str().to_string()),
+        );
+        if let Some(et) = metrics.event_threshold()
+            && let Some(min) = et.minutes()
+        {
+            let mut tm = Map::new();
+            tm.insert(
+                "Minutes".to_string(),
+                Value::Number(serde_json::Number::from(min)),
+            );
+            mm.insert("EventThreshold".to_string(), Value::Object(tm));
+        }
+        m.insert("Metrics".to_string(), Value::Object(mm));
+    }
+    Value::Object(m)
+}
+
+/// Serialise a `GetBucketAccelerateConfigurationOutput` to AWS CLI v2
+/// `--output json` shape.
+///
+/// Mirrors `aws s3api get-bucket-accelerate-configuration --output json`:
+/// emits `{"Status": "Enabled"|"Suspended"}` when configured, or `{}` when
+/// acceleration has never been set on the bucket (S3 returns success with
+/// an empty body in that case — there is no per-resource NotFound code).
+pub fn get_bucket_accelerate_configuration_to_json(
+    out: &GetBucketAccelerateConfigurationOutput,
+) -> Value {
+    let mut map = Map::new();
+    if let Some(status) = out.status() {
+        map.insert(
+            "Status".to_string(),
+            Value::String(status.as_str().to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+/// Serialise a `GetBucketRequestPaymentOutput` to AWS CLI v2 `--output json`
+/// shape.
+///
+/// Emits `{"Payer": "Requester"|"BucketOwner"}`. The API always returns a
+/// payer value (defaults to `BucketOwner` for new buckets).
+pub fn get_bucket_request_payment_to_json(out: &GetBucketRequestPaymentOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(p) = out.payer() {
+        map.insert("Payer".to_string(), Value::String(p.as_str().to_string()));
+    }
+    Value::Object(map)
+}
+
+/// Serialise a `GetBucketPolicyStatusOutput` to AWS CLI v2 `--output json`
+/// shape.
+///
+/// Top level: `{"PolicyStatus": {"IsPublic": true|false}}`. Mirrors
+/// `aws s3api get-bucket-policy-status --output json`.
+pub fn get_bucket_policy_status_to_json(out: &GetBucketPolicyStatusOutput) -> Value {
+    let mut top = Map::new();
+    if let Some(ps) = out.policy_status() {
+        let mut inner = Map::new();
+        if let Some(b) = ps.is_public() {
+            inner.insert("IsPublic".to_string(), Value::Bool(b));
+        }
+        top.insert("PolicyStatus".to_string(), Value::Object(inner));
     }
     Value::Object(top)
 }
@@ -2439,5 +2682,443 @@ mod tests {
         let rules = &l0["Filter"]["Key"]["FilterRules"];
         assert!(rules.is_array());
         assert_eq!(rules[0]["Name"], Value::String("suffix".into()));
+    }
+
+    // ----- get_bucket_replication_to_json tests -----
+
+    #[test]
+    fn get_bucket_replication_absent_yields_empty_object() {
+        let out = GetBucketReplicationOutput::builder().build();
+        let json = get_bucket_replication_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_replication_minimal_emits_role_and_rules() {
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::dest-bucket")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/replication")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let inner = &json["ReplicationConfiguration"];
+        assert_eq!(
+            inner["Role"],
+            Value::String("arn:aws:iam::111111111111:role/replication".into())
+        );
+        let rules = inner["Rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["Status"], Value::String("Enabled".into()));
+        assert_eq!(
+            rules[0]["Destination"]["Bucket"],
+            Value::String("arn:aws:s3:::dest-bucket".into())
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_rule_with_id_priority_filter_prefix() {
+        let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
+            .prefix("logs/")
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::dest-bucket")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .id("rule-1")
+            .priority(2)
+            .filter(filter)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Disabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let r = &json["ReplicationConfiguration"]["Rules"][0];
+        assert_eq!(r["ID"], Value::String("rule-1".into()));
+        assert_eq!(r["Priority"], Value::Number(serde_json::Number::from(2)));
+        assert_eq!(r["Filter"]["Prefix"], Value::String("logs/".into()));
+        assert_eq!(r["Status"], Value::String("Disabled".into()));
+    }
+
+    #[test]
+    fn get_bucket_replication_filter_with_tag_emits_key_value() {
+        let tag = Tag::builder().key("env").value("prod").build().unwrap();
+        let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
+            .tag(tag)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .filter(filter)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let f = &json["ReplicationConfiguration"]["Rules"][0]["Filter"]["Tag"];
+        assert_eq!(f["Key"], Value::String("env".into()));
+        assert_eq!(f["Value"], Value::String("prod".into()));
+    }
+
+    #[test]
+    fn get_bucket_replication_filter_with_and_emits_prefix_and_tags() {
+        let tag = Tag::builder().key("a").value("1").build().unwrap();
+        let and = aws_sdk_s3::types::ReplicationRuleAndOperator::builder()
+            .prefix("p/")
+            .tags(tag)
+            .build();
+        let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
+            .and(and)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .filter(filter)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let and_ = &json["ReplicationConfiguration"]["Rules"][0]["Filter"]["And"];
+        assert_eq!(and_["Prefix"], Value::String("p/".into()));
+        let tags = and_["Tags"].as_array().unwrap();
+        assert_eq!(tags.len(), 1);
+        assert_eq!(tags[0]["Key"], Value::String("a".into()));
+    }
+
+    #[test]
+    fn get_bucket_replication_filter_with_and_omits_tags_when_empty() {
+        let and = aws_sdk_s3::types::ReplicationRuleAndOperator::builder()
+            .prefix("p/")
+            .build();
+        let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
+            .and(and)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .filter(filter)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let and_ = &json["ReplicationConfiguration"]["Rules"][0]["Filter"]["And"];
+        assert!(
+            and_.get("Tags").is_none(),
+            "empty Tags should be omitted: {and_:?}"
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_with_destination_options() {
+        let enc = aws_sdk_s3::types::EncryptionConfiguration::builder()
+            .replica_kms_key_id("arn:aws:kms:us-east-1:1:key/abc")
+            .build();
+        let act = aws_sdk_s3::types::AccessControlTranslation::builder()
+            .owner(aws_sdk_s3::types::OwnerOverride::Destination)
+            .build()
+            .unwrap();
+        let rt = aws_sdk_s3::types::ReplicationTime::builder()
+            .status(aws_sdk_s3::types::ReplicationTimeStatus::Enabled)
+            .time(
+                aws_sdk_s3::types::ReplicationTimeValue::builder()
+                    .minutes(15)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let metrics = aws_sdk_s3::types::Metrics::builder()
+            .status(aws_sdk_s3::types::MetricsStatus::Enabled)
+            .event_threshold(
+                aws_sdk_s3::types::ReplicationTimeValue::builder()
+                    .minutes(15)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .account("222222222222")
+            .storage_class(aws_sdk_s3::types::StorageClass::StandardIa)
+            .access_control_translation(act)
+            .encryption_configuration(enc)
+            .replication_time(rt)
+            .metrics(metrics)
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let d = &json["ReplicationConfiguration"]["Rules"][0]["Destination"];
+        assert_eq!(d["Account"], Value::String("222222222222".into()));
+        assert_eq!(d["StorageClass"], Value::String("STANDARD_IA".into()));
+        assert_eq!(
+            d["AccessControlTranslation"]["Owner"],
+            Value::String("Destination".into())
+        );
+        assert_eq!(
+            d["EncryptionConfiguration"]["ReplicaKmsKeyID"],
+            Value::String("arn:aws:kms:us-east-1:1:key/abc".into())
+        );
+        assert_eq!(
+            d["ReplicationTime"]["Status"],
+            Value::String("Enabled".into())
+        );
+        assert_eq!(
+            d["ReplicationTime"]["Time"]["Minutes"],
+            Value::Number(serde_json::Number::from(15))
+        );
+        assert_eq!(d["Metrics"]["Status"], Value::String("Enabled".into()));
+        assert_eq!(
+            d["Metrics"]["EventThreshold"]["Minutes"],
+            Value::Number(serde_json::Number::from(15))
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_with_source_selection_criteria() {
+        let sse = aws_sdk_s3::types::SseKmsEncryptedObjects::builder()
+            .status(aws_sdk_s3::types::SseKmsEncryptedObjectsStatus::Enabled)
+            .build()
+            .unwrap();
+        let rmod = aws_sdk_s3::types::ReplicaModifications::builder()
+            .status(aws_sdk_s3::types::ReplicaModificationsStatus::Enabled)
+            .build()
+            .unwrap();
+        let ssc = aws_sdk_s3::types::SourceSelectionCriteria::builder()
+            .sse_kms_encrypted_objects(sse)
+            .replica_modifications(rmod)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .source_selection_criteria(ssc)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let s = &json["ReplicationConfiguration"]["Rules"][0]["SourceSelectionCriteria"];
+        assert_eq!(
+            s["SseKmsEncryptedObjects"]["Status"],
+            Value::String("Enabled".into())
+        );
+        assert_eq!(
+            s["ReplicaModifications"]["Status"],
+            Value::String("Enabled".into())
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_with_existing_object_replication_and_delete_marker() {
+        let eor = aws_sdk_s3::types::ExistingObjectReplication::builder()
+            .status(aws_sdk_s3::types::ExistingObjectReplicationStatus::Enabled)
+            .build()
+            .unwrap();
+        let dmr = aws_sdk_s3::types::DeleteMarkerReplication::builder()
+            .status(aws_sdk_s3::types::DeleteMarkerReplicationStatus::Disabled)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .existing_object_replication(eor)
+            .delete_marker_replication(dmr)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let r = &json["ReplicationConfiguration"]["Rules"][0];
+        assert_eq!(
+            r["ExistingObjectReplication"]["Status"],
+            Value::String("Enabled".into())
+        );
+        assert_eq!(
+            r["DeleteMarkerReplication"]["Status"],
+            Value::String("Disabled".into())
+        );
+    }
+
+    // ----- get_bucket_accelerate_configuration_to_json tests -----
+
+    #[test]
+    fn get_bucket_accelerate_configuration_never_configured_yields_empty_object() {
+        let out = GetBucketAccelerateConfigurationOutput::builder().build();
+        let json = get_bucket_accelerate_configuration_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_accelerate_configuration_enabled_status() {
+        let out = GetBucketAccelerateConfigurationOutput::builder()
+            .status(aws_sdk_s3::types::BucketAccelerateStatus::Enabled)
+            .build();
+        let json = get_bucket_accelerate_configuration_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Enabled".into()));
+    }
+
+    #[test]
+    fn get_bucket_accelerate_configuration_suspended_status() {
+        let out = GetBucketAccelerateConfigurationOutput::builder()
+            .status(aws_sdk_s3::types::BucketAccelerateStatus::Suspended)
+            .build();
+        let json = get_bucket_accelerate_configuration_to_json(&out);
+        assert_eq!(json["Status"], Value::String("Suspended".into()));
+    }
+
+    // ----- get_bucket_request_payment_to_json tests -----
+
+    #[test]
+    fn get_bucket_request_payment_absent_payer_yields_empty_object() {
+        let out = GetBucketRequestPaymentOutput::builder().build();
+        let json = get_bucket_request_payment_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_request_payment_requester() {
+        let out = GetBucketRequestPaymentOutput::builder()
+            .payer(aws_sdk_s3::types::Payer::Requester)
+            .build();
+        let json = get_bucket_request_payment_to_json(&out);
+        assert_eq!(json["Payer"], Value::String("Requester".into()));
+    }
+
+    #[test]
+    fn get_bucket_request_payment_bucket_owner() {
+        let out = GetBucketRequestPaymentOutput::builder()
+            .payer(aws_sdk_s3::types::Payer::BucketOwner)
+            .build();
+        let json = get_bucket_request_payment_to_json(&out);
+        assert_eq!(json["Payer"], Value::String("BucketOwner".into()));
+    }
+
+    // ----- get_bucket_policy_status_to_json tests -----
+
+    #[test]
+    fn get_bucket_policy_status_absent_yields_empty_object() {
+        let out = GetBucketPolicyStatusOutput::builder().build();
+        let json = get_bucket_policy_status_to_json(&out);
+        assert_eq!(json, Value::Object(Map::new()));
+    }
+
+    #[test]
+    fn get_bucket_policy_status_public_true() {
+        let ps = aws_sdk_s3::types::PolicyStatus::builder()
+            .is_public(true)
+            .build();
+        let out = GetBucketPolicyStatusOutput::builder()
+            .policy_status(ps)
+            .build();
+        let json = get_bucket_policy_status_to_json(&out);
+        assert_eq!(json["PolicyStatus"]["IsPublic"], Value::Bool(true));
+    }
+
+    #[test]
+    fn get_bucket_policy_status_public_false() {
+        let ps = aws_sdk_s3::types::PolicyStatus::builder()
+            .is_public(false)
+            .build();
+        let out = GetBucketPolicyStatusOutput::builder()
+            .policy_status(ps)
+            .build();
+        let json = get_bucket_policy_status_to_json(&out);
+        assert_eq!(json["PolicyStatus"]["IsPublic"], Value::Bool(false));
+    }
+
+    #[test]
+    fn get_bucket_policy_status_present_but_unset_is_public_yields_empty_inner_object() {
+        let ps = aws_sdk_s3::types::PolicyStatus::builder().build();
+        let out = GetBucketPolicyStatusOutput::builder()
+            .policy_status(ps)
+            .build();
+        let json = get_bucket_policy_status_to_json(&out);
+        assert_eq!(
+            json["PolicyStatus"],
+            Value::Object(Map::new()),
+            "missing IsPublic must be omitted from inner object"
+        );
     }
 }

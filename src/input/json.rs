@@ -13,17 +13,23 @@
 
 use anyhow::Result;
 use aws_sdk_s3::types::{
-    AbortIncompleteMultipartUpload, BucketLifecycleConfiguration, BucketLoggingStatus, Condition,
-    CorsConfiguration, CorsRule, ErrorDocument, Event, EventBridgeConfiguration, ExpirationStatus,
-    FilterRule, FilterRuleName, IndexDocument, LambdaFunctionConfiguration, LifecycleExpiration,
-    LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter, LoggingEnabled,
-    NoncurrentVersionExpiration, NoncurrentVersionTransition, NotificationConfiguration,
-    NotificationConfigurationFilter, PartitionDateSource, PartitionedPrefix, Protocol,
+    AbortIncompleteMultipartUpload, AccessControlTranslation, BucketLifecycleConfiguration,
+    BucketLoggingStatus, Condition, CorsConfiguration, CorsRule, DeleteMarkerReplication,
+    DeleteMarkerReplicationStatus, Destination, EncryptionConfiguration, ErrorDocument, Event,
+    EventBridgeConfiguration, ExistingObjectReplication, ExistingObjectReplicationStatus,
+    ExpirationStatus, FilterRule, FilterRuleName, IndexDocument, LambdaFunctionConfiguration,
+    LifecycleExpiration, LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter,
+    LoggingEnabled, Metrics, MetricsStatus, NoncurrentVersionExpiration,
+    NoncurrentVersionTransition, NotificationConfiguration, NotificationConfigurationFilter,
+    OwnerOverride, PartitionDateSource, PartitionedPrefix, Protocol,
     PublicAccessBlockConfiguration, QueueConfiguration, Redirect, RedirectAllRequestsTo,
-    RoutingRule, S3KeyFilter, ServerSideEncryption, ServerSideEncryptionByDefault,
-    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, SimplePrefix, Tag as SdkTag,
-    TargetObjectKeyFormat, TopicConfiguration, Transition, TransitionStorageClass,
-    WebsiteConfiguration,
+    ReplicaModifications, ReplicaModificationsStatus, ReplicationConfiguration, ReplicationRule,
+    ReplicationRuleAndOperator, ReplicationRuleFilter, ReplicationRuleStatus, ReplicationTime,
+    ReplicationTimeStatus, ReplicationTimeValue, RoutingRule, S3KeyFilter, ServerSideEncryption,
+    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+    SimplePrefix, SourceSelectionCriteria, SseKmsEncryptedObjects, SseKmsEncryptedObjectsStatus,
+    StorageClass, Tag as SdkTag, TargetObjectKeyFormat, TopicConfiguration, Transition,
+    TransitionStorageClass, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
 use serde::Deserialize;
@@ -836,6 +842,271 @@ impl FilterRuleJson {
             .name(FilterRuleName::from(self.Name.as_str()))
             .value(self.Value)
             .build()
+    }
+}
+
+/// Mirror of `ReplicationConfiguration` for the AWS-CLI input shape.
+/// Top-level wrapper for `put-bucket-replication` input JSON.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationConfigurationJson {
+    pub Role: String,
+    pub Rules: Vec<ReplicationRuleJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleJson {
+    pub ID: Option<String>,
+    pub Priority: Option<i32>,
+    /// Deprecated S3 field, kept for AWS-CLI shape parity.
+    pub Prefix: Option<String>,
+    pub Filter: Option<ReplicationRuleFilterJson>,
+    /// `Enabled` or `Disabled`.
+    pub Status: String,
+    pub SourceSelectionCriteria: Option<SourceSelectionCriteriaJson>,
+    pub ExistingObjectReplication: Option<ExistingObjectReplicationJson>,
+    pub Destination: DestinationJson,
+    pub DeleteMarkerReplication: Option<DeleteMarkerReplicationJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleFilterJson {
+    pub Prefix: Option<String>,
+    pub Tag: Option<TagJson>,
+    pub And: Option<ReplicationRuleAndOperatorJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleAndOperatorJson {
+    pub Prefix: Option<String>,
+    pub Tags: Option<Vec<TagJson>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct SourceSelectionCriteriaJson {
+    pub SseKmsEncryptedObjects: Option<SseKmsEncryptedObjectsJson>,
+    pub ReplicaModifications: Option<ReplicaModificationsJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct SseKmsEncryptedObjectsJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicaModificationsJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ExistingObjectReplicationJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct DestinationJson {
+    pub Bucket: String,
+    pub Account: Option<String>,
+    pub StorageClass: Option<String>,
+    pub AccessControlTranslation: Option<AccessControlTranslationJson>,
+    pub EncryptionConfiguration: Option<EncryptionConfigurationJson>,
+    pub ReplicationTime: Option<ReplicationTimeJson>,
+    pub Metrics: Option<MetricsJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct AccessControlTranslationJson {
+    pub Owner: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct EncryptionConfigurationJson {
+    pub ReplicaKmsKeyID: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationTimeJson {
+    pub Status: String,
+    pub Time: ReplicationTimeValueJson,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationTimeValueJson {
+    pub Minutes: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct MetricsJson {
+    pub Status: String,
+    pub EventThreshold: Option<ReplicationTimeValueJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct DeleteMarkerReplicationJson {
+    pub Status: String,
+}
+
+impl ReplicationConfigurationJson {
+    /// Build the SDK `ReplicationConfiguration`. Returns the SDK builder
+    /// error verbatim so error messages match what the AWS CLI would emit.
+    pub fn into_sdk(self) -> Result<ReplicationConfiguration> {
+        let rules: Result<Vec<ReplicationRule>> = self
+            .Rules
+            .into_iter()
+            .map(ReplicationRuleJson::into_sdk)
+            .collect();
+        Ok(ReplicationConfiguration::builder()
+            .role(self.Role)
+            .set_rules(Some(rules?))
+            .build()?)
+    }
+}
+
+impl ReplicationRuleJson {
+    #[allow(deprecated)]
+    fn into_sdk(self) -> Result<ReplicationRule> {
+        let mut b = ReplicationRule::builder()
+            .status(ReplicationRuleStatus::from(self.Status.as_str()))
+            .destination(self.Destination.into_sdk()?);
+        if let Some(id) = self.ID {
+            b = b.id(id);
+        }
+        if let Some(p) = self.Priority {
+            b = b.priority(p);
+        }
+        if let Some(prefix) = self.Prefix {
+            b = b.prefix(prefix);
+        }
+        if let Some(f) = self.Filter {
+            b = b.filter(f.into_sdk()?);
+        }
+        if let Some(ssc) = self.SourceSelectionCriteria {
+            b = b.source_selection_criteria(ssc.into_sdk()?);
+        }
+        if let Some(eor) = self.ExistingObjectReplication {
+            b = b.existing_object_replication(
+                ExistingObjectReplication::builder()
+                    .status(ExistingObjectReplicationStatus::from(eor.Status.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(dmr) = self.DeleteMarkerReplication {
+            b = b.delete_marker_replication(
+                DeleteMarkerReplication::builder()
+                    .status(DeleteMarkerReplicationStatus::from(dmr.Status.as_str()))
+                    .build(),
+            );
+        }
+        Ok(b.build()?)
+    }
+}
+
+impl ReplicationRuleFilterJson {
+    fn into_sdk(self) -> Result<ReplicationRuleFilter> {
+        let mut b = ReplicationRuleFilter::builder();
+        if let Some(prefix) = self.Prefix {
+            b = b.prefix(prefix);
+        }
+        if let Some(t) = self.Tag {
+            b = b.tag(SdkTag::builder().key(t.Key).value(t.Value).build()?);
+        }
+        if let Some(a) = self.And {
+            let mut ab = ReplicationRuleAndOperator::builder();
+            if let Some(prefix) = a.Prefix {
+                ab = ab.prefix(prefix);
+            }
+            if let Some(tags) = a.Tags {
+                let sdk_tags: Result<Vec<SdkTag>> = tags
+                    .into_iter()
+                    .map(|t| Ok(SdkTag::builder().key(t.Key).value(t.Value).build()?))
+                    .collect();
+                ab = ab.set_tags(Some(sdk_tags?));
+            }
+            b = b.and(ab.build());
+        }
+        Ok(b.build())
+    }
+}
+
+impl SourceSelectionCriteriaJson {
+    fn into_sdk(self) -> Result<SourceSelectionCriteria> {
+        let mut b = SourceSelectionCriteria::builder();
+        if let Some(sse) = self.SseKmsEncryptedObjects {
+            b = b.sse_kms_encrypted_objects(
+                SseKmsEncryptedObjects::builder()
+                    .status(SseKmsEncryptedObjectsStatus::from(sse.Status.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(rm) = self.ReplicaModifications {
+            b = b.replica_modifications(
+                ReplicaModifications::builder()
+                    .status(ReplicaModificationsStatus::from(rm.Status.as_str()))
+                    .build()?,
+            );
+        }
+        Ok(b.build())
+    }
+}
+
+impl DestinationJson {
+    fn into_sdk(self) -> Result<Destination> {
+        let mut b = Destination::builder().bucket(self.Bucket);
+        if let Some(a) = self.Account {
+            b = b.account(a);
+        }
+        if let Some(sc) = self.StorageClass {
+            b = b.storage_class(StorageClass::from(sc.as_str()));
+        }
+        if let Some(act) = self.AccessControlTranslation {
+            b = b.access_control_translation(
+                AccessControlTranslation::builder()
+                    .owner(OwnerOverride::from(act.Owner.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(ec) = self.EncryptionConfiguration {
+            let mut eb = EncryptionConfiguration::builder();
+            if let Some(k) = ec.ReplicaKmsKeyID {
+                eb = eb.replica_kms_key_id(k);
+            }
+            b = b.encryption_configuration(eb.build());
+        }
+        if let Some(rt) = self.ReplicationTime {
+            b = b.replication_time(
+                ReplicationTime::builder()
+                    .status(ReplicationTimeStatus::from(rt.Status.as_str()))
+                    .time(
+                        ReplicationTimeValue::builder()
+                            .minutes(rt.Time.Minutes)
+                            .build(),
+                    )
+                    .build()?,
+            );
+        }
+        if let Some(metrics) = self.Metrics {
+            let mut mb = Metrics::builder().status(MetricsStatus::from(metrics.Status.as_str()));
+            if let Some(et) = metrics.EventThreshold {
+                mb =
+                    mb.event_threshold(ReplicationTimeValue::builder().minutes(et.Minutes).build());
+            }
+            b = b.metrics(mb.build()?);
+        }
+        Ok(b.build()?)
     }
 }
 
@@ -1748,5 +2019,314 @@ mod tests {
         assert_eq!(l.id(), Some("l1"));
         let key = l.filter().unwrap().key().expect("key filter");
         assert_eq!(key.filter_rules().len(), 1);
+    }
+
+    // ----- ReplicationConfigurationJson -----
+
+    #[test]
+    fn replication_parses_aws_cli_skeleton_shape() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/replication",
+          "Rules": [
+            {
+              "Status": "Enabled",
+              "Destination": { "Bucket": "arn:aws:s3:::dest-bucket" }
+            }
+          ]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.Role, "arn:aws:iam::111111111111:role/replication");
+        assert_eq!(parsed.Rules.len(), 1);
+    }
+
+    #[test]
+    fn replication_into_sdk_minimal_preserves_role_and_rule() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert_eq!(cfg.role(), "arn:aws:iam::111111111111:role/r");
+        let rules = cfg.rules();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].status(), &ReplicationRuleStatus::Enabled);
+        assert_eq!(rules[0].destination().unwrap().bucket(), "arn:aws:s3:::d");
+    }
+
+    #[test]
+    fn replication_into_sdk_preserves_id_priority_prefix() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "ID": "my-rule",
+            "Priority": 5,
+            "Prefix": "logs/",
+            "Status": "Disabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        assert_eq!(r.id(), Some("my-rule"));
+        assert_eq!(r.priority(), Some(5));
+        #[allow(deprecated)]
+        let prefix_value = r.prefix();
+        assert_eq!(prefix_value, Some("logs/"));
+        assert_eq!(r.status(), &ReplicationRuleStatus::Disabled);
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_prefix() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "Prefix": "logs/" },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().unwrap();
+        assert_eq!(f.prefix(), Some("logs/"));
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_with_tag() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "Tag": { "Key": "env", "Value": "prod" } },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let t = cfg.rules()[0].filter().unwrap().tag().unwrap();
+        assert_eq!(t.key(), "env");
+        assert_eq!(t.value(), "prod");
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_with_and_prefix_and_tags() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "And": { "Prefix": "p/", "Tags": [{"Key":"a","Value":"1"}] } },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().unwrap();
+        assert_eq!(and.prefix(), Some("p/"));
+        assert_eq!(and.tags().len(), 1);
+        assert_eq!(and.tags()[0].key(), "a");
+    }
+
+    #[test]
+    fn replication_into_sdk_source_selection_criteria() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "SourceSelectionCriteria": {
+              "SseKmsEncryptedObjects": { "Status": "Enabled" },
+              "ReplicaModifications": { "Status": "Enabled" }
+            },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ssc = cfg.rules()[0].source_selection_criteria().unwrap();
+        assert_eq!(
+            ssc.sse_kms_encrypted_objects().unwrap().status(),
+            &SseKmsEncryptedObjectsStatus::Enabled
+        );
+        assert_eq!(
+            ssc.replica_modifications().unwrap().status(),
+            &ReplicaModificationsStatus::Enabled
+        );
+    }
+
+    #[test]
+    fn replication_into_sdk_existing_object_replication() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "ExistingObjectReplication": { "Status": "Enabled" },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let eor = cfg.rules()[0].existing_object_replication().unwrap();
+        assert_eq!(eor.status(), &ExistingObjectReplicationStatus::Enabled);
+    }
+
+    #[test]
+    fn replication_into_sdk_delete_marker_replication() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "DeleteMarkerReplication": { "Status": "Disabled" },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let dmr = cfg.rules()[0].delete_marker_replication().unwrap();
+        assert_eq!(dmr.status(), Some(&DeleteMarkerReplicationStatus::Disabled));
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_account_and_storage_class() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "Account": "222222222222",
+              "StorageClass": "STANDARD_IA"
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        assert_eq!(d.account(), Some("222222222222"));
+        assert_eq!(d.storage_class(), Some(&StorageClass::StandardIa));
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_access_control_translation() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "AccessControlTranslation": { "Owner": "Destination" }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let act = cfg.rules()[0]
+            .destination()
+            .unwrap()
+            .access_control_translation()
+            .unwrap();
+        assert_eq!(act.owner().as_str(), "Destination");
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_encryption_configuration() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "EncryptionConfiguration": { "ReplicaKmsKeyID": "arn:aws:kms:us-east-1:1:key/abc" }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ec = cfg.rules()[0]
+            .destination()
+            .unwrap()
+            .encryption_configuration()
+            .unwrap();
+        assert_eq!(
+            ec.replica_kms_key_id(),
+            Some("arn:aws:kms:us-east-1:1:key/abc")
+        );
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_replication_time_and_metrics() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "ReplicationTime": { "Status": "Enabled", "Time": { "Minutes": 15 } },
+              "Metrics": { "Status": "Enabled", "EventThreshold": { "Minutes": 15 } }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        let rt = d.replication_time().unwrap();
+        assert_eq!(rt.status(), &ReplicationTimeStatus::Enabled);
+        assert_eq!(rt.time().unwrap().minutes(), Some(15));
+        let m = d.metrics().unwrap();
+        assert_eq!(m.status(), &MetricsStatus::Enabled);
+        assert_eq!(m.event_threshold().unwrap().minutes(), Some(15));
+    }
+
+    #[test]
+    fn replication_invalid_json_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str("{not json");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn replication_missing_role_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str(r#"{"Rules":[]}"#);
+        assert!(res.is_err(), "missing required `Role` must error");
+    }
+
+    #[test]
+    fn replication_missing_rules_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str(r#"{"Role":"r"}"#);
+        assert!(res.is_err(), "missing required `Rules` must error");
+    }
+
+    #[test]
+    fn replication_missing_destination_in_rule_errors() {
+        let res: Result<ReplicationConfigurationJson, _> =
+            serde_json::from_str(r#"{"Role":"r","Rules":[{"Status":"Enabled"}]}"#);
+        assert!(res.is_err(), "missing required `Destination` must error");
+    }
+
+    #[test]
+    fn replication_missing_status_in_rule_errors() {
+        let res: Result<ReplicationConfigurationJson, _> =
+            serde_json::from_str(r#"{"Role":"r","Rules":[{"Destination":{"Bucket":"d"}}]}"#);
+        assert!(res.is_err(), "missing required `Status` must error");
+    }
+
+    #[test]
+    fn replication_into_sdk_unknown_status_passes_through() {
+        // Unknown enum values are passed through to the SDK; S3 rejects
+        // server-side. Mirrors how lifecycle/notification handle unknowns.
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "UnknownState",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        // ReplicationRuleStatus::Unknown(...) — exact variant is opaque, but
+        // as_str round-trips back to the original value.
+        assert_eq!(cfg.rules()[0].status().as_str(), "UnknownState");
     }
 }
