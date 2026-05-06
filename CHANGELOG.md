@@ -5,19 +5,6 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Fixed
-
-- `head-object` output now includes `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and `ChecksumXXHASH128` when S3 returns the corresponding `x-amz-checksum-*` response header. Previously these five checksums were stripped from the JSON output, so objects uploaded with one of those algorithms appeared to have no checksum.
-- `put-bucket-logging`: `TargetGrants` is now applied to the bucket as written. Previously the field parsed without error but was silently dropped, so the bucket ended up configured as if you had not specified it. AWS CLI v2 input that includes `TargetGrants` (canonical user / `AmazonCustomerByEmail` / `Group` URI grantees with `FULL_CONTROL` / `READ` / `WRITE` permission) now round-trips correctly.
-- `get-bucket-logging` output now includes `TargetGrants` per `LoggingEnabled` when the bucket has them configured.
-- `put-bucket-lifecycle-configuration`: the `Date` field on `Expiration` and `Transitions` now accepts the ISO 8601 date-only form (`YYYY-MM-DD`, interpreted as midnight UTC), matching what AWS CLI v2 accepts. Previously only full RFC 3339 timestamps with a time component were accepted.
-
-### Changed
-
-- `get-bucket-versioning` output now emits only `MFADelete` (the casing AWS CLI v2 uses), not the additional legacy `MfaDelete` key. Scripts that read `MFADelete` are unaffected; scripts that read the duplicate `MfaDelete` key need to switch to `MFADelete`.
-
 ## [1.3.0] - 2026-05-06
 
 ### Added
@@ -32,9 +19,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `put-bucket-lifecycle-configuration`: rules that use object-size filters (`ObjectSizeGreaterThan`, `ObjectSizeLessThan` — at the top level of `Filter` or under `Filter.And`) and `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and entries of `NoncurrentVersionTransitions`) are now applied to the bucket as written. In 1.2.0 these fields parsed without error but were silently ignored, so the bucket ended up configured as if you had not specified them.
 - `put-bucket-encryption`: rules can now include `BlockedEncryptionTypes` (used to block SSE-C uploads on a bucket). In 1.2.0 the field was silently ignored.
+- `put-bucket-lifecycle-configuration`: the `Date` field on `Expiration` and `Transitions` now accepts the ISO 8601 date-only form (`YYYY-MM-DD`, interpreted as midnight UTC), matching what AWS CLI v2 accepts. Previously only full RFC 3339 timestamps with a time component were accepted.
+- `put-bucket-logging`: `TargetGrants` is now applied to the bucket as written. Previously the field parsed without error but was silently dropped, so the bucket ended up configured as if you had not specified it. AWS CLI v2 input that includes `TargetGrants` (canonical user / `AmazonCustomerByEmail` / `Group` URI grantees with `FULL_CONTROL` / `READ` / `WRITE` permission) now round-trips correctly.
 - `get-bucket-lifecycle-configuration` output now includes `ObjectSizeGreaterThan` / `ObjectSizeLessThan` (under both `Filter` and `Filter.And`), `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and each entry of `NoncurrentVersionTransitions`), and the top-level `TransitionDefaultMinimumObjectSize`. In 1.2.0 these were stripped from the output even when set on the bucket, so the JSON did not reflect the actual configuration.
 - `get-bucket-encryption` output now includes `BlockedEncryptionTypes` per rule when configured.
+- `get-bucket-logging` output now includes `TargetGrants` per `LoggingEnabled` when the bucket has them configured.
 - `head-object` output now includes `ContentRange` when set (returned by S3 when the request specified a byte range).
+- `head-object` output now includes `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and `ChecksumXXHASH128` when S3 returns the corresponding `x-amz-checksum-*` response header. Previously these five checksums were stripped from the JSON output, so objects uploaded with one of those algorithms appeared to have no checksum.
+
+### Changed
+
+- `get-bucket-versioning` output now emits only `MFADelete` (the casing AWS CLI v2 uses), not the additional legacy `MfaDelete` key. Scripts that read `MFADelete` are unaffected; scripts that read the duplicate `MfaDelete` key need to switch to `MFADelete`.
 
 ## [1.2.0] - 2026-05-03
 
