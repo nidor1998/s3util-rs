@@ -7,19 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.3.0] - 2026-05-06
 
+### Added
+
+- New replication subcommands: `get-bucket-replication`, `put-bucket-replication`, `delete-bucket-replication`. Read, install, and remove a bucket's replication configuration (cross-region or same-region rules). The configuration JSON for `put-` matches the AWS-CLI input shape for `aws s3api put-bucket-replication`.
+- New transfer-acceleration subcommands: `get-bucket-accelerate-configuration`, `put-bucket-accelerate-configuration`. Read and toggle (`Enabled` / `Suspended`) S3 Transfer Acceleration on a bucket.
+- New requester-pays subcommands: `get-bucket-request-payment`, `put-bucket-request-payment`. Read and switch a bucket between owner-pays (default) and requester-pays billing.
+- `get-bucket-policy-status`: report whether a bucket policy makes the bucket public, as `{"PolicyStatus": {"IsPublic": true|false}}`.
+- `restore-object`: initiate a restore of an archived (S3 Glacier-class) object so it becomes readable for `--days N`. Retrieval tier selectable via `--tier <Standard|Bulk|Expedited>`; specific object versions selectable via `--source-version-id`. Honors `--dry-run`.
+
 ### Fixed
 
-- `restore-object --tier <Standard|Bulk|Expedited>` now succeeds. Previously the call failed with `MalformedXML` from S3, so passing `--tier` to restore an archived object never worked.
-- `put-bucket-lifecycle-configuration`: rules that use object-size filters (`ObjectSizeGreaterThan`, `ObjectSizeLessThan` — at the top level of `Filter` or under `Filter.And`) and `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and entries of `NoncurrentVersionTransitions`) are now applied to the bucket as written. Previously these fields parsed without error but were silently ignored, so the bucket ended up configured as if you had not specified them.
-- `put-bucket-encryption`: rules can now include `BlockedEncryptionTypes` (used to block SSE-C uploads on a bucket). Previously the field was silently ignored.
-- `get-bucket-lifecycle-configuration` JSON output now includes `ObjectSizeGreaterThan` / `ObjectSizeLessThan` (under both `Filter` and `Filter.And`), `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and each entry of `NoncurrentVersionTransitions`), and the top-level `TransitionDefaultMinimumObjectSize`. Previously these were stripped from the output even when set on the bucket, so the JSON did not reflect the actual configuration.
-- `get-bucket-encryption` JSON output now includes `BlockedEncryptionTypes` per rule when configured.
-- `get-bucket-accelerate-configuration` JSON output now includes `RequestCharged` when S3 returns it (Requester Pays buckets where the caller paid for the request).
-- `head-object` JSON output now includes `ContentRange` when set (returned by S3 when the request specified a byte range).
-
-### Removed
-
-- `restore-object --description`. The flag was a no-op: S3 honors `Description` only for the SELECT query path, which this CLI does not support. Remove it from any scripts that passed it; the CLI now rejects unknown flags with an argument-validation error.
+- `put-bucket-lifecycle-configuration`: rules that use object-size filters (`ObjectSizeGreaterThan`, `ObjectSizeLessThan` — at the top level of `Filter` or under `Filter.And`) and `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and entries of `NoncurrentVersionTransitions`) are now applied to the bucket as written. In 1.2.0 these fields parsed without error but were silently ignored, so the bucket ended up configured as if you had not specified them.
+- `put-bucket-encryption`: rules can now include `BlockedEncryptionTypes` (used to block SSE-C uploads on a bucket). In 1.2.0 the field was silently ignored.
+- `get-bucket-lifecycle-configuration` output now includes `ObjectSizeGreaterThan` / `ObjectSizeLessThan` (under both `Filter` and `Filter.And`), `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and each entry of `NoncurrentVersionTransitions`), and the top-level `TransitionDefaultMinimumObjectSize`. In 1.2.0 these were stripped from the output even when set on the bucket, so the JSON did not reflect the actual configuration.
+- `get-bucket-encryption` output now includes `BlockedEncryptionTypes` per rule when configured.
+- `head-object` output now includes `ContentRange` when set (returned by S3 when the request specified a byte range).
 
 ## [1.2.0] - 2026-05-03
 
