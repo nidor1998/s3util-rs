@@ -36,10 +36,6 @@ pub struct RestoreObjectArgs {
     #[arg(long, env, value_parser = parse_tier, help_heading = "Object Options")]
     pub tier: Option<Tier>,
 
-    /// Optional description for the restore job
-    #[arg(long, env, help_heading = "Object Options")]
-    pub description: Option<String>,
-
     /// Version ID of the source object
     #[arg(long, env, help_heading = "Object Options")]
     pub source_version_id: Option<String>,

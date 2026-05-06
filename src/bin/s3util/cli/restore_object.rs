@@ -1,5 +1,5 @@
 use anyhow::Result;
-use aws_sdk_s3::types::RestoreRequest;
+use aws_sdk_s3::types::{GlacierJobParameters, RestoreRequest};
 use tracing::info;
 
 use s3util_rs::config::ClientConfig;
@@ -9,8 +9,8 @@ use s3util_rs::storage::s3::api;
 /// Runtime entry for `s3util restore-object s3://<BUCKET>/<KEY> --days N --tier T`.
 ///
 /// Builds the SDK client from `client_config`, builds a `RestoreRequest`
-/// from `--days`, `--tier`, and `--description`, and issues `RestoreObject`.
-/// Exits silently on success.
+/// from `--days` and `--tier`, and issues `RestoreObject`. Exits silently
+/// on success.
 pub async fn run_restore_object(
     args: RestoreObjectArgs,
     client_config: ClientConfig,
@@ -24,10 +24,11 @@ pub async fn run_restore_object(
         req = req.days(d);
     }
     if let Some(t) = args.tier.clone() {
-        req = req.tier(t);
-    }
-    if let Some(desc) = args.description.clone() {
-        req = req.description(desc);
+        // For archive (Glacier-class) restore, S3 expects `<Tier>` inside
+        // `<GlacierJobParameters>`. The top-level `<Tier>` element is only
+        // valid for the (now-deprecated) SELECT type, and S3 rejects it
+        // with MalformedXML for archive restores.
+        req = req.glacier_job_parameters(GlacierJobParameters::builder().tier(t).build()?);
     }
     let restore_request = req.build();
 
