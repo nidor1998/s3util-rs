@@ -150,9 +150,18 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     if let Some(v) = out.cache_control() {
         map.insert("CacheControl".to_string(), Value::String(v.to_string()));
     }
-    // Use the string variant to avoid the deprecated DateTime getter.
-    if let Some(v) = out.expires_string.as_deref() {
-        map.insert("Expires".to_string(), Value::String(v.to_string()));
+    // AWS CLI v2 emits both `Expires` (parsed ISO-8601 timestamp, deprecated
+    // but still emitted) and `ExpiresString` (raw HTTP-date header value).
+    // The SDK populates `expires` only when the header parsed successfully;
+    // `expires_string` is set whenever the header was present.
+    #[allow(deprecated)]
+    if let Some(dt) = out.expires()
+        && let Ok(c) = dt.to_chrono_utc()
+    {
+        map.insert("Expires".to_string(), Value::String(c.to_rfc3339()));
+    }
+    if let Some(v) = out.expires_string() {
+        map.insert("ExpiresString".to_string(), Value::String(v.to_string()));
     }
     if let Some(v) = out.version_id() {
         map.insert("VersionId".to_string(), Value::String(v.to_string()));
@@ -1164,14 +1173,14 @@ fn serialize_destination(d: &aws_sdk_s3::types::Destination) -> Value {
             "Status".to_string(),
             Value::String(rt.status().as_str().to_string()),
         );
-        if let Some(t) = rt.time()
-            && let Some(min) = t.minutes()
-        {
+        if let Some(t) = rt.time() {
             let mut tm = Map::new();
-            tm.insert(
-                "Minutes".to_string(),
-                Value::Number(serde_json::Number::from(min)),
-            );
+            if let Some(min) = t.minutes() {
+                tm.insert(
+                    "Minutes".to_string(),
+                    Value::Number(serde_json::Number::from(min)),
+                );
+            }
             rm.insert("Time".to_string(), Value::Object(tm));
         }
         m.insert("ReplicationTime".to_string(), Value::Object(rm));
@@ -1182,14 +1191,14 @@ fn serialize_destination(d: &aws_sdk_s3::types::Destination) -> Value {
             "Status".to_string(),
             Value::String(metrics.status().as_str().to_string()),
         );
-        if let Some(et) = metrics.event_threshold()
-            && let Some(min) = et.minutes()
-        {
+        if let Some(et) = metrics.event_threshold() {
             let mut tm = Map::new();
-            tm.insert(
-                "Minutes".to_string(),
-                Value::Number(serde_json::Number::from(min)),
-            );
+            if let Some(min) = et.minutes() {
+                tm.insert(
+                    "Minutes".to_string(),
+                    Value::Number(serde_json::Number::from(min)),
+                );
+            }
             mm.insert("EventThreshold".to_string(), Value::Object(tm));
         }
         m.insert("Metrics".to_string(), Value::Object(mm));
@@ -1599,13 +1608,42 @@ mod tests {
     }
 
     #[test]
-    fn head_object_with_expires_string() {
+    fn head_object_with_expires_string_only() {
+        // Header was unparseable: SDK populates `expires_string` only; we
+        // emit `ExpiresString` and omit `Expires`.
         let out = HeadObjectOutput::builder()
             .expires_string("Wed, 21 Oct 2026 07:28:00 GMT")
             .build();
         let json = head_object_to_json(&out);
         assert_eq!(
+            json["ExpiresString"],
+            Value::String("Wed, 21 Oct 2026 07:28:00 GMT".into())
+        );
+        assert!(json.get("Expires").is_none());
+    }
+
+    #[test]
+    fn head_object_with_expires_and_expires_string() {
+        // Header parsed cleanly: AWS CLI v2 emits both `Expires` (ISO-8601)
+        // and `ExpiresString` (raw HTTP-date).
+        #[allow(deprecated)]
+        let out = HeadObjectOutput::builder()
+            .expires(
+                aws_smithy_types::DateTime::from_str(
+                    "2026-10-21T07:28:00Z",
+                    aws_smithy_types::date_time::Format::DateTime,
+                )
+                .unwrap(),
+            )
+            .expires_string("Wed, 21 Oct 2026 07:28:00 GMT")
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(
             json["Expires"],
+            Value::String("2026-10-21T07:28:00+00:00".into())
+        );
+        assert_eq!(
+            json["ExpiresString"],
             Value::String("Wed, 21 Oct 2026 07:28:00 GMT".into())
         );
     }
@@ -3056,6 +3094,54 @@ mod tests {
             d["Metrics"]["EventThreshold"]["Minutes"],
             Value::Number(serde_json::Number::from(15))
         );
+    }
+
+    #[test]
+    fn get_bucket_replication_emits_time_wrapper_when_minutes_absent() {
+        // ReplicationTime.Time and Metrics.EventThreshold are containers and
+        // must be emitted whenever the SDK populated them, even if the inner
+        // Minutes field is unexpectedly absent.
+        let rt = aws_sdk_s3::types::ReplicationTime::builder()
+            .status(aws_sdk_s3::types::ReplicationTimeStatus::Enabled)
+            .time(aws_sdk_s3::types::ReplicationTimeValue::builder().build())
+            .build()
+            .unwrap();
+        let metrics = aws_sdk_s3::types::Metrics::builder()
+            .status(aws_sdk_s3::types::MetricsStatus::Enabled)
+            .event_threshold(aws_sdk_s3::types::ReplicationTimeValue::builder().build())
+            .build()
+            .unwrap();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .replication_time(rt)
+            .metrics(metrics)
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let d = &json["ReplicationConfiguration"]["Rules"][0]["Destination"];
+        assert!(
+            d["ReplicationTime"]["Time"].is_object(),
+            "Time wrapper must be emitted even when Minutes is None"
+        );
+        assert!(d["ReplicationTime"]["Time"].get("Minutes").is_none());
+        assert!(
+            d["Metrics"]["EventThreshold"].is_object(),
+            "EventThreshold wrapper must be emitted even when Minutes is None"
+        );
+        assert!(d["Metrics"]["EventThreshold"].get("Minutes").is_none());
     }
 
     #[test]

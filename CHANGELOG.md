@@ -26,6 +26,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `get-bucket-logging` output now includes `TargetGrants` per `LoggingEnabled` when the bucket has them configured.
 - `head-object` output now includes `ContentRange` when set (returned by S3 when the request specified a byte range).
 - `head-object` output now includes `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and `ChecksumXXHASH128` when S3 returns the corresponding `x-amz-checksum-*` response header. Previously these five checksums were stripped from the JSON output, so objects uploaded with one of those algorithms appeared to have no checksum.
+- `head-object` output now emits `Expires` as an ISO 8601 timestamp (the parsed value of the `Expires` HTTP header) and a separate `ExpiresString` field containing the raw header value, matching `aws s3api head-object`. Previously the `Expires` key carried the raw HTTP-date string and `ExpiresString` was not emitted at all, so scripts expecting AWS-CLI-shape `Expires` saw an unparsed RFC 7231 string instead of an ISO 8601 timestamp.
+- `get-bucket-replication` output now emits the `Time` container under `Destination.ReplicationTime` and the `EventThreshold` container under `Destination.Metrics` whenever S3 populates them, even if the inner `Minutes` field happens to be absent. Previously these wrapper objects were silently dropped together with the missing `Minutes`, hiding the fact that S3 had returned the surrounding RTC / replication-metrics block.
 
 ### Changed
 
