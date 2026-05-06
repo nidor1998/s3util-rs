@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-06
+
+### Fixed
+
+- `restore-object`: previous releases sent `<Tier>` as a top-level child of `<RestoreRequest>` when `--tier` was supplied. S3 only accepts top-level `<Tier>` for the deprecated `<Type>SELECT</Type>` shape and rejects it on archive (Glacier-class) restores with `MalformedXML`. The tier is now wrapped inside `<GlacierJobParameters>`, matching what `aws s3api restore-object --restore-request '{"Days":N,"GlacierJobParameters":{"Tier":"…"}}'` sends.
+- AWS-CLI-shape JSON input on `put-bucket-*` subcommands no longer silently drops valid S3 fields. `LifecycleRuleFilter` / `LifecycleRuleAndOperator` now accept `ObjectSizeGreaterThan` and `ObjectSizeLessThan`; `NoncurrentVersionExpiration` and `NoncurrentVersionTransition` accept `NewerNoncurrentVersions`; `ServerSideEncryptionRule` accepts `BlockedEncryptionTypes`. Previously these fields parsed without error but were not forwarded to the SDK, producing a quietly-truncated configuration on the bucket.
+- AWS-CLI-shape JSON output on `get-bucket-*` and `head-object` subcommands no longer silently omits SDK-populated fields. `get-bucket-lifecycle-configuration` now emits `ObjectSizeGreaterThan` / `ObjectSizeLessThan` (filter and `And` operator), `NewerNoncurrentVersions` (current and noncurrent transitions), and the top-level `TransitionDefaultMinimumObjectSize`. `get-bucket-encryption` emits `BlockedEncryptionTypes`. `get-bucket-accelerate-configuration` emits `RequestCharged` when present. `head-object` emits `ContentRange` when present.
+
+### Removed
+
+- `restore-object --description`. The `<Description>` element is meaningful only for `<Type>SELECT</Type>` queries, which this CLI does not support; sending it on archive restores was a silent no-op, so exposing the flag was misleading. Scripts that passed `--description …` will now error at clap argument parsing.
+
 ## [1.2.0] - 2026-05-03
 
 ### Added
