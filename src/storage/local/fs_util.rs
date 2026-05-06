@@ -758,10 +758,41 @@ mod tests {
         );
     }
 
+    /// Probe whether the filesystem holding `dir` preserves an mtime of
+    /// exactly `nanos` sub-second nanoseconds. Some Docker bind-mount layers
+    /// (e.g. `fakeowner` on macOS hosts) silently round to whole seconds, and
+    /// some filesystems only support microsecond precision. Returning `false`
+    /// for those cases lets the caller skip nanosecond-equality assertions.
+    #[cfg(target_family = "unix")]
+    fn fs_preserves_mtime_nanos(dir: &Path, nanos: u32) -> bool {
+        let probe = match NamedTempFile::new_in(dir) {
+            Ok(p) => p,
+            Err(_) => return false,
+        };
+        if set_file_mtime(probe.path(), FileTime::from_unix_time(0, nanos)).is_err() {
+            return false;
+        }
+        let modified = match std::fs::metadata(probe.path()).and_then(|m| m.modified()) {
+            Ok(m) => m,
+            Err(_) => return false,
+        };
+        modified
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.subsec_nanos() == nanos)
+            .unwrap_or(false)
+    }
+
     #[tokio::test]
     #[cfg(target_family = "unix")]
     async fn set_last_modification_time_unix() {
         init_dummy_tracing_subscriber();
+
+        // Probe the filesystem upfront — `./test_data/` may live on a Docker
+        // bind-mount layer that drops sub-second mtime precision (notably
+        // `fakeowner` when the dev container is on macOS). When precision is
+        // unsupported, skip the nanosecond-equality assertion below; the
+        // seconds field still validates the round-trip.
+        let preserves_subsec = fs_preserves_mtime_nanos(Path::new("./test_data/"), 999);
 
         set_last_modified("./test_data/".into(), "5byte.dat", 0, 0).unwrap();
         let mtime = get_last_modified(&"./test_data/5byte.dat".into())
@@ -775,7 +806,9 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(mtime.secs(), 777);
-        assert_eq!(mtime.subsec_nanos(), 999);
+        if preserves_subsec {
+            assert_eq!(mtime.subsec_nanos(), 999);
+        }
     }
 
     #[tokio::test]
