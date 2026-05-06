@@ -8,3 +8,4 @@ lcov.info
 *.profraw
 .DS_Store
 /docs
+/.devcontainer

@@ -861,6 +861,206 @@ async fn main() -> ExitCode {
                 };
             return ExitCode::from(exit_code as u8);
         }
+        Commands::PutBucketReplication(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_put_bucket_replication(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::GetBucketReplication(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_get_bucket_replication(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::DeleteBucketReplication(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_delete_bucket_replication(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::PutBucketAccelerateConfiguration(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code =
+                match cli::run_put_bucket_accelerate_configuration(args, client_config).await {
+                    Ok(()) => cli::EXIT_CODE_SUCCESS,
+                    Err(e) => {
+                        tracing::error!(error = format!("{e:#}"));
+                        cli::EXIT_CODE_ERROR
+                    }
+                };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::GetBucketAccelerateConfiguration(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code =
+                match cli::run_get_bucket_accelerate_configuration(args, client_config).await {
+                    Ok(status) => status.code(),
+                    Err(e) => {
+                        tracing::error!(error = format!("{e:#}"));
+                        cli::EXIT_CODE_ERROR
+                    }
+                };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::PutBucketRequestPayment(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_put_bucket_request_payment(args, client_config).await {
+                Ok(()) => cli::EXIT_CODE_SUCCESS,
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::GetBucketRequestPayment(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_get_bucket_request_payment(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::GetBucketPolicyStatus(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config();
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_get_bucket_policy_status(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
+        Commands::RestoreObject(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_restore_object(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
     }
 }
 

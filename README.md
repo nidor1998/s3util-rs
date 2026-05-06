@@ -96,7 +96,7 @@ For object transfers in particular, `s3util` emphasizes high reliability, high p
 
 ### Scope
 
-s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`) and common bucket management (creation/deletion, tagging, versioning, policy, lifecycle, encryption, CORS, public-access-block, website, logging, notifications). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
+s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`), single-object restore from archive (`restore-object`), and common bucket management (creation/deletion, tagging, versioning, policy, policy status, lifecycle, encryption, CORS, public-access-block, website, logging, notifications, replication, Transfer Acceleration, request payment). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
 
 The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
 
@@ -209,6 +209,15 @@ Issues and pull requests requesting any of the above will be closed.
 | `get-bucket-logging`                     | Prints bucket logging configuration as JSON; silent when no logging is configured (matches AWS CLI) |
 | `put-bucket-notification-configuration`  | Sets notification configuration from a JSON file path or `-` (stdin); empty `{}` JSON disables all notifications; silent on success |
 | `get-bucket-notification-configuration`  | Prints notification configuration as JSON; silent when no notifications are configured (matches AWS CLI) |
+| `put-bucket-replication`                 | Sets replication configuration from a JSON file path or `-` (stdin); silent on success |
+| `get-bucket-replication`                 | Prints replication configuration as JSON; exits 4 if no replication rules are set |
+| `delete-bucket-replication`              | Removes replication configuration; silent on success                                |
+| `put-bucket-accelerate-configuration`    | Enables or suspends Transfer Acceleration (`--enabled` / `--suspended`, mutually exclusive); silent |
+| `get-bucket-accelerate-configuration`    | Prints Transfer Acceleration state as JSON (`{"Status": "Enabled"}`); silent when never configured |
+| `put-bucket-request-payment`             | Sets request-payment payer (`--requester` / `--bucket-owner`, mutually exclusive); silent |
+| `get-bucket-request-payment`             | Prints request-payment configuration as JSON (`{"Payer": "BucketOwner"}`)          |
+| `get-bucket-policy-status`               | Prints policy status as JSON (`{"PolicyStatus": {"IsPublic": …}}`); exits 4 if no policy is attached |
+| `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
 
 ## Features
 
@@ -294,7 +303,7 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 
 ### Dry-run
 
-`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rm`, `create-bucket`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
+`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rm`, `create-bucket`, `restore-object`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
 
 To make the message visible at the default `WarnLevel`, `--dry-run` automatically raises the verbosity floor to **info**. Levels you've explicitly raised (`-vv` for debug, `-vvv` for trace) are preserved unchanged; lower levels (`-q`, even full silence with `-qqq`) are still bumped to info so the line stays visible.
 
@@ -577,7 +586,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — an argument is unknown, missing, or has an invalid value                                   |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
-| 4    | Not found — `head-bucket` / `head-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` only on `NoSuchBucket` — for these three, an unconfigured subresource is reported by S3 as a successful empty body, which exits 0, not 4 |
+| 4    | Not found — `head-bucket` / `head-object` / `restore-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
 | 101  | Abnormal termination (internal panic)                                                                               |
 | 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 
@@ -625,13 +634,13 @@ Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB
 
 ### --dry-run
 
-Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rm`, `create-bucket`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
+Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rm`, `create-bucket`, `restore-object`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
 
 ### -v / -q
 
 `s3util` uses [tracing-subscriber](https://docs.rs/tracing-subscriber) for tracing. More occurrences of `-v` increase verbosity (`-v`: `info`, `-vv`: `debug`, `-vvv`: `trace`). Use `-q`, `-qq` to reduce verbosity. Default: warning and error messages.
 
-With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, and `get-bucket-notification-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these three).
+With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `restore-object`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, `get-bucket-notification-configuration`, and `get-bucket-accelerate-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these four).
 
 ### --aws-sdk-tracing
 
@@ -763,7 +772,7 @@ Live-AWS coverage of these paths includes seven multipart integrity tests across
 
 Each thin wrapper is one async function in `src/storage/s3/api.rs` plus a runtime in `src/bin/s3util/cli/<name>.rs`. The dangerous classes of bug differ from the transfer engine:
 
-- Error mis-routing. A `HeadError` enum (`src/storage/s3/api.rs:67`) distinguishes `BucketNotFound`, `NotFound`, and `Other`. The `classify_not_found` helper (`src/storage/s3/api.rs:249`) routes `NoSuchBucket` to `BucketNotFound` before consulting any per-subresource list, so a missing bucket is never reported as a missing tag/policy/configuration. Each `get-*` subcommand has its own `GET_*_NOT_FOUND_CODES` constant; 11 `*_not_found_codes_pinned` unit tests assert the exact contents of those constants, and four `classify_not_found_*` tests assert that `NoSuchBucket` always routes to `BucketNotFound` ahead of any subresource code. A typo or accidental edit fails unit tests instead of producing a wrong exit code at e2e time.
+- Error mis-routing. A `HeadError` enum (`src/storage/s3/api.rs`) distinguishes `BucketNotFound`, `NotFound`, and `Other`. The `classify_not_found` helper routes `NoSuchBucket` to `BucketNotFound` before consulting any per-subresource list, so a missing bucket is never reported as a missing tag/policy/configuration. Each `get-*` subcommand (and `restore-object`) has its own `*_NOT_FOUND_CODES` constant; 16 `*_not_found_codes_pinned` unit tests assert the exact contents of those constants, and four `classify_not_found_*` tests assert that `NoSuchBucket` always routes to `BucketNotFound` ahead of any subresource code. A typo or accidental edit fails unit tests instead of producing a wrong exit code at e2e time.
 - Wrong-operation routing. `tests/cli_command_api_mapping.rs` pins the chain from clap subcommand to `main.rs` runtime, from runtime to `api::*` wrapper, and from each wrapper to the expected AWS SDK operation. For example, `get-bucket-policy` must dispatch to `run_get_bucket_policy`, call `api::get_bucket_policy`, and wrap `client.get_bucket_policy()` rather than a sibling operation such as versioning or deletion.
 - Output JSON shape drift. The SDK types do not implement `Serialize`, and the SDK field shape does not match `aws s3api --output json`. `src/output/json.rs` hand-serialises every `head-*` / `get-*` response (e.g. `get_bucket_policy_to_json` at line 30, which double-encodes `Policy` to match `aws s3api`'s shape) and contains 83 unit-test annotations covering field naming, omission of absent fields, and the `{}` empty-body cases for `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration`.
 - Input JSON shape drift. JSON-consuming `put-*` subcommands (`put-bucket-cors`, `put-bucket-encryption`, `put-bucket-lifecycle-configuration`, `put-bucket-logging`, `put-bucket-notification-configuration`, `put-bucket-website`, `put-public-access-block`) parse user-supplied JSON through dedicated mirror structs in `src/input/json.rs` (e.g. `CorsConfigurationJson`) before converting to SDK types. `src/input/json.rs` carries 64 unit-test annotations. E2E tests assert that every JSON-consuming `put-*` subcommand rejects malformed JSON with exit code 1 from both file and stdin.
@@ -975,12 +984,16 @@ For a non-technical user, "reliability" means the tool is highly unlikely to cor
 
 ## Contributing
 
-- Suggestions and bug reports are welcome, but responses are not guaranteed.
-- Pull requests for new features are generally not accepted, as they may conflict with the design philosophy.
+- Bug reports are welcome, but responses are not guaranteed.
+- Since this project is considered functionally complete, I will not accept any feature requests.
 - If you find this project useful, feel free to fork and modify it as you wish.
 
-🔒 I consider this project to be "complete" and will maintain it only minimally going forward.  
+🔒 I consider this project “complete” and will maintain it only minimally going forward.
 However, I intend to keep the AWS SDK for Rust and other dependencies up to date monthly.
+
+**Issue and PR lifecycle**
+
+To keep the tracker focused, an issue or PR with no activity for 30 days is labeled `stale` and closed 7 days later unless a new comment (or, for PRs, a new commit) is added. Items labeled `pinned` or `security` are exempt; PRs are also exempt from `pinned`. Closed items can always be reopened.
 
 ## License
 

@@ -13,17 +13,24 @@
 
 use anyhow::Result;
 use aws_sdk_s3::types::{
-    AbortIncompleteMultipartUpload, BucketLifecycleConfiguration, BucketLoggingStatus, Condition,
-    CorsConfiguration, CorsRule, ErrorDocument, Event, EventBridgeConfiguration, ExpirationStatus,
-    FilterRule, FilterRuleName, IndexDocument, LambdaFunctionConfiguration, LifecycleExpiration,
-    LifecycleRule, LifecycleRuleAndOperator, LifecycleRuleFilter, LoggingEnabled,
-    NoncurrentVersionExpiration, NoncurrentVersionTransition, NotificationConfiguration,
-    NotificationConfigurationFilter, PartitionDateSource, PartitionedPrefix, Protocol,
+    AbortIncompleteMultipartUpload, AccessControlTranslation, BlockedEncryptionTypes,
+    BucketLifecycleConfiguration, BucketLoggingStatus, BucketLogsPermission, Condition,
+    CorsConfiguration, CorsRule, DeleteMarkerReplication, DeleteMarkerReplicationStatus,
+    Destination, EncryptionConfiguration, EncryptionType, ErrorDocument, Event,
+    EventBridgeConfiguration, ExistingObjectReplication, ExistingObjectReplicationStatus,
+    ExpirationStatus, FilterRule, FilterRuleName, Grantee, IndexDocument,
+    LambdaFunctionConfiguration, LifecycleExpiration, LifecycleRule, LifecycleRuleAndOperator,
+    LifecycleRuleFilter, LoggingEnabled, Metrics, MetricsStatus, NoncurrentVersionExpiration,
+    NoncurrentVersionTransition, NotificationConfiguration, NotificationConfigurationFilter,
+    OwnerOverride, PartitionDateSource, PartitionedPrefix, Protocol,
     PublicAccessBlockConfiguration, QueueConfiguration, Redirect, RedirectAllRequestsTo,
-    RoutingRule, S3KeyFilter, ServerSideEncryption, ServerSideEncryptionByDefault,
-    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, SimplePrefix, Tag as SdkTag,
-    TargetObjectKeyFormat, TopicConfiguration, Transition, TransitionStorageClass,
-    WebsiteConfiguration,
+    ReplicaModifications, ReplicaModificationsStatus, ReplicationConfiguration, ReplicationRule,
+    ReplicationRuleAndOperator, ReplicationRuleFilter, ReplicationRuleStatus, ReplicationTime,
+    ReplicationTimeStatus, ReplicationTimeValue, RoutingRule, S3KeyFilter, ServerSideEncryption,
+    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+    SimplePrefix, SourceSelectionCriteria, SseKmsEncryptedObjects, SseKmsEncryptedObjectsStatus,
+    StorageClass, Tag as SdkTag, TargetGrant, TargetObjectKeyFormat, TopicConfiguration,
+    Transition, TransitionStorageClass, Type as GranteeType, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
 use serde::Deserialize;
@@ -57,6 +64,8 @@ pub struct LifecycleRuleJson {
 pub struct LifecycleRuleFilterJson {
     pub Prefix: Option<String>,
     pub Tag: Option<TagJson>,
+    pub ObjectSizeGreaterThan: Option<i64>,
+    pub ObjectSizeLessThan: Option<i64>,
     pub And: Option<LifecycleRuleAndOperatorJson>,
 }
 
@@ -65,6 +74,8 @@ pub struct LifecycleRuleFilterJson {
 pub struct LifecycleRuleAndOperatorJson {
     pub Prefix: Option<String>,
     pub Tags: Option<Vec<TagJson>>,
+    pub ObjectSizeGreaterThan: Option<i64>,
+    pub ObjectSizeLessThan: Option<i64>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -87,6 +98,7 @@ pub struct LifecycleExpirationJson {
 #[allow(non_snake_case)]
 pub struct NoncurrentVersionExpirationJson {
     pub NoncurrentDays: Option<i32>,
+    pub NewerNoncurrentVersions: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -102,6 +114,7 @@ pub struct TransitionJson {
 pub struct NoncurrentVersionTransitionJson {
     pub NoncurrentDays: Option<i32>,
     pub StorageClass: Option<String>,
+    pub NewerNoncurrentVersions: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -167,16 +180,22 @@ impl LifecycleRuleJson {
 
 impl LifecycleRuleFilterJson {
     fn into_sdk(self) -> Result<LifecycleRuleFilter> {
-        // S3 lifecycle Filter is a one-of (Prefix XOR Tag XOR And); when
-        // multiple are supplied, the SDK builder accepts the last setter.
-        // We honour AWS-CLI semantics by passing values as-is and letting
-        // S3 reject bad combinations.
+        // S3 lifecycle Filter is a one-of (Prefix XOR Tag XOR ObjectSize* XOR
+        // And); when multiple are supplied, the SDK builder accepts the last
+        // setter. We honour AWS-CLI semantics by passing values as-is and
+        // letting S3 reject bad combinations.
         let mut b = LifecycleRuleFilter::builder();
         if let Some(p) = self.Prefix {
             b = b.prefix(p);
         }
         if let Some(t) = self.Tag {
             b = b.tag(SdkTag::builder().key(t.Key).value(t.Value).build()?);
+        }
+        if let Some(n) = self.ObjectSizeGreaterThan {
+            b = b.object_size_greater_than(n);
+        }
+        if let Some(n) = self.ObjectSizeLessThan {
+            b = b.object_size_less_than(n);
         }
         if let Some(and) = self.And {
             b = b.and(and.into_sdk()?);
@@ -195,6 +214,12 @@ impl LifecycleRuleAndOperatorJson {
             for t in tags {
                 b = b.tags(SdkTag::builder().key(t.Key).value(t.Value).build()?);
             }
+        }
+        if let Some(n) = self.ObjectSizeGreaterThan {
+            b = b.object_size_greater_than(n);
+        }
+        if let Some(n) = self.ObjectSizeLessThan {
+            b = b.object_size_less_than(n);
         }
         Ok(b.build())
     }
@@ -221,6 +246,9 @@ impl NoncurrentVersionExpirationJson {
         let mut b = NoncurrentVersionExpiration::builder();
         if let Some(n) = self.NoncurrentDays {
             b = b.noncurrent_days(n);
+        }
+        if let Some(n) = self.NewerNoncurrentVersions {
+            b = b.newer_noncurrent_versions(n);
         }
         b.build()
     }
@@ -251,6 +279,9 @@ impl NoncurrentVersionTransitionJson {
         if let Some(sc) = self.StorageClass {
             b = b.storage_class(TransitionStorageClass::from(sc.as_str()));
         }
+        if let Some(n) = self.NewerNoncurrentVersions {
+            b = b.newer_noncurrent_versions(n);
+        }
         b.build()
     }
 }
@@ -266,8 +297,17 @@ impl AbortIncompleteMultipartUploadJson {
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime> {
-    DateTime::from_str(s, aws_smithy_types::date_time::Format::DateTime)
-        .map_err(|e| anyhow::anyhow!("invalid RFC3339 timestamp {s:?}: {e}"))
+    // S3 documents Lifecycle/Transition `Date` as ISO 8601, which admits
+    // bare `YYYY-MM-DD`; the smithy parser only accepts full RFC 3339, so
+    // promote a date-only string to midnight UTC before delegating.
+    let bytes = s.as_bytes();
+    let normalised = if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' {
+        format!("{s}T00:00:00Z")
+    } else {
+        s.to_string()
+    };
+    DateTime::from_str(&normalised, aws_smithy_types::date_time::Format::DateTime)
+        .map_err(|e| anyhow::anyhow!("invalid ISO 8601 timestamp {s:?}: {e}"))
 }
 
 /// Mirror of `ServerSideEncryptionConfiguration` for the AWS-CLI input shape.
@@ -283,6 +323,7 @@ pub struct ServerSideEncryptionConfigurationJson {
 pub struct ServerSideEncryptionRuleJson {
     pub ApplyServerSideEncryptionByDefault: Option<ApplyServerSideEncryptionByDefaultJson>,
     pub BucketKeyEnabled: Option<bool>,
+    pub BlockedEncryptionTypes: Option<BlockedEncryptionTypesJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -291,6 +332,16 @@ pub struct ApplyServerSideEncryptionByDefaultJson {
     /// `AES256` or `aws:kms` or `aws:kms:dsse`.
     pub SSEAlgorithm: String,
     pub KMSMasterKeyID: Option<String>,
+}
+
+/// Mirror of `BlockedEncryptionTypes`. `EncryptionType` values are
+/// `NONE` and `SSE-C` (currently only SSE-C is supported by S3).
+/// Unknown values are passed through to the SDK enum; S3 will reject
+/// them server-side.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct BlockedEncryptionTypesJson {
+    pub EncryptionType: Option<Vec<String>>,
 }
 
 impl ServerSideEncryptionConfigurationJson {
@@ -322,6 +373,15 @@ impl ServerSideEncryptionRuleJson {
         }
         if let Some(bke) = self.BucketKeyEnabled {
             b = b.bucket_key_enabled(bke);
+        }
+        if let Some(bet) = self.BlockedEncryptionTypes {
+            let mut bb = BlockedEncryptionTypes::builder();
+            if let Some(types) = bet.EncryptionType {
+                for t in types {
+                    bb = bb.encryption_type(EncryptionType::from(t.as_str()));
+                }
+            }
+            b = b.blocked_encryption_types(bb.build());
         }
         Ok(b.build())
     }
@@ -542,10 +602,10 @@ impl RedirectJson {
 /// not expose a `DeleteBucketLogging` API; this is the documented way
 /// to remove a logging configuration.
 ///
-/// `TargetGrants` is intentionally not modelled — buckets that use the
-/// bucket-owner-enforced Object Ownership setting (the modern default)
-/// reject target grants, and the partitioned/simple-prefix configuration
-/// covers the common use case.
+/// `TargetGrants` is supported for AWS-CLI shape parity. Buckets using the
+/// bucket-owner-enforced Object Ownership setting reject target grants
+/// server-side, but the field is accepted at parse time so users can lift
+/// existing AWS-CLI inputs unchanged.
 #[derive(Debug, Clone, Deserialize)]
 #[allow(non_snake_case)]
 pub struct BucketLoggingStatusJson {
@@ -558,6 +618,29 @@ pub struct LoggingEnabledJson {
     pub TargetBucket: String,
     pub TargetPrefix: String,
     pub TargetObjectKeyFormat: Option<TargetObjectKeyFormatJson>,
+    pub TargetGrants: Option<Vec<TargetGrantJson>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct TargetGrantJson {
+    pub Grantee: Option<GranteeJson>,
+    /// `FULL_CONTROL`, `READ`, or `WRITE`. Unknown values are passed
+    /// through to the SDK enum; S3 will reject them server-side.
+    pub Permission: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct GranteeJson {
+    pub DisplayName: Option<String>,
+    pub EmailAddress: Option<String>,
+    pub ID: Option<String>,
+    pub URI: Option<String>,
+    /// `CanonicalUser`, `AmazonCustomerByEmail`, or `Group`. Unknown
+    /// values are passed through to the SDK enum; S3 will reject them
+    /// server-side.
+    pub Type: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -603,6 +686,43 @@ impl LoggingEnabledJson {
             .target_prefix(self.TargetPrefix);
         if let Some(fmt) = self.TargetObjectKeyFormat {
             b = b.target_object_key_format(fmt.into_sdk());
+        }
+        if let Some(grants) = self.TargetGrants {
+            for g in grants {
+                b = b.target_grants(g.into_sdk()?);
+            }
+        }
+        Ok(b.build()?)
+    }
+}
+
+impl TargetGrantJson {
+    fn into_sdk(self) -> Result<TargetGrant> {
+        let mut b = TargetGrant::builder();
+        if let Some(g) = self.Grantee {
+            b = b.grantee(g.into_sdk()?);
+        }
+        if let Some(p) = self.Permission {
+            b = b.permission(BucketLogsPermission::from(p.as_str()));
+        }
+        Ok(b.build())
+    }
+}
+
+impl GranteeJson {
+    fn into_sdk(self) -> Result<Grantee> {
+        let mut b = Grantee::builder().r#type(GranteeType::from(self.Type.as_str()));
+        if let Some(v) = self.DisplayName {
+            b = b.display_name(v);
+        }
+        if let Some(v) = self.EmailAddress {
+            b = b.email_address(v);
+        }
+        if let Some(v) = self.ID {
+            b = b.id(v);
+        }
+        if let Some(v) = self.URI {
+            b = b.uri(v);
         }
         Ok(b.build()?)
     }
@@ -836,6 +956,271 @@ impl FilterRuleJson {
             .name(FilterRuleName::from(self.Name.as_str()))
             .value(self.Value)
             .build()
+    }
+}
+
+/// Mirror of `ReplicationConfiguration` for the AWS-CLI input shape.
+/// Top-level wrapper for `put-bucket-replication` input JSON.
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationConfigurationJson {
+    pub Role: String,
+    pub Rules: Vec<ReplicationRuleJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleJson {
+    pub ID: Option<String>,
+    pub Priority: Option<i32>,
+    /// Deprecated S3 field, kept for AWS-CLI shape parity.
+    pub Prefix: Option<String>,
+    pub Filter: Option<ReplicationRuleFilterJson>,
+    /// `Enabled` or `Disabled`.
+    pub Status: String,
+    pub SourceSelectionCriteria: Option<SourceSelectionCriteriaJson>,
+    pub ExistingObjectReplication: Option<ExistingObjectReplicationJson>,
+    pub Destination: DestinationJson,
+    pub DeleteMarkerReplication: Option<DeleteMarkerReplicationJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleFilterJson {
+    pub Prefix: Option<String>,
+    pub Tag: Option<TagJson>,
+    pub And: Option<ReplicationRuleAndOperatorJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleAndOperatorJson {
+    pub Prefix: Option<String>,
+    pub Tags: Option<Vec<TagJson>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct SourceSelectionCriteriaJson {
+    pub SseKmsEncryptedObjects: Option<SseKmsEncryptedObjectsJson>,
+    pub ReplicaModifications: Option<ReplicaModificationsJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct SseKmsEncryptedObjectsJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicaModificationsJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ExistingObjectReplicationJson {
+    pub Status: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct DestinationJson {
+    pub Bucket: String,
+    pub Account: Option<String>,
+    pub StorageClass: Option<String>,
+    pub AccessControlTranslation: Option<AccessControlTranslationJson>,
+    pub EncryptionConfiguration: Option<EncryptionConfigurationJson>,
+    pub ReplicationTime: Option<ReplicationTimeJson>,
+    pub Metrics: Option<MetricsJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct AccessControlTranslationJson {
+    pub Owner: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct EncryptionConfigurationJson {
+    pub ReplicaKmsKeyID: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationTimeJson {
+    pub Status: String,
+    pub Time: ReplicationTimeValueJson,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct ReplicationTimeValueJson {
+    pub Minutes: i32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct MetricsJson {
+    pub Status: String,
+    pub EventThreshold: Option<ReplicationTimeValueJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[allow(non_snake_case)]
+pub struct DeleteMarkerReplicationJson {
+    pub Status: String,
+}
+
+impl ReplicationConfigurationJson {
+    /// Build the SDK `ReplicationConfiguration`. Returns the SDK builder
+    /// error verbatim so error messages match what the AWS CLI would emit.
+    pub fn into_sdk(self) -> Result<ReplicationConfiguration> {
+        let rules: Result<Vec<ReplicationRule>> = self
+            .Rules
+            .into_iter()
+            .map(ReplicationRuleJson::into_sdk)
+            .collect();
+        Ok(ReplicationConfiguration::builder()
+            .role(self.Role)
+            .set_rules(Some(rules?))
+            .build()?)
+    }
+}
+
+impl ReplicationRuleJson {
+    #[allow(deprecated)]
+    fn into_sdk(self) -> Result<ReplicationRule> {
+        let mut b = ReplicationRule::builder()
+            .status(ReplicationRuleStatus::from(self.Status.as_str()))
+            .destination(self.Destination.into_sdk()?);
+        if let Some(id) = self.ID {
+            b = b.id(id);
+        }
+        if let Some(p) = self.Priority {
+            b = b.priority(p);
+        }
+        if let Some(prefix) = self.Prefix {
+            b = b.prefix(prefix);
+        }
+        if let Some(f) = self.Filter {
+            b = b.filter(f.into_sdk()?);
+        }
+        if let Some(ssc) = self.SourceSelectionCriteria {
+            b = b.source_selection_criteria(ssc.into_sdk()?);
+        }
+        if let Some(eor) = self.ExistingObjectReplication {
+            b = b.existing_object_replication(
+                ExistingObjectReplication::builder()
+                    .status(ExistingObjectReplicationStatus::from(eor.Status.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(dmr) = self.DeleteMarkerReplication {
+            b = b.delete_marker_replication(
+                DeleteMarkerReplication::builder()
+                    .status(DeleteMarkerReplicationStatus::from(dmr.Status.as_str()))
+                    .build(),
+            );
+        }
+        Ok(b.build()?)
+    }
+}
+
+impl ReplicationRuleFilterJson {
+    fn into_sdk(self) -> Result<ReplicationRuleFilter> {
+        let mut b = ReplicationRuleFilter::builder();
+        if let Some(prefix) = self.Prefix {
+            b = b.prefix(prefix);
+        }
+        if let Some(t) = self.Tag {
+            b = b.tag(SdkTag::builder().key(t.Key).value(t.Value).build()?);
+        }
+        if let Some(a) = self.And {
+            let mut ab = ReplicationRuleAndOperator::builder();
+            if let Some(prefix) = a.Prefix {
+                ab = ab.prefix(prefix);
+            }
+            if let Some(tags) = a.Tags {
+                let sdk_tags: Result<Vec<SdkTag>> = tags
+                    .into_iter()
+                    .map(|t| Ok(SdkTag::builder().key(t.Key).value(t.Value).build()?))
+                    .collect();
+                ab = ab.set_tags(Some(sdk_tags?));
+            }
+            b = b.and(ab.build());
+        }
+        Ok(b.build())
+    }
+}
+
+impl SourceSelectionCriteriaJson {
+    fn into_sdk(self) -> Result<SourceSelectionCriteria> {
+        let mut b = SourceSelectionCriteria::builder();
+        if let Some(sse) = self.SseKmsEncryptedObjects {
+            b = b.sse_kms_encrypted_objects(
+                SseKmsEncryptedObjects::builder()
+                    .status(SseKmsEncryptedObjectsStatus::from(sse.Status.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(rm) = self.ReplicaModifications {
+            b = b.replica_modifications(
+                ReplicaModifications::builder()
+                    .status(ReplicaModificationsStatus::from(rm.Status.as_str()))
+                    .build()?,
+            );
+        }
+        Ok(b.build())
+    }
+}
+
+impl DestinationJson {
+    fn into_sdk(self) -> Result<Destination> {
+        let mut b = Destination::builder().bucket(self.Bucket);
+        if let Some(a) = self.Account {
+            b = b.account(a);
+        }
+        if let Some(sc) = self.StorageClass {
+            b = b.storage_class(StorageClass::from(sc.as_str()));
+        }
+        if let Some(act) = self.AccessControlTranslation {
+            b = b.access_control_translation(
+                AccessControlTranslation::builder()
+                    .owner(OwnerOverride::from(act.Owner.as_str()))
+                    .build()?,
+            );
+        }
+        if let Some(ec) = self.EncryptionConfiguration {
+            let mut eb = EncryptionConfiguration::builder();
+            if let Some(k) = ec.ReplicaKmsKeyID {
+                eb = eb.replica_kms_key_id(k);
+            }
+            b = b.encryption_configuration(eb.build());
+        }
+        if let Some(rt) = self.ReplicationTime {
+            b = b.replication_time(
+                ReplicationTime::builder()
+                    .status(ReplicationTimeStatus::from(rt.Status.as_str()))
+                    .time(
+                        ReplicationTimeValue::builder()
+                            .minutes(rt.Time.Minutes)
+                            .build(),
+                    )
+                    .build()?,
+            );
+        }
+        if let Some(metrics) = self.Metrics {
+            let mut mb = Metrics::builder().status(MetricsStatus::from(metrics.Status.as_str()));
+            if let Some(et) = metrics.EventThreshold {
+                mb =
+                    mb.event_threshold(ReplicationTimeValue::builder().minutes(et.Minutes).build());
+            }
+            b = b.metrics(mb.build()?);
+        }
+        Ok(b.build()?)
     }
 }
 
@@ -1748,5 +2133,719 @@ mod tests {
         assert_eq!(l.id(), Some("l1"));
         let key = l.filter().unwrap().key().expect("key filter");
         assert_eq!(key.filter_rules().len(), 1);
+    }
+
+    // ----- ReplicationConfigurationJson -----
+
+    #[test]
+    fn replication_parses_aws_cli_skeleton_shape() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/replication",
+          "Rules": [
+            {
+              "Status": "Enabled",
+              "Destination": { "Bucket": "arn:aws:s3:::dest-bucket" }
+            }
+          ]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.Role, "arn:aws:iam::111111111111:role/replication");
+        assert_eq!(parsed.Rules.len(), 1);
+    }
+
+    #[test]
+    fn replication_into_sdk_minimal_preserves_role_and_rule() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert_eq!(cfg.role(), "arn:aws:iam::111111111111:role/r");
+        let rules = cfg.rules();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0].status(), &ReplicationRuleStatus::Enabled);
+        assert_eq!(rules[0].destination().unwrap().bucket(), "arn:aws:s3:::d");
+    }
+
+    #[test]
+    fn replication_into_sdk_preserves_id_priority_prefix() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "ID": "my-rule",
+            "Priority": 5,
+            "Prefix": "logs/",
+            "Status": "Disabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        assert_eq!(r.id(), Some("my-rule"));
+        assert_eq!(r.priority(), Some(5));
+        #[allow(deprecated)]
+        let prefix_value = r.prefix();
+        assert_eq!(prefix_value, Some("logs/"));
+        assert_eq!(r.status(), &ReplicationRuleStatus::Disabled);
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_prefix() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "Prefix": "logs/" },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().unwrap();
+        assert_eq!(f.prefix(), Some("logs/"));
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_with_tag() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "Tag": { "Key": "env", "Value": "prod" } },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let t = cfg.rules()[0].filter().unwrap().tag().unwrap();
+        assert_eq!(t.key(), "env");
+        assert_eq!(t.value(), "prod");
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_with_and_prefix_and_tags() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "And": { "Prefix": "p/", "Tags": [{"Key":"a","Value":"1"}] } },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().unwrap();
+        assert_eq!(and.prefix(), Some("p/"));
+        assert_eq!(and.tags().len(), 1);
+        assert_eq!(and.tags()[0].key(), "a");
+    }
+
+    #[test]
+    fn replication_into_sdk_source_selection_criteria() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "SourceSelectionCriteria": {
+              "SseKmsEncryptedObjects": { "Status": "Enabled" },
+              "ReplicaModifications": { "Status": "Enabled" }
+            },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ssc = cfg.rules()[0].source_selection_criteria().unwrap();
+        assert_eq!(
+            ssc.sse_kms_encrypted_objects().unwrap().status(),
+            &SseKmsEncryptedObjectsStatus::Enabled
+        );
+        assert_eq!(
+            ssc.replica_modifications().unwrap().status(),
+            &ReplicaModificationsStatus::Enabled
+        );
+    }
+
+    #[test]
+    fn replication_into_sdk_existing_object_replication() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "ExistingObjectReplication": { "Status": "Enabled" },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let eor = cfg.rules()[0].existing_object_replication().unwrap();
+        assert_eq!(eor.status(), &ExistingObjectReplicationStatus::Enabled);
+    }
+
+    #[test]
+    fn replication_into_sdk_delete_marker_replication() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "DeleteMarkerReplication": { "Status": "Disabled" },
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let dmr = cfg.rules()[0].delete_marker_replication().unwrap();
+        assert_eq!(dmr.status(), Some(&DeleteMarkerReplicationStatus::Disabled));
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_account_and_storage_class() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "Account": "222222222222",
+              "StorageClass": "STANDARD_IA"
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        assert_eq!(d.account(), Some("222222222222"));
+        assert_eq!(d.storage_class(), Some(&StorageClass::StandardIa));
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_access_control_translation() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "AccessControlTranslation": { "Owner": "Destination" }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let act = cfg.rules()[0]
+            .destination()
+            .unwrap()
+            .access_control_translation()
+            .unwrap();
+        assert_eq!(act.owner().as_str(), "Destination");
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_encryption_configuration() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "EncryptionConfiguration": { "ReplicaKmsKeyID": "arn:aws:kms:us-east-1:1:key/abc" }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ec = cfg.rules()[0]
+            .destination()
+            .unwrap()
+            .encryption_configuration()
+            .unwrap();
+        assert_eq!(
+            ec.replica_kms_key_id(),
+            Some("arn:aws:kms:us-east-1:1:key/abc")
+        );
+    }
+
+    #[test]
+    fn replication_into_sdk_destination_with_replication_time_and_metrics() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "ReplicationTime": { "Status": "Enabled", "Time": { "Minutes": 15 } },
+              "Metrics": { "Status": "Enabled", "EventThreshold": { "Minutes": 15 } }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        let rt = d.replication_time().unwrap();
+        assert_eq!(rt.status(), &ReplicationTimeStatus::Enabled);
+        assert_eq!(rt.time().unwrap().minutes(), Some(15));
+        let m = d.metrics().unwrap();
+        assert_eq!(m.status(), &MetricsStatus::Enabled);
+        assert_eq!(m.event_threshold().unwrap().minutes(), Some(15));
+    }
+
+    #[test]
+    fn replication_invalid_json_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str("{not json");
+        assert!(res.is_err());
+    }
+
+    #[test]
+    fn replication_missing_role_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str(r#"{"Rules":[]}"#);
+        assert!(res.is_err(), "missing required `Role` must error");
+    }
+
+    #[test]
+    fn replication_missing_rules_errors() {
+        let res: Result<ReplicationConfigurationJson, _> = serde_json::from_str(r#"{"Role":"r"}"#);
+        assert!(res.is_err(), "missing required `Rules` must error");
+    }
+
+    #[test]
+    fn replication_missing_destination_in_rule_errors() {
+        let res: Result<ReplicationConfigurationJson, _> =
+            serde_json::from_str(r#"{"Role":"r","Rules":[{"Status":"Enabled"}]}"#);
+        assert!(res.is_err(), "missing required `Destination` must error");
+    }
+
+    #[test]
+    fn replication_missing_status_in_rule_errors() {
+        let res: Result<ReplicationConfigurationJson, _> =
+            serde_json::from_str(r#"{"Role":"r","Rules":[{"Destination":{"Bucket":"d"}}]}"#);
+        assert!(res.is_err(), "missing required `Status` must error");
+    }
+
+    #[test]
+    fn replication_into_sdk_unknown_status_passes_through() {
+        // Unknown enum values are passed through to the SDK; S3 rejects
+        // server-side. Mirrors how lifecycle/notification handle unknowns.
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "UnknownState",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        // ReplicationRuleStatus::Unknown(...) — exact variant is opaque, but
+        // as_str round-trips back to the original value.
+        assert_eq!(cfg.rules()[0].status().as_str(), "UnknownState");
+    }
+
+    // ----- Lifecycle Filter ObjectSize predicates -----
+
+    #[test]
+    fn lifecycle_filter_with_object_size_greater_than_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"ObjectSizeGreaterThan": 1048576},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert_eq!(f.object_size_greater_than(), Some(1_048_576));
+        assert!(f.object_size_less_than().is_none());
+    }
+
+    #[test]
+    fn lifecycle_filter_with_object_size_less_than_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"ObjectSizeLessThan": 5368709120},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert_eq!(f.object_size_less_than(), Some(5_368_709_120));
+    }
+
+    #[test]
+    fn lifecycle_filter_and_with_object_size_predicates_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"And":{
+              "Prefix":"data/",
+              "Tags":[{"Key":"a","Value":"1"}],
+              "ObjectSizeGreaterThan": 1024,
+              "ObjectSizeLessThan": 1073741824
+            }},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().expect("and");
+        assert_eq!(and.prefix(), Some("data/"));
+        assert_eq!(and.tags().len(), 1);
+        assert_eq!(and.object_size_greater_than(), Some(1024));
+        assert_eq!(and.object_size_less_than(), Some(1_073_741_824));
+    }
+
+    // ----- NewerNoncurrentVersions -----
+
+    #[test]
+    fn lifecycle_noncurrent_version_expiration_with_newer_versions_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionExpiration":{"NoncurrentDays":30,"NewerNoncurrentVersions":3}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let n = cfg.rules()[0]
+            .noncurrent_version_expiration()
+            .expect("noncurrent version expiration");
+        assert_eq!(n.noncurrent_days(), Some(30));
+        assert_eq!(n.newer_noncurrent_versions(), Some(3));
+    }
+
+    #[test]
+    fn lifecycle_noncurrent_version_transition_with_newer_versions_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionTransitions":[
+              {"NoncurrentDays":7,"StorageClass":"GLACIER","NewerNoncurrentVersions":2}
+            ]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let nvt = &cfg.rules()[0].noncurrent_version_transitions()[0];
+        assert_eq!(nvt.noncurrent_days(), Some(7));
+        assert_eq!(nvt.newer_noncurrent_versions(), Some(2));
+    }
+
+    // ----- BlockedEncryptionTypes round-trip -----
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{"EncryptionType":["SSE-C"]}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        let bet = r.blocked_encryption_types().expect("blocked types");
+        assert_eq!(bet.encryption_type().len(), 1);
+        assert_eq!(bet.encryption_type()[0].as_str(), "SSE-C");
+    }
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_empty_list_into_sdk() {
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let r = &cfg.rules()[0];
+        let bet = r.blocked_encryption_types().expect("blocked types");
+        assert!(bet.encryption_type().is_empty());
+    }
+
+    #[test]
+    fn encryption_with_blocked_encryption_types_multiple_into_sdk() {
+        // Multiple values, including the unknown-pass-through case.
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},
+            "BlockedEncryptionTypes":{"EncryptionType":["SSE-C","NONE","FUTURE"]}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let bet = cfg.rules()[0]
+            .blocked_encryption_types()
+            .expect("blocked types");
+        let strs: Vec<&str> = bet.encryption_type().iter().map(|e| e.as_str()).collect();
+        assert_eq!(strs, vec!["SSE-C", "NONE", "FUTURE"]);
+    }
+
+    #[test]
+    fn encryption_without_blocked_encryption_types_into_sdk_is_none() {
+        // Absent in JSON ⇒ SDK rule has no blocked_encryption_types.
+        let json = r#"{
+          "Rules":[{
+            "ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"}
+          }]
+        }"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert!(cfg.rules()[0].blocked_encryption_types().is_none());
+    }
+
+    // ----- Lifecycle Filter ObjectSize predicates: absence ⇒ SDK None -----
+
+    #[test]
+    fn lifecycle_filter_without_object_size_predicates_into_sdk_is_none() {
+        // Absent in JSON ⇒ SDK filter has neither object-size predicate set.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"Prefix":"data/"},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let f = cfg.rules()[0].filter().expect("filter");
+        assert!(f.object_size_greater_than().is_none());
+        assert!(f.object_size_less_than().is_none());
+    }
+
+    #[test]
+    fn lifecycle_filter_and_without_object_size_predicates_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Filter":{"And":{"Prefix":"data/","Tags":[{"Key":"a","Value":"1"}]}},
+            "Expiration":{"Days":1}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().expect("and");
+        assert!(and.object_size_greater_than().is_none());
+        assert!(and.object_size_less_than().is_none());
+    }
+
+    // ----- NewerNoncurrentVersions: absence ⇒ SDK None -----
+
+    #[test]
+    fn lifecycle_noncurrent_version_expiration_without_newer_versions_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionExpiration":{"NoncurrentDays":30}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let n = cfg.rules()[0]
+            .noncurrent_version_expiration()
+            .expect("noncurrent version expiration");
+        assert_eq!(n.noncurrent_days(), Some(30));
+        assert!(n.newer_noncurrent_versions().is_none());
+    }
+
+    #[test]
+    fn lifecycle_noncurrent_version_transition_without_newer_versions_into_sdk_is_none() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "NoncurrentVersionTransitions":[{"NoncurrentDays":7,"StorageClass":"GLACIER"}]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let nvt = &cfg.rules()[0].noncurrent_version_transitions()[0];
+        assert!(nvt.newer_noncurrent_versions().is_none());
+    }
+
+    // ----- parse_rfc3339: ISO 8601 date-only support -----
+
+    #[test]
+    fn lifecycle_expiration_with_date_only_into_sdk_treats_as_midnight_utc() {
+        // S3 documents Lifecycle `Date` as ISO 8601, which permits a bare
+        // `YYYY-MM-DD`; the parser must lift it to midnight UTC.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Expiration":{"Date":"2030-01-02"}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0]
+            .expiration()
+            .expect("expiration")
+            .date()
+            .expect("date set");
+        // 2030-01-02T00:00:00Z == 1_893_542_400 epoch seconds.
+        assert_eq!(date.secs(), 1_893_542_400);
+    }
+
+    #[test]
+    fn lifecycle_transition_with_date_only_into_sdk_treats_as_midnight_utc() {
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Transitions":[{"Date":"2030-01-02","StorageClass":"GLACIER"}]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0].transitions()[0].date().expect("date set");
+        assert_eq!(date.secs(), 1_893_542_400);
+    }
+
+    #[test]
+    fn lifecycle_expiration_full_rfc3339_still_parses() {
+        // Regression: the date-only branch must not reject full timestamps.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Expiration":{"Date":"2030-01-02T03:04:05Z"}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0]
+            .expiration()
+            .expect("expiration")
+            .date()
+            .expect("date set");
+        assert_eq!(date.secs(), 1_893_553_445);
+    }
+
+    #[test]
+    fn lifecycle_invalid_date_only_format_still_errors() {
+        // `2030-1-2` is neither RFC 3339 nor 10 chars with the right shape;
+        // must surface as an error rather than silently constructing a date.
+        let json = r#"{"Rules":[{"Status":"Enabled","Expiration":{"Date":"2030-1-2"}}]}"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let res = parsed.into_sdk();
+        assert!(res.is_err(), "malformed date must error");
+    }
+
+    // ----- TargetGrants in put-bucket-logging -----
+
+    #[test]
+    fn logging_into_sdk_preserves_target_grants_canonical_user() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"CanonicalUser",
+                  "ID":"abcd1234",
+                  "DisplayName":"alice"
+                },
+                "Permission":"FULL_CONTROL"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let le = cfg.logging_enabled().expect("logging_enabled");
+        let grants = le.target_grants();
+        assert_eq!(grants.len(), 1);
+        let g = &grants[0];
+        let grantee = g.grantee().expect("grantee");
+        assert_eq!(grantee.r#type().as_str(), "CanonicalUser");
+        assert_eq!(grantee.id(), Some("abcd1234"));
+        assert_eq!(grantee.display_name(), Some("alice"));
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("FULL_CONTROL"));
+    }
+
+    #[test]
+    fn logging_into_sdk_preserves_target_grants_group_uri() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"Group",
+                  "URI":"http://acs.amazonaws.com/groups/s3/LogDelivery"
+                },
+                "Permission":"WRITE"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let g = &cfg.logging_enabled().unwrap().target_grants()[0];
+        let grantee = g.grantee().unwrap();
+        assert_eq!(grantee.r#type().as_str(), "Group");
+        assert_eq!(
+            grantee.uri(),
+            Some("http://acs.amazonaws.com/groups/s3/LogDelivery")
+        );
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("WRITE"));
+    }
+
+    #[test]
+    fn logging_into_sdk_target_grants_amazon_customer_by_email() {
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[
+              {
+                "Grantee":{
+                  "Type":"AmazonCustomerByEmail",
+                  "EmailAddress":"alice@example.com"
+                },
+                "Permission":"READ"
+              }
+            ]
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let g = &cfg.logging_enabled().unwrap().target_grants()[0];
+        let grantee = g.grantee().unwrap();
+        assert_eq!(grantee.r#type().as_str(), "AmazonCustomerByEmail");
+        assert_eq!(grantee.email_address(), Some("alice@example.com"));
+        assert_eq!(g.permission().map(|p| p.as_str()), Some("READ"));
+    }
+
+    #[test]
+    fn logging_into_sdk_no_target_grants_yields_empty_slice() {
+        // Absent in JSON ⇒ SDK target_grants accessor is empty.
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/"
+          }
+        }"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert!(cfg.logging_enabled().unwrap().target_grants().is_empty());
+    }
+
+    #[test]
+    fn logging_into_sdk_target_grants_missing_type_errors() {
+        // `Type` is required on Grantee — serde must reject at parse time.
+        let json = r#"{
+          "LoggingEnabled":{
+            "TargetBucket":"log-bucket",
+            "TargetPrefix":"logs/",
+            "TargetGrants":[{"Grantee":{"ID":"abcd"},"Permission":"READ"}]
+          }
+        }"#;
+        assert!(serde_json::from_str::<BucketLoggingStatusJson>(json).is_err());
     }
 }

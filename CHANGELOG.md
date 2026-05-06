@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-05-06
+
+### Added
+
+- New replication subcommands: `get-bucket-replication`, `put-bucket-replication`, `delete-bucket-replication`. Read, install, and remove a bucket's replication configuration (cross-region or same-region rules). The configuration JSON for `put-` matches the AWS-CLI input shape for `aws s3api put-bucket-replication`.
+- New transfer-acceleration subcommands: `get-bucket-accelerate-configuration`, `put-bucket-accelerate-configuration`. Read and toggle (`Enabled` / `Suspended`) S3 Transfer Acceleration on a bucket.
+- New requester-pays subcommands: `get-bucket-request-payment`, `put-bucket-request-payment`. Read and switch a bucket between owner-pays (default) and requester-pays billing.
+- `get-bucket-policy-status`: report whether a bucket policy makes the bucket public, as `{"PolicyStatus": {"IsPublic": true|false}}`.
+- `restore-object`: initiate a restore of an archived (S3 Glacier-class) object so it becomes readable for `--days N`. Retrieval tier selectable via `--tier <Standard|Bulk|Expedited>`; specific object versions selectable via `--source-version-id`. Honors `--dry-run`. Exits 4 (NotFound) when S3 reports `NoSuchBucket`, `NoSuchKey`, or `NoSuchVersion`, matching `head-object` and `get-object-tagging`; other failures still exit 1.
+
+### Fixed
+
+- `put-bucket-lifecycle-configuration`: rules that use object-size filters (`ObjectSizeGreaterThan`, `ObjectSizeLessThan` — at the top level of `Filter` or under `Filter.And`) and `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and entries of `NoncurrentVersionTransitions`) are now applied to the bucket as written. In 1.2.0 these fields parsed without error but were silently ignored, so the bucket ended up configured as if you had not specified them.
+- `put-bucket-encryption`: rules can now include `BlockedEncryptionTypes` (used to block SSE-C uploads on a bucket). In 1.2.0 the field was silently ignored.
+- `put-bucket-lifecycle-configuration`: the `Date` field on `Expiration` and `Transitions` now accepts the ISO 8601 date-only form (`YYYY-MM-DD`, interpreted as midnight UTC), matching what AWS CLI v2 accepts. Previously only full RFC 3339 timestamps with a time component were accepted.
+- `put-bucket-logging`: `TargetGrants` is now applied to the bucket as written. Previously the field parsed without error but was silently dropped, so the bucket ended up configured as if you had not specified it. AWS CLI v2 input that includes `TargetGrants` (canonical user / `AmazonCustomerByEmail` / `Group` URI grantees with `FULL_CONTROL` / `READ` / `WRITE` permission) now round-trips correctly.
+- `get-bucket-lifecycle-configuration` output now includes `ObjectSizeGreaterThan` / `ObjectSizeLessThan` (under both `Filter` and `Filter.And`), `NewerNoncurrentVersions` (under `NoncurrentVersionExpiration` and each entry of `NoncurrentVersionTransitions`), and the top-level `TransitionDefaultMinimumObjectSize`. In 1.2.0 these were stripped from the output even when set on the bucket, so the JSON did not reflect the actual configuration.
+- `get-bucket-encryption` output now includes `BlockedEncryptionTypes` per rule when configured.
+- `get-bucket-logging` output now includes `TargetGrants` per `LoggingEnabled` when the bucket has them configured.
+- `head-object` output now includes `ContentRange` when set (returned by S3 when the request specified a byte range).
+- `head-object` output now includes `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and `ChecksumXXHASH128` when S3 returns the corresponding `x-amz-checksum-*` response header. Previously these five checksums were stripped from the JSON output, so objects uploaded with one of those algorithms appeared to have no checksum.
+- `head-object` output now emits `Expires` as an ISO 8601 timestamp (the parsed value of the `Expires` HTTP header) and a separate `ExpiresString` field containing the raw header value, matching `aws s3api head-object`. Previously the `Expires` key carried the raw HTTP-date string and `ExpiresString` was not emitted at all, so scripts expecting AWS-CLI-shape `Expires` saw an unparsed RFC 7231 string instead of an ISO 8601 timestamp.
+- `get-bucket-replication` output now emits the `Time` container under `Destination.ReplicationTime` and the `EventThreshold` container under `Destination.Metrics` whenever S3 populates them, even if the inner `Minutes` field happens to be absent. Previously these wrapper objects were silently dropped together with the missing `Minutes`, hiding the fact that S3 had returned the surrounding RTC / replication-metrics block.
+
+### Changed
+
+- `get-bucket-versioning` output now emits only `MFADelete` (the casing AWS CLI v2 uses), not the additional legacy `MfaDelete` key. Scripts that read `MFADelete` are unaffected; scripts that read the duplicate `MfaDelete` key need to switch to `MFADelete`.
+
 ## [1.2.0] - 2026-05-03
 
 ### Added
