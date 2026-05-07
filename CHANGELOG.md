@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.4.0] - 2026-05-07
+
+### Added
+
+- `presign`: generate a pre-signed URL for downloading an S3 object (`GetObject` only), matching `aws s3 presign`. `--expires-in <seconds>` controls the URL lifetime (default 3600, max 604800). The URL is signed locally from resolved credentials — no S3 API call is made — so presign succeeds even when the target bucket or key does not exist; the resulting fetch returns the appropriate 404 server-side. The signed URL is the only thing written to stdout.
+
 ## [1.3.0] - 2026-05-06
 
 ### Added

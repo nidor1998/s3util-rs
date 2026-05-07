@@ -16,7 +16,10 @@ use s3util_rs::config::args::Cli;
 /// Subcommand → category. Order within a category is the display order.
 /// Subcommands not listed here fall under "Other".
 const CATEGORIES: &[(&str, &[&str])] = &[
-    ("Object Operations", &["cp", "mv", "rm", "restore-object"]),
+    (
+        "Object Operations",
+        &["cp", "mv", "rm", "restore-object", "presign"],
+    ),
     (
         "Object Metadata",
         &[
