@@ -7,6 +7,8 @@
 //! (`bin/s3util/cli/<name>.rs`) can be written without referring to
 //! `aws-sdk-s3` types beyond what's strictly necessary.
 
+use std::time::Duration;
+
 use anyhow::{Context, Result};
 use aws_sdk_s3::Client;
 use aws_sdk_s3::operation::create_bucket::CreateBucketOutput;
@@ -53,6 +55,7 @@ use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
 use aws_sdk_s3::operation::restore_object::RestoreObjectOutput;
+use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::types::{
     AccelerateConfiguration, BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint,
     BucketLoggingStatus, BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration,
@@ -1219,6 +1222,28 @@ pub async fn restore_object(
             ),
         }
     })
+}
+
+/// Generate a pre-signed URL for `GetObject` against `bucket`/`key`, valid for
+/// `expires_in`. The URL is produced locally from the SDK client's credentials
+/// and signing config — no S3 API call is made — so this only fails if the
+/// credentials are unresolvable or the signer rejects the request.
+pub async fn presign_get_object(
+    client: &Client,
+    bucket: &str,
+    key: &str,
+    expires_in: Duration,
+) -> Result<String> {
+    let presigning_config = PresigningConfig::expires_in(expires_in)
+        .with_context(|| format!("invalid presigning config (expires_in={expires_in:?})"))?;
+    let presigned = client
+        .get_object()
+        .bucket(bucket)
+        .key(key)
+        .presigned(presigning_config)
+        .await
+        .with_context(|| format!("presign get-object on s3://{bucket}/{key}"))?;
+    Ok(presigned.uri().to_string())
 }
 
 #[cfg(test)]

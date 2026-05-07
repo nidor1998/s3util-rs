@@ -40,6 +40,7 @@ pub mod get_public_access_block;
 pub mod head_bucket;
 pub mod head_object;
 pub mod mv;
+pub mod presign;
 pub mod put_bucket_accelerate_configuration;
 pub mod put_bucket_cors;
 pub mod put_bucket_encryption;
@@ -91,6 +92,7 @@ pub use get_public_access_block::GetPublicAccessBlockArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
 pub use mv::MvArgs;
+pub use presign::PresignArgs;
 pub use put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationArgs;
 pub use put_bucket_cors::PutBucketCorsArgs;
 pub use put_bucket_encryption::PutBucketEncryptionArgs;
@@ -234,6 +236,9 @@ pub enum Commands {
     /// Move objects from/to S3 (copy then delete source)
     #[command(display_order = 2)]
     Mv(MvArgs),
+    /// Generate a pre-signed URL for an S3 object (GET only)
+    #[command(display_order = 47)]
+    Presign(PresignArgs),
     /// Set the Transfer Acceleration configuration on an S3 bucket
     #[command(display_order = 43)]
     PutBucketAccelerateConfiguration(PutBucketAccelerateConfigurationArgs),
@@ -419,6 +424,10 @@ where
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::Presign(_) => Err(
+            "build_config_from_args is for cp/mv only; presign is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::PutBucketAccelerateConfiguration(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-accelerate-configuration is dispatched in main.rs"
                 .to_string(),

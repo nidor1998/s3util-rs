@@ -345,6 +345,13 @@ const COMMAND_ROUTES: &[CommandRoute] = &[
         runtime_file: Some("restore_object.rs"),
         api_calls: &["restore_object"],
     },
+    CommandRoute {
+        variant: "Presign",
+        cli_name: "presign",
+        runner: "run_presign",
+        runtime_file: Some("presign.rs"),
+        api_calls: &["presign_get_object"],
+    },
 ];
 
 #[test]
@@ -528,6 +535,10 @@ fn all_expected_sdk_operations() -> BTreeSet<&'static str> {
 fn expected_sdk_operation(api_call: &str) -> &str {
     match api_call {
         "delete_bucket_lifecycle_configuration" => "delete_bucket_lifecycle",
+        // `presign_get_object` is built on top of the SDK's `get_object()`
+        // operation; the wrapper calls `.presigned()` instead of `.send()`,
+        // but the underlying operation is the same.
+        "presign_get_object" => "get_object",
         other => other,
     }
 }

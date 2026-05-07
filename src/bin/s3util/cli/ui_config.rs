@@ -67,6 +67,7 @@ mod tests {
             | Commands::HeadBucket(_)
             | Commands::HeadObject(_)
             | Commands::Mv(_)
+            | Commands::Presign(_)
             | Commands::PutBucketAccelerateConfiguration(_)
             | Commands::PutBucketCors(_)
             | Commands::PutBucketEncryption(_)
