@@ -10,7 +10,7 @@
 
 ## Tools for managing Amazon S3 objects and buckets
 
-`s3util` is a collection of tools for managing objects and buckets on Amazon S3 and S3-compatible object stores, built on the official [AWS SDK for Rust](https://github.com/awslabs/aws-sdk-rust) (`aws-sdk-s3`). It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future [`s7cmd`](https://github.com/nidor1998/s7cmd) toolkit.
+`s3util` is a collection of tools for managing objects and buckets on Amazon S3, built on the official [AWS SDK for Rust](https://github.com/awslabs/aws-sdk-rust) (`aws-sdk-s3`). It ports the transfer, verification, and multipart semantics of [s3sync](https://github.com/nidor1998/s3sync) into a compact CLI focused on interactive and scripted use, and is intended to become part of the future [`s7cmd`](https://github.com/nidor1998/s7cmd) toolkit.
 
 ## Table of contents
 
@@ -45,7 +45,6 @@
     * [Move with mv](#move-with-mv)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
-    * [Custom endpoint (S3-compatible stores)](#custom-endpoint-s3-compatible-stores)
     * [Specify credentials](#specify-credentials)
     * [Specify region](#specify-region)
 - [Detailed information](#detailed-information)
@@ -256,11 +255,11 @@ Transfer direction is inferred automatically from the source/target combination:
 | `-` (stdin)   | `s3://…`      | stdin → S3    |
 | `s3://…`      | `-` (stdout)  | S3 → stdout   |
 
-S3 → S3 transfers can span **different AWS accounts**, **different regions**, and **different S3-compatible storage providers** (e.g. AWS S3 → S3-compatible storage, or vice versa). The source and target are independently configured via the paired `--source-*` and `--target-*` credential, profile, region, and endpoint flags — they need not share a single S3 endpoint.
+S3 → S3 transfers can span **different AWS accounts** and **different regions**. The source and target are independently configured via the paired `--source-*` and `--target-*` credential, profile, region, and endpoint flags — they need not share a single S3 endpoint.
 
 ### Server-side copy
 
-By default, S3→S3 transfers are **client-side**: `s3util` streams the object from the source through the local process and re-uploads it to the target. This is the most compatible mode — it works across different regions, endpoints, accounts, and S3-compatible providers, and is required for any transfer that crosses a boundary `CopyObject` cannot.
+By default, S3→S3 transfers are **client-side**: `s3util` streams the object from the source through the local process and re-uploads it to the target. This is the most compatible mode — it works across different regions, endpoints, and accounts, and is required for any transfer that crosses a boundary `CopyObject` cannot.
 
 Passing `--server-side-copy` switches to S3's `CopyObject` / `UploadPartCopy`, so the bytes never round-trip through the client. Both source and target must be S3, and the API call must be supported by the server (typically same-region, single endpoint). `s3util` does **not** fall back to client-side copy if server-side copy fails or is unsuitable — leave the flag off when in doubt.
 
@@ -390,7 +389,7 @@ s3util cp --server-side-copy --auto-chunksize \
   s3://src-bucket/key s3://dst-bucket/key
 ```
 
-Client-side S3 → S3 copies can span different AWS accounts, different regions, and different S3-compatible providers — point the `--source-*` and `--target-*` flags at independent endpoints:
+Client-side S3 → S3 copies can span different AWS accounts and different regions — point the `--source-*` and `--target-*` flags at independent endpoints:
 
 ```bash
 # Cross-account, cross-region (separate profiles, separate regions)
@@ -398,12 +397,6 @@ s3util cp \
   --source-profile prod --source-region us-east-1 \
   --target-profile dev  --target-region us-west-2 \
   s3://prod-bucket/key s3://dev-bucket/key
-
-# AWS S3 → S3-compatible storage
-s3util cp \
-  --target-endpoint-url https://s3.example.com:9000 \
-  --target-force-path-style \
-  s3://aws-bucket/key s3://compat-bucket/key
 ```
 
 `--server-side-copy` is incompatible with this case (it requires source and target to be reachable from a single S3 endpoint); cross-endpoint copies always run client-side.
@@ -470,15 +463,6 @@ s3util cp \
 
 # Match the source chunk layout on S3 → S3 copy
 s3util cp --auto-chunksize s3://src-bucket/big.bin s3://dst-bucket/big.bin
-```
-
-### Custom endpoint (S3-compatible stores)
-
-```bash
-s3util cp \
-  --target-endpoint-url https://s3.example.com:9000 \
-  --target-force-path-style \
-  ./file.bin s3://my-bucket/file.bin
 ```
 
 ### Specify credentials
@@ -686,11 +670,9 @@ s3util cp -q ./artifact.tar.gz s3://my-bucket/artifacts/
 
 **Supported target: Amazon S3 only.**
 
-Support for S3-compatible storage is on a best-effort basis and may behave differently.
+S3-compatible storage (MinIO, Wasabi, Cloudflare R2, Backblaze B2, Google Cloud Storage's S3 interop, and any other non-AWS implementation of the S3 API) is **not supported**. The code is provided as-is against such targets: it may work, it may not, and behaviour may change between releases without notice. Bug reports, feature requests, or compatibility fixes filed against non-AWS S3-compatible stores will not be accepted. Endpoint and path-style flags (`--target-endpoint-url`, `--target-force-path-style`, etc.) remain in the binary because they are also useful for AWS-internal scenarios (e.g. FIPS endpoints, VPC endpoints), but their presence is not an endorsement of S3-compatible-store usage.
 
-`s3util` has been tested with Amazon S3, including Express One Zone directory buckets. `s3util` has many end-to-end tests and unit tests, and they run every time a new version is released.
-
-S3-compatible storage is not tested when a new version is released (I test only when making major changes). This is because S3-compatible storage may have different behaviors and features. Since there is no official certification for S3-compatible storage, comprehensive testing is not possible.
+`s3util` has been tested with Amazon S3, including Express One Zone directory buckets. `s3util` has many end-to-end tests and unit tests, and they run every time a new version is released. None of those tests run against non-AWS S3-compatible stores.
 
 ## Fully AI-generated (human-verified) software
 
