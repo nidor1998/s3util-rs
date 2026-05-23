@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-05-24
+
+### Added
+
+- `rename`: atomically rename an object within the same S3 Express One Zone directory bucket using the `RenameObject` API. Both source and target must be in the same bucket (name must end with `--x-s3`). Supports optional conditional checks: `--source-if-match <ETAG>`, `--source-if-none-match` (sends `*`), `--target-if-match <ETAG>`, and `--target-if-none-match` (sends `*`). Supports `--dry-run`. Exits 1 (error) when the source object or bucket is not found — consistent with an unexpected operation failure rather than a "not found" query result, so exit 4 is not used.
+
+### Changed
+
+- aws-sdk-s3 `v1.131.0 -> v1.133.0`
+- Updated other dependencies
+
 ## [1.4.0] - 2026-05-07
 
 ### Added

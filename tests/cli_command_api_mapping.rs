@@ -38,6 +38,13 @@ const COMMAND_ROUTES: &[CommandRoute] = &[
         api_calls: &[],
     },
     CommandRoute {
+        variant: "Rename",
+        cli_name: "rename",
+        runner: "run_rename",
+        runtime_file: Some("rename.rs"),
+        api_calls: &["rename_object"],
+    },
+    CommandRoute {
         variant: "CreateBucket",
         cli_name: "create-bucket",
         runner: "run_create_bucket",

@@ -54,6 +54,7 @@ use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
+use aws_sdk_s3::operation::rename_object::RenameObjectOutput;
 use aws_sdk_s3::operation::restore_object::RestoreObjectOutput;
 use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::types::{
@@ -1220,6 +1221,62 @@ pub async fn restore_object(
             None => HeadError::Other(
                 anyhow::Error::new(e).context(format!("restore-object on s3://{bucket}/{key}")),
             ),
+        }
+    })
+}
+
+const RENAME_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey"];
+
+/// Conditional headers for `RenameObject`.
+pub struct RenameObjectConditions<'a> {
+    pub source_if_match: Option<&'a str>,
+    pub source_if_none_match: Option<&'a str>,
+    pub destination_if_match: Option<&'a str>,
+    pub destination_if_none_match: Option<&'a str>,
+}
+
+/// Issue `RenameObject` against `bucket`, renaming `source_key` to `dest_key`.
+///
+/// `rename_source` is the URL-encoded source key. Unlike `CopyObject`'s
+/// `copy_source` (which is cross-bucket and uses `bucket/key`), `RenameObject`
+/// is within-bucket only, so only the key is needed in the header.
+/// Returns the SDK response on success, `HeadError::BucketNotFound` for
+/// `NoSuchBucket`, `HeadError::NotFound` for `NoSuchKey`, and
+/// `HeadError::Other` for any other failure.
+pub async fn rename_object(
+    client: &Client,
+    bucket: &str,
+    source_key: &str,
+    dest_key: &str,
+    conditions: RenameObjectConditions<'_>,
+) -> Result<RenameObjectOutput, HeadError> {
+    let rename_source = urlencoding::encode(source_key).into_owned();
+    let mut req = client
+        .rename_object()
+        .bucket(bucket)
+        .key(dest_key)
+        .rename_source(rename_source);
+    if let Some(v) = conditions.source_if_match {
+        req = req.source_if_match(v);
+    }
+    if let Some(v) = conditions.source_if_none_match {
+        req = req.source_if_none_match(v);
+    }
+    if let Some(v) = conditions.destination_if_match {
+        req = req.destination_if_match(v);
+    }
+    if let Some(v) = conditions.destination_if_none_match {
+        req = req.destination_if_none_match(v);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, RENAME_OBJECT_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "rename-object s3://{bucket}/{source_key} to s3://{bucket}/{dest_key}"
+            ))),
         }
     })
 }

@@ -38,6 +38,7 @@
     * [stdin → S3](#stdin--s3)
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
+    * [Rename within Express One Zone](#rename-within-express-one-zone)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -125,6 +126,7 @@ machinery.
 |--------------------------|-----------------------------------------------------------------------------------------------|
 | `cp`                     | Copies a single object: Local↔S3, S3↔S3, or stdin/stdout streaming; full multipart + checksum verification |
 | `mv`                     | Moves a single object: same as `cp` plus deletes the source after a successful, verified copy (no stdio) |
+| `rename`                 | Atomically renames an object within the same S3 Express One Zone directory bucket using the `RenameObject` API; source and target must be in the same bucket (name must end with `--x-s3`); supports conditional checks (`--source-if-match`, `--source-if-none-match`, `--target-if-match`, `--target-if-none-match`) and `--dry-run`; exits 1 on source/bucket not found |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
 | `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
@@ -254,7 +256,7 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 
 ### Dry-run
 
-`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rm`, `create-bucket`, `restore-object`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
+`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rename`, `rm`, `create-bucket`, `restore-object`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
 
 To make the message visible at the default `WarnLevel`, `--dry-run` automatically raises the verbosity floor to **info**. Levels you've explicitly raised (`-vv` for debug, `-vvv` for trace) are preserved unchanged; lower levels (`-q`, even full silence with `-qqq`) are still bumped to info so the line stays visible.
 
@@ -389,6 +391,44 @@ Differences from `cp`:
 - **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code.
 - **`--no-fail-on-verify-error`** (mv only) treats a verification warning as success and proceeds to delete the source. Use only when you understand why your S3↔S3 chunksize layout produces an expected mismatch.
 - **`--source-version-id`** deletes the specific source version after the copy (rather than creating a delete marker on the latest version).
+
+### Rename within Express One Zone
+
+`rename` uses the S3 `RenameObject` API to atomically move an object within the same [Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/) directory bucket. Both source and target must be in the same bucket, and the bucket name must end with `--x-s3`.
+
+```bash
+# Basic rename
+s3util rename s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+```
+
+`rename` supports optional conditional checks to implement optimistic-concurrency or "only-if-absent" semantics:
+
+```bash
+# Rename only if the source ETag matches (optimistic update)
+s3util rename \
+  --source-if-match '"d41d8cd98f00b204e9800998ecf8427e"' \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+
+# Rename only if the destination does not already exist
+s3util rename \
+  --target-if-none-match \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+
+# Preview without performing the rename
+s3util rename --dry-run \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+```
+
+Conditional check flags:
+
+| Flag | Type | Effect |
+|------|------|--------|
+| `--source-if-match <ETAG>` | String | Proceed only if the source ETag matches |
+| `--source-if-none-match` | Boolean | Send `*`; proceed only if the source has no matching ETag |
+| `--target-if-match <ETAG>` | String | Proceed only if the destination ETag matches |
+| `--target-if-none-match` | Boolean | Send `*`; proceed only if the destination does not already exist |
+
+Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
 
 ### Additional checksum verification
 
@@ -570,7 +610,7 @@ Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB
 
 ### --dry-run
 
-Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rm`, `create-bucket`, `restore-object`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
+Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rename`, `rm`, `create-bucket`, `restore-object`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
 
 ### -v / -q
 

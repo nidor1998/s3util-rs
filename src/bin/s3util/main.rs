@@ -86,6 +86,29 @@ async fn main() -> ExitCode {
             };
             return ExitCode::from(exit_code as u8);
         }
+        Commands::Rename(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+            if let Err(e) = args.validate() {
+                let _ = clap::Error::raw(clap::error::ErrorKind::ValueValidation, e).print();
+                return ExitCode::from(2);
+            }
+            let tracing_config = args.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+            let client_config = args.build_client_config();
+            let exit_code = match cli::run_rename(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
         Commands::Presign(args) => {
             if let Some(shell) = args.auto_complete_shell() {
                 generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());

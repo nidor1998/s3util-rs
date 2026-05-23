@@ -18,7 +18,7 @@ use s3util_rs::config::args::Cli;
 const CATEGORIES: &[(&str, &[&str])] = &[
     (
         "Object Operations",
-        &["cp", "mv", "rm", "restore-object", "presign"],
+        &["cp", "mv", "rename", "rm", "restore-object", "presign"],
     ),
     (
         "Object Metadata",
