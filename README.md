@@ -15,9 +15,7 @@
 <summary>Click to expand to view table of contents</summary>
 
 - [Overview](#overview)
-    * [Scope](#scope)
     * [API call volume](#api-call-volume)
-    * [Non-Goals](#non-goals)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
     * [Full multipart support](#full-multipart-support)
@@ -77,7 +75,8 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
-- [Contributing](#contributing)
+- [Scope](#scope)
+- [Non-Goals](#non-goals)
 - [License](#license)
 
 </details>
@@ -90,11 +89,6 @@
 
 For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
 
-### Scope
-
-s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`), single-object restore from archive (`restore-object`), and common bucket management (creation/deletion, tagging, versioning, policy, policy status, lifecycle, encryption, CORS, public-access-block, website, logging, notifications, replication, Transfer Acceleration, request payment). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
-
-The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
 
 ### API call volume
 
@@ -122,45 +116,6 @@ rate limits, or audit-log volume), `s3util` is not the right tool —
 prefer the AWS CLI's `aws s3api put-object` / `get-object` for direct,
 single-call transfers without the verification and parallelism
 machinery.
-
-### Non-Goals
-
-The following are explicitly out of scope and will not be added, regardless of demand:
-
-- Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
-- Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
-- Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
-- Compatibility with other S3 clients — neither in flag names and
-  behavior, nor in feature coverage. The presence of a feature, flag,
-  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
-  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
-  to add or change it in s3util. Each request is evaluated only
-  against s3util's own scope and design principles. Use that other
-  tool if you need its specific surface.
-- Diagnosing or fixing performance degradation, resource exhaustion,
-  or errors caused by raising concurrency settings
-  (`--max-parallel-uploads` and similar tuning flags) above their
-  defaults. The documentation explicitly notes that these values
-  must be sized to the host and the target service; tuning them is
-  the operator's responsibility. Reports of the form "I raised
-  `--max-parallel-uploads` and it failed / slowed down / hit rate
-  limits" will be closed.
-- Resuming a failed or interrupted transfer. `s3util` does not
-  provide a resume feature for `cp` / `mv`, including for large
-  multipart uploads and downloads. There is no checkpoint file,
-  no part-list reuse, and no partial-progress state persisted
-  between invocations: if a transfer is interrupted (network
-  error, ctrl-c, process kill, host shutdown, etc.), the next
-  invocation re-transfers the whole object from the start.
-  In-flight multipart uploads are best-effort aborted on ctrl-c
-  and on error paths, but for crashes or other non-graceful
-  exits, cleaning up any leftover incomplete multipart uploads
-  (e.g. via a bucket lifecycle rule or
-  `aws s3api abort-multipart-upload`) is the operator's
-  responsibility.
-- A plugin or extension mechanism.
-
-Issues and pull requests requesting any of the above will be closed.
 
 ### Subcommands
 
@@ -677,6 +632,8 @@ No human wrote a single line of source code in this project. Every line of sourc
 
 Human engineers authored the requirements, design specifications, and the s3sync reference architecture. They thoroughly reviewed and verified the design, all source code, and all tests. Features of the binary have been manually tested against live AWS S3. The development followed a spec-driven process: requirements and design documents were written first, and the AI generated code to match those specifications under continuous human oversight.
 
+**NOTE: In version 1.4.1 and later, AI is basically not used at all in the coding process. This is not a quality issue, but rather a personal decision by the developer.**
+
 ### Quality verification (by AI self-assessment)
 
 Measurements below are taken at v1.1.0 (commit `48442da` on `update/v1.0.1`, 2026-04-30). The coverage figures are sourced from `lcov_report.txt` (`cargo llvm-cov`) and reflect the unit-test build only — the `--cfg e2e_test` integration suite runs separately and is not included in the report.
@@ -973,6 +930,51 @@ However, I intend to keep the AWS SDK for Rust and other dependencies up to date
 **Issue and PR lifecycle**
 
 To keep the tracker focused, an issue or PR with no activity for 30 days is labeled `stale` and closed 7 days later unless a new comment (or, for PRs, a new commit) is added. Items labeled `pinned` or `security` are exempt; PRs are also exempt from `pinned`. Closed items can always be reopened.
+
+## Scope
+
+s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`), single-object restore from archive (`restore-object`), and common bucket management (creation/deletion, tagging, versioning, policy, policy status, lifecycle, encryption, CORS, public-access-block, website, logging, notifications, replication, Transfer Acceleration, request payment). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
+
+The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
+
+## Non-Goals
+
+The following are explicitly out of scope and will not be added, regardless of demand:
+
+- Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
+- Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
+- Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
+- Compatibility with other S3 clients — neither in flag names and
+  behavior, nor in feature coverage. The presence of a feature, flag,
+  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
+  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
+  to add or change it in s3util. Each request is evaluated only
+  against s3util's own scope and design principles. Use that other
+  tool if you need its specific surface.
+- Diagnosing or fixing performance degradation, resource exhaustion,
+  or errors caused by raising concurrency settings
+  (`--max-parallel-uploads` and similar tuning flags) above their
+  defaults. The documentation explicitly notes that these values
+  must be sized to the host and the target service; tuning them is
+  the operator's responsibility. Reports of the form "I raised
+  `--max-parallel-uploads` and it failed / slowed down / hit rate
+  limits" will be closed.
+- Resuming a failed or interrupted transfer. `s3util` does not
+  provide a resume feature for `cp` / `mv`, including for large
+  multipart uploads and downloads. There is no checkpoint file,
+  no part-list reuse, and no partial-progress state persisted
+  between invocations: if a transfer is interrupted (network
+  error, ctrl-c, process kill, host shutdown, etc.), the next
+  invocation re-transfers the whole object from the start.
+  In-flight multipart uploads are best-effort aborted on ctrl-c
+  and on error paths, but for crashes or other non-graceful
+  exits, cleaning up any leftover incomplete multipart uploads
+  (e.g. via a bucket lifecycle rule or
+  `aws s3api abort-multipart-upload`) is the operator's
+  responsibility.
+- A plugin or extension mechanism.
+
+Issues and pull requests requesting any of the above will be closed.
 
 ## License
 
