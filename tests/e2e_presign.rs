@@ -29,17 +29,18 @@ mod tests {
     /// `curl` binary.
     fn http_get(url: &str) -> (u16, Vec<u8>) {
         match ureq::get(url).call() {
-            Ok(resp) => {
+            Ok(mut resp) => {
                 let status = resp.status();
                 let mut body = Vec::new();
-                resp.into_reader()
+                resp.body_mut()
+                    .as_reader()
                     .read_to_end(&mut body)
                     .expect("read presigned-URL body");
-                (status, body)
+                (status.into(), body)
             }
             // ureq returns Err for any 4xx/5xx; we still want the status code
             // so the test can distinguish `expired` (403) from `missing` (404).
-            Err(ureq::Error::Status(code, _)) => (code, Vec::new()),
+            Err(ureq::Error::StatusCode(code)) => (code, Vec::new()),
             Err(e) => panic!("HTTP transport error fetching presigned URL: {e}"),
         }
     }
