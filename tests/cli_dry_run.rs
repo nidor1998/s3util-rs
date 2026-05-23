@@ -245,10 +245,8 @@ fn cp_dry_run_s3_to_stdio_exits_zero_and_logs_message() {
 // rename validates that the bucket ends with --x-s3 before the SDK call, and
 // the dry-run short-circuit fires after create_client() (which is cheap and
 // makes no network calls) but before the RenameObject API call.
-const FAKE_EXPRESS_SOURCE: &str =
-    "s3://nonexistent-bucket--apne1-az4--x-s3/src-key";
-const FAKE_EXPRESS_TARGET: &str =
-    "s3://nonexistent-bucket--apne1-az4--x-s3/dst-key";
+const FAKE_EXPRESS_SOURCE: &str = "s3://nonexistent-bucket--apne1-az4--x-s3/src-key";
+const FAKE_EXPRESS_TARGET: &str = "s3://nonexistent-bucket--apne1-az4--x-s3/dst-key";
 
 #[test]
 fn rename_dry_run_exits_zero_and_logs_message() {

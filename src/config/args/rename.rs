@@ -394,12 +394,7 @@ mod tests {
 
     #[test]
     fn source_bucket_key_rejects_bucket_only() {
-        let a = parse(&[
-            "test",
-            "rename",
-            "s3://my-bucket",
-            "s3://my-bucket/dst",
-        ]);
+        let a = parse(&["test", "rename", "s3://my-bucket", "s3://my-bucket/dst"]);
         let err = a.source_bucket_key().unwrap_err();
         assert!(
             err.contains("key"),
@@ -409,31 +404,19 @@ mod tests {
 
     #[test]
     fn source_bucket_key_rejects_bucket_with_trailing_slash() {
-        let a = parse(&[
-            "test",
-            "rename",
-            "s3://my-bucket/",
-            "s3://my-bucket/dst",
-        ]);
+        let a = parse(&["test", "rename", "s3://my-bucket/", "s3://my-bucket/dst"]);
         assert!(a.source_bucket_key().is_err());
     }
 
     #[test]
     fn source_bucket_key_rejects_non_s3_path() {
         // check_storage_path accepts local paths; source_bucket_key must reject them.
-        let res = TestCli::try_parse_from([
-            "test",
-            "rename",
-            "/tmp/local-file",
-            "s3://my-bucket/dst",
-        ]);
+        let res =
+            TestCli::try_parse_from(["test", "rename", "/tmp/local-file", "s3://my-bucket/dst"]);
         if let Ok(cli) = res {
             let TestSub::Rename(a) = cli.cmd;
             let err = a.source_bucket_key().unwrap_err();
-            assert!(
-                err.contains("s3://"),
-                "expected not-S3 error, got: {err}"
-            );
+            assert!(err.contains("s3://"), "expected not-S3 error, got: {err}");
         }
     }
 
@@ -454,12 +437,7 @@ mod tests {
 
     #[test]
     fn target_bucket_key_rejects_bucket_only() {
-        let a = parse(&[
-            "test",
-            "rename",
-            "s3://my-bucket/src",
-            "s3://my-bucket",
-        ]);
+        let a = parse(&["test", "rename", "s3://my-bucket/src", "s3://my-bucket"]);
         let err = a.target_bucket_key().unwrap_err();
         assert!(
             err.contains("key"),
@@ -469,30 +447,18 @@ mod tests {
 
     #[test]
     fn target_bucket_key_rejects_bucket_with_trailing_slash() {
-        let a = parse(&[
-            "test",
-            "rename",
-            "s3://my-bucket/src",
-            "s3://my-bucket/",
-        ]);
+        let a = parse(&["test", "rename", "s3://my-bucket/src", "s3://my-bucket/"]);
         assert!(a.target_bucket_key().is_err());
     }
 
     #[test]
     fn target_bucket_key_rejects_non_s3_path() {
-        let res = TestCli::try_parse_from([
-            "test",
-            "rename",
-            "s3://my-bucket/src",
-            "/tmp/local-file",
-        ]);
+        let res =
+            TestCli::try_parse_from(["test", "rename", "s3://my-bucket/src", "/tmp/local-file"]);
         if let Ok(cli) = res {
             let TestSub::Rename(a) = cli.cmd;
             let err = a.target_bucket_key().unwrap_err();
-            assert!(
-                err.contains("s3://"),
-                "expected not-S3 error, got: {err}"
-            );
+            assert!(err.contains("s3://"), "expected not-S3 error, got: {err}");
         }
     }
 
