@@ -44,7 +44,13 @@ pub struct RenameArgs {
     pub target: Option<String>,
 
     /// Rename only if the source object ETag matches this value
-    #[arg(long, env, value_name = "ETAG", help_heading = "Conditional Checks")]
+    #[arg(
+        long,
+        env,
+        value_name = "ETAG",
+        conflicts_with = "source_if_none_match",
+        help_heading = "Conditional Checks"
+    )]
     pub source_if_match: Option<String>,
 
     /// Rename only if the source object does not match any existing ETag (sends '*' internally)
@@ -52,12 +58,19 @@ pub struct RenameArgs {
         long,
         env,
         default_value_t = false,
+        conflicts_with = "source_if_match",
         help_heading = "Conditional Checks"
     )]
     pub source_if_none_match: bool,
 
     /// Rename only if the destination object ETag matches this value
-    #[arg(long, env, value_name = "ETAG", help_heading = "Conditional Checks")]
+    #[arg(
+        long,
+        env,
+        value_name = "ETAG",
+        conflicts_with = "target_if_none_match",
+        help_heading = "Conditional Checks"
+    )]
     pub target_if_match: Option<String>,
 
     /// Rename only if the destination does not already exist (sends '*' internally)
@@ -65,6 +78,7 @@ pub struct RenameArgs {
         long,
         env,
         default_value_t = false,
+        conflicts_with = "target_if_match",
         help_heading = "Conditional Checks"
     )]
     pub target_if_none_match: bool,
@@ -502,6 +516,42 @@ mod tests {
         assert!(
             err.contains("same bucket"),
             "expected same-bucket error, got: {err}"
+        );
+    }
+
+    // --- conditional flag mutual exclusion ---
+
+    #[test]
+    fn source_if_match_and_source_if_none_match_are_mutually_exclusive() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-match",
+            "\"abc123\"",
+            "--source-if-none-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --source-if-match with --source-if-none-match"
+        );
+    }
+
+    #[test]
+    fn target_if_match_and_target_if_none_match_are_mutually_exclusive() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-match",
+            "\"abc123\"",
+            "--target-if-none-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --target-if-match with --target-if-none-match"
         );
     }
 
