@@ -55,6 +55,7 @@ pub mod put_bucket_versioning;
 pub mod put_bucket_website;
 pub mod put_object_tagging;
 pub mod put_public_access_block;
+pub mod rename;
 pub mod restore_object;
 pub mod rm;
 pub mod value_parser;
@@ -107,6 +108,7 @@ pub use put_bucket_versioning::PutBucketVersioningArgs;
 pub use put_bucket_website::PutBucketWebsiteArgs;
 pub use put_object_tagging::PutObjectTaggingArgs;
 pub use put_public_access_block::PutPublicAccessBlockArgs;
+pub use rename::RenameArgs;
 pub use restore_object::RestoreObjectArgs;
 pub use rm::RmArgs;
 
@@ -236,6 +238,9 @@ pub enum Commands {
     /// Move objects from/to S3 (copy then delete source)
     #[command(display_order = 2)]
     Mv(MvArgs),
+    /// Rename an S3 object within an Express One Zone bucket (atomic server-side rename)
+    #[command(display_order = 3)]
+    Rename(RenameArgs),
     /// Generate a pre-signed URL for an S3 object (GET only)
     #[command(display_order = 47)]
     Presign(PresignArgs),
@@ -424,6 +429,10 @@ where
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
+        Commands::Rename(_) => Err(
+            "build_config_from_args is for cp/mv only; rename is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::Presign(_) => Err(
             "build_config_from_args is for cp/mv only; presign is dispatched in main.rs"
                 .to_string(),

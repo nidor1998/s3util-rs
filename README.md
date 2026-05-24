@@ -15,9 +15,7 @@
 <summary>Click to expand to view table of contents</summary>
 
 - [Overview](#overview)
-    * [Scope](#scope)
     * [API call volume](#api-call-volume)
-    * [Non-Goals](#non-goals)
 - [Features](#features)
     * [Verifiable transfers](#verifiable-transfers)
     * [Full multipart support](#full-multipart-support)
@@ -40,6 +38,7 @@
     * [stdin → S3](#stdin--s3)
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
+    * [Rename within Express One Zone](#rename-within-express-one-zone)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -77,7 +76,8 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
-- [Contributing](#contributing)
+- [Scope](#scope)
+- [Non-Goals](#non-goals)
 - [License](#license)
 
 </details>
@@ -90,11 +90,6 @@
 
 For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
 
-### Scope
-
-s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`), single-object restore from archive (`restore-object`), and common bucket management (creation/deletion, tagging, versioning, policy, policy status, lifecycle, encryption, CORS, public-access-block, website, logging, notifications, replication, Transfer Acceleration, request payment). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
-
-The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
 
 ### API call volume
 
@@ -123,45 +118,6 @@ prefer the AWS CLI's `aws s3api put-object` / `get-object` for direct,
 single-call transfers without the verification and parallelism
 machinery.
 
-### Non-Goals
-
-The following are explicitly out of scope and will not be added, regardless of demand:
-
-- Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
-- Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
-- Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
-- Compatibility with other S3 clients — neither in flag names and
-  behavior, nor in feature coverage. The presence of a feature, flag,
-  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
-  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
-  to add or change it in s3util. Each request is evaluated only
-  against s3util's own scope and design principles. Use that other
-  tool if you need its specific surface.
-- Diagnosing or fixing performance degradation, resource exhaustion,
-  or errors caused by raising concurrency settings
-  (`--max-parallel-uploads` and similar tuning flags) above their
-  defaults. The documentation explicitly notes that these values
-  must be sized to the host and the target service; tuning them is
-  the operator's responsibility. Reports of the form "I raised
-  `--max-parallel-uploads` and it failed / slowed down / hit rate
-  limits" will be closed.
-- Resuming a failed or interrupted transfer. `s3util` does not
-  provide a resume feature for `cp` / `mv`, including for large
-  multipart uploads and downloads. There is no checkpoint file,
-  no part-list reuse, and no partial-progress state persisted
-  between invocations: if a transfer is interrupted (network
-  error, ctrl-c, process kill, host shutdown, etc.), the next
-  invocation re-transfers the whole object from the start.
-  In-flight multipart uploads are best-effort aborted on ctrl-c
-  and on error paths, but for crashes or other non-graceful
-  exits, cleaning up any leftover incomplete multipart uploads
-  (e.g. via a bucket lifecycle rule or
-  `aws s3api abort-multipart-upload`) is the operator's
-  responsibility.
-- A plugin or extension mechanism.
-
-Issues and pull requests requesting any of the above will be closed.
-
 ### Subcommands
 
 `s3util` provides the following subcommands. `cp` and `mv` perform single-object transfers using the full multipart and verification pipeline; the remaining subcommands are thin wrappers around individual S3 API calls with a simpler, script-friendly interface than `aws s3api`.
@@ -170,6 +126,7 @@ Issues and pull requests requesting any of the above will be closed.
 |--------------------------|-----------------------------------------------------------------------------------------------|
 | `cp`                     | Copies a single object: Local↔S3, S3↔S3, or stdin/stdout streaming; full multipart + checksum verification |
 | `mv`                     | Moves a single object: same as `cp` plus deletes the source after a successful, verified copy (no stdio) |
+| `rename`                 | Atomically renames an object within the same S3 Express One Zone directory bucket using the `RenameObject` API; source and target must be in the same bucket (name must end with `--x-s3`); supports conditional checks (`--source-if-match`, `--source-if-none-match`, `--target-if-match`, `--target-if-none-match`) and `--dry-run`; exits 1 on source/bucket not found |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
 | `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
@@ -299,7 +256,7 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 
 ### Dry-run
 
-`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rm`, `create-bucket`, `restore-object`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
+`--dry-run` is supported on every mutating subcommand — `cp`, `mv`, `rename`, `rm`, `create-bucket`, `restore-object`, every `put-*`, and every `delete-*`. With `--dry-run`, `s3util` runs all preflight work (argument validation, JSON-config parsing, SDK client construction, transfer-pipeline setup), stops just before the destructive Web API call, and emits an info-level log line prefixed with `[dry-run]` (e.g. `[dry-run] would delete bucket.`, `[dry-run] would copy object.`, `[dry-run] Transfer completed.`). The exit status is `0` on success.
 
 To make the message visible at the default `WarnLevel`, `--dry-run` automatically raises the verbosity floor to **info**. Levels you've explicitly raised (`-vv` for debug, `-vvv` for trace) are preserved unchanged; lower levels (`-q`, even full silence with `-qqq`) are still bumped to info so the line stays visible.
 
@@ -434,6 +391,44 @@ Differences from `cp`:
 - **The source is deleted only after a successful, verified copy.** If the copy fails, is canceled (SIGINT), or produces a verification warning, the source is left untouched and the command exits with the matching non-zero code.
 - **`--no-fail-on-verify-error`** (mv only) treats a verification warning as success and proceeds to delete the source. Use only when you understand why your S3↔S3 chunksize layout produces an expected mismatch.
 - **`--source-version-id`** deletes the specific source version after the copy (rather than creating a delete marker on the latest version).
+
+### Rename within Express One Zone
+
+`rename` uses the S3 `RenameObject` API to atomically move an object within the same [Express One Zone](https://aws.amazon.com/s3/storage-classes/express-one-zone/) directory bucket. Both source and target must be in the same bucket, and the bucket name must end with `--x-s3`.
+
+```bash
+# Basic rename
+s3util rename s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+```
+
+`rename` supports optional conditional checks to implement optimistic-concurrency or "only-if-absent" semantics:
+
+```bash
+# Rename only if the source ETag matches (optimistic update)
+s3util rename \
+  --source-if-match '"d41d8cd98f00b204e9800998ecf8427e"' \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+
+# Rename only if the destination does not already exist
+s3util rename \
+  --target-if-none-match \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+
+# Preview without performing the rename
+s3util rename --dry-run \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+```
+
+Conditional check flags:
+
+| Flag | Type | Effect |
+|------|------|--------|
+| `--source-if-match <ETAG>` | String | Proceed only if the source ETag matches |
+| `--source-if-none-match` | Boolean | Send `*`; proceed only if the source has no matching ETag |
+| `--target-if-match <ETAG>` | String | Proceed only if the destination ETag matches |
+| `--target-if-none-match` | Boolean | Send `*`; proceed only if the destination does not already exist |
+
+Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
 
 ### Additional checksum verification
 
@@ -615,7 +610,7 @@ Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB
 
 ### --dry-run
 
-Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rm`, `create-bucket`, `restore-object`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
+Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level log line instead. Exit status is `0` on success. Available on every mutating subcommand (`cp`, `mv`, `rename`, `rm`, `create-bucket`, `restore-object`, all `put-*`, all `delete-*`). The verbosity floor is forced to info while `--dry-run` is set so the message stays visible at default verbosity. See [Dry-run](#dry-run) under Features for the full description and the important caveat that this is a formal check only — no AWS-side state is verified.
 
 ### -v / -q
 
@@ -673,7 +668,7 @@ S3-compatible storage (MinIO, Wasabi, Cloudflare R2, Backblaze B2, Google Cloud 
 
 ## Fully AI-generated (human-verified) software
 
-No human wrote a single line of source code in this project. Every line of source code, every test, all documentation, CI/CD configuration, and this README were generated by AI using [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (Anthropic).
+Every line of source code, every test, all documentation, CI/CD configuration, and this README were generated by AI using [Claude Code](https://docs.anthropic.com/en/docs/claude-code/overview) (Anthropic).
 
 Human engineers authored the requirements, design specifications, and the s3sync reference architecture. They thoroughly reviewed and verified the design, all source code, and all tests. Features of the binary have been manually tested against live AWS S3. The development followed a spec-driven process: requirements and design documents were written first, and the AI generated code to match those specifications under continuous human oversight.
 
@@ -973,6 +968,51 @@ However, I intend to keep the AWS SDK for Rust and other dependencies up to date
 **Issue and PR lifecycle**
 
 To keep the tracker focused, an issue or PR with no activity for 30 days is labeled `stale` and closed 7 days later unless a new comment (or, for PRs, a new commit) is added. Items labeled `pinned` or `security` are exempt; PRs are also exempt from `pinned`. Closed items can always be reopened.
+
+## Scope
+
+s3util is designed to cover **common single-object and bucket-management operations** — single-object transfers (`cp` / `mv`), single-object restore from archive (`restore-object`), and common bucket management (creation/deletion, tagging, versioning, policy, policy status, lifecycle, encryption, CORS, public-access-block, website, logging, notifications, replication, Transfer Acceleration, request payment). For any S3 use case outside that scope, use a more comprehensive tool such as the [AWS CLI](https://aws.amazon.com/cli/) (`aws s3` / `aws s3api`); for recursive or bulk synchronization, use [s3sync](https://github.com/nidor1998/s3sync).
+
+The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API wrappers each issue a single S3 API call. s3util is **not** intended to be a drop-in replacement for, or behaviorally compatible with, any other S3 client — including the AWS CLI (`aws s3`, `aws s3api`) and tools such as `s3cmd`, `s5cmd`, `rclone`, and `mc`. Its command-line flags, transfer semantics, verification rules, and exit codes are designed around safe, verifiable single-object transfers and explicit per-API operations — not interoperability with another tool's interface. Output formats and flag names will not be adjusted to match any external tool, and scripts written against another S3 client should not be expected to work with `s3util` unmodified.
+
+## Non-Goals
+
+The following are explicitly out of scope and will not be added, regardless of demand:
+
+- Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
+- Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
+- Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
+- Compatibility with other S3 clients — neither in flag names and
+  behavior, nor in feature coverage. The presence of a feature, flag,
+  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
+  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
+  to add or change it in s3util. Each request is evaluated only
+  against s3util's own scope and design principles. Use that other
+  tool if you need its specific surface.
+- Diagnosing or fixing performance degradation, resource exhaustion,
+  or errors caused by raising concurrency settings
+  (`--max-parallel-uploads` and similar tuning flags) above their
+  defaults. The documentation explicitly notes that these values
+  must be sized to the host and the target service; tuning them is
+  the operator's responsibility. Reports of the form "I raised
+  `--max-parallel-uploads` and it failed / slowed down / hit rate
+  limits" will be closed.
+- Resuming a failed or interrupted transfer. `s3util` does not
+  provide a resume feature for `cp` / `mv`, including for large
+  multipart uploads and downloads. There is no checkpoint file,
+  no part-list reuse, and no partial-progress state persisted
+  between invocations: if a transfer is interrupted (network
+  error, ctrl-c, process kill, host shutdown, etc.), the next
+  invocation re-transfers the whole object from the start.
+  In-flight multipart uploads are best-effort aborted on ctrl-c
+  and on error paths, but for crashes or other non-graceful
+  exits, cleaning up any leftover incomplete multipart uploads
+  (e.g. via a bucket lifecycle rule or
+  `aws s3api abort-multipart-upload`) is the operator's
+  responsibility.
+- A plugin or extension mechanism.
+
+Issues and pull requests requesting any of the above will be closed.
 
 ## License
 

@@ -240,6 +240,49 @@ fn cp_dry_run_s3_to_stdio_exits_zero_and_logs_message() {
     );
 }
 
+// ---------- rename (Express One Zone) ----------
+
+// rename validates that the bucket ends with --x-s3 before the SDK call, and
+// the dry-run short-circuit fires after create_client() (which is cheap and
+// makes no network calls) but before the RenameObject API call.
+const FAKE_EXPRESS_SOURCE: &str = "s3://nonexistent-bucket--apne1-az4--x-s3/src-key";
+const FAKE_EXPRESS_TARGET: &str = "s3://nonexistent-bucket--apne1-az4--x-s3/dst-key";
+
+#[test]
+fn rename_dry_run_exits_zero_and_logs_message() {
+    let (ok, _stdout, stderr, code) = run(s3util().args([
+        "rename",
+        "--dry-run",
+        FAKE_EXPRESS_SOURCE,
+        FAKE_EXPRESS_TARGET,
+    ]));
+    assert!(ok, "rename --dry-run must exit 0; stderr={stderr}");
+    assert_eq!(code, Some(0));
+    assert!(
+        stderr.contains("[dry-run]"),
+        "missing [dry-run] in stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("would rename"),
+        "expected 'would rename' in dry-run log: {stderr}"
+    );
+}
+
+#[test]
+fn rename_dry_run_at_default_verbosity_shows_message_via_level_bump() {
+    let (ok, _stdout, stderr, _code) = run(s3util().args([
+        "rename",
+        "--dry-run",
+        FAKE_EXPRESS_SOURCE,
+        FAKE_EXPRESS_TARGET,
+    ]));
+    assert!(ok);
+    assert!(
+        stderr.contains("[dry-run]"),
+        "default-verbosity dry-run must show line via level bump: {stderr}"
+    );
+}
+
 // ---------- rm (CommonClientArgs path) ----------
 
 #[test]
@@ -823,4 +866,14 @@ fn delete_bucket_help_lists_dry_run() {
     let (ok, stdout, _stderr, _code) = run(s3util().args(["delete-bucket", "--help"]));
     assert!(ok);
     assert!(stdout.contains("--dry-run"));
+}
+
+#[test]
+fn rename_help_lists_dry_run() {
+    let (ok, stdout, _stderr, _code) = run(s3util().args(["rename", "--help"]));
+    assert!(ok);
+    assert!(
+        stdout.contains("--dry-run"),
+        "rename --help should list --dry-run; got: {stdout}"
+    );
 }

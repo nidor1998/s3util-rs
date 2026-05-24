@@ -82,6 +82,7 @@ mod tests {
             | Commands::PutBucketWebsite(_)
             | Commands::PutObjectTagging(_)
             | Commands::PutPublicAccessBlock(_)
+            | Commands::Rename(_)
             | Commands::RestoreObject(_)
             | Commands::Rm(_) => {
                 panic!("expected Cp variant")
