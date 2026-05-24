@@ -126,7 +126,7 @@ machinery.
 |--------------------------|-----------------------------------------------------------------------------------------------|
 | `cp`                     | Copies a single object: Local↔S3, S3↔S3, or stdin/stdout streaming; full multipart + checksum verification |
 | `mv`                     | Moves a single object: same as `cp` plus deletes the source after a successful, verified copy (no stdio) |
-| `rename`                 | Atomically renames an object within the same S3 Express One Zone directory bucket using the `RenameObject` API; source and target must be in the same bucket (name must end with `--x-s3`); supports conditional checks (`--source-if-match`, `--source-if-none-match`, `--target-if-match`, `--target-if-none-match`) and `--dry-run`; exits 1 on source/bucket not found |
+| `rename`                 | Atomically renames an object within the same S3 Express One Zone directory bucket using the `RenameObject` API; source and target must be in the same bucket (name must end with `--x-s3`); supports conditional checks (`--source-if-match <ETAG>`, `--source-if-none-match <ETAG>`, `--target-if-match <ETAG>`, `--target-if-none-match <ETAG>`) and `--dry-run`; exits 1 on source/bucket not found |
 | `rm`                     | Deletes a single S3 object; silent on success; supports `--source-version-id`                 |
 | `head-object`            | Prints `HeadObject` response as JSON; supports `--source-version-id` and SSE-C reads          |
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
@@ -401,7 +401,7 @@ Differences from `cp`:
 s3util rename s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
 ```
 
-`rename` supports optional conditional checks to implement optimistic-concurrency or "only-if-absent" semantics:
+`rename` supports optional conditional checks to implement optimistic-concurrency semantics:
 
 ```bash
 # Rename only if the source ETag matches (optimistic update)
@@ -409,9 +409,14 @@ s3util rename \
   --source-if-match '"d41d8cd98f00b204e9800998ecf8427e"' \
   s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
 
-# Rename only if the destination does not already exist
+# Rename only if the source ETag does not match (proceed when source has changed)
 s3util rename \
-  --target-if-none-match \
+  --source-if-none-match '"d41d8cd98f00b204e9800998ecf8427e"' \
+  s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
+
+# Rename only if the destination ETag does not match (skip if destination already has this content)
+s3util rename \
+  --target-if-none-match '"d41d8cd98f00b204e9800998ecf8427e"' \
   s3://my-bucket--apne1-az4--x-s3/old-key s3://my-bucket--apne1-az4--x-s3/new-key
 
 # Preview without performing the rename
@@ -423,10 +428,10 @@ Conditional check flags:
 
 | Flag | Type | Effect |
 |------|------|--------|
-| `--source-if-match <ETAG>` | String | Proceed only if the source ETag matches |
-| `--source-if-none-match` | Boolean | Send `*`; proceed only if the source has no matching ETag |
-| `--target-if-match <ETAG>` | String | Proceed only if the destination ETag matches |
-| `--target-if-none-match` | Boolean | Send `*`; proceed only if the destination does not already exist |
+| `--source-if-match <ETAG>` | String | Proceed only if the source ETag matches the given value |
+| `--source-if-none-match <ETAG>` | String | Proceed only if the source ETag does not match the given value |
+| `--target-if-match <ETAG>` | String | Proceed only if the destination ETag matches the given value |
+| `--target-if-none-match <ETAG>` | String | Proceed only if the destination ETag does not match the given value |
 
 Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
 

@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.1] - 2026-05-24
+
+### Fixed
+
+- `rename --source-if-none-match` and `rename --target-if-none-match` now require an explicit `<ETAG>` value and forward it directly to the S3 `RenameObject` API (`IfSourceNoneMatch` / `IfDestinationNoneMatch`). Previously these flags were boolean switches that silently sent `*` regardless of the caller's intent, making it impossible to express a real ETag-based none-match condition.
+
 ## [1.5.0] - 2026-05-24
 
 ### Added

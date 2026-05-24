@@ -26,17 +26,6 @@ pub async fn run_rename(args: RenameArgs, client_config: ClientConfig) -> Result
         return Ok(ExitStatus::Success);
     }
 
-    let source_if_none_match = if args.source_if_none_match {
-        Some("*")
-    } else {
-        None
-    };
-    let target_if_none_match = if args.target_if_none_match {
-        Some("*")
-    } else {
-        None
-    };
-
     match api::rename_object(
         &client,
         &src_bucket,
@@ -44,9 +33,9 @@ pub async fn run_rename(args: RenameArgs, client_config: ClientConfig) -> Result
         &dst_key,
         RenameObjectConditions {
             source_if_match: args.source_if_match.as_deref(),
-            source_if_none_match,
+            source_if_none_match: args.source_if_none_match.as_deref(),
             destination_if_match: args.target_if_match.as_deref(),
-            destination_if_none_match: target_if_none_match,
+            destination_if_none_match: args.target_if_none_match.as_deref(),
         },
     )
     .await
