@@ -53,15 +53,15 @@ pub struct RenameArgs {
     )]
     pub source_if_match: Option<String>,
 
-    /// Rename only if the source object does not match any existing ETag (sends '*' internally)
+    /// Rename only if the source object ETag does not match this value
     #[arg(
         long,
         env,
-        default_value_t = false,
+        value_name = "ETAG",
         conflicts_with = "source_if_match",
         help_heading = "Conditional Checks"
     )]
-    pub source_if_none_match: bool,
+    pub source_if_none_match: Option<String>,
 
     /// Rename only if the destination object ETag matches this value
     #[arg(
@@ -73,15 +73,15 @@ pub struct RenameArgs {
     )]
     pub target_if_match: Option<String>,
 
-    /// Rename only if the destination does not already exist (sends '*' internally)
+    /// Rename only if the destination object ETag does not match this value
     #[arg(
         long,
         env,
-        default_value_t = false,
+        value_name = "ETAG",
         conflicts_with = "target_if_match",
         help_heading = "Conditional Checks"
     )]
-    pub target_if_none_match: bool,
+    pub target_if_none_match: Option<String>,
 
     /// Show what would happen without performing any S3 mutating operation.
     #[arg(long, env, default_value_t = false, help_heading = "General")]
@@ -531,6 +531,7 @@ mod tests {
             "--source-if-match",
             "\"abc123\"",
             "--source-if-none-match",
+            "\"def456\"",
         ]);
         assert!(
             res.is_err(),
@@ -548,11 +549,98 @@ mod tests {
             "--target-if-match",
             "\"abc123\"",
             "--target-if-none-match",
+            "\"def456\"",
         ]);
         assert!(
             res.is_err(),
             "clap should reject --target-if-match with --target-if-none-match"
         );
+    }
+
+    #[test]
+    fn source_if_match_without_value_is_rejected() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --source-if-match without an ETAG value"
+        );
+    }
+
+    #[test]
+    fn target_if_match_without_value_is_rejected() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --target-if-match without an ETAG value"
+        );
+    }
+
+    #[test]
+    fn source_if_none_match_without_value_is_rejected() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-none-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --source-if-none-match without an ETAG value"
+        );
+    }
+
+    #[test]
+    fn target_if_none_match_without_value_is_rejected() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-none-match",
+        ]);
+        assert!(
+            res.is_err(),
+            "clap should reject --target-if-none-match without an ETAG value"
+        );
+    }
+
+    #[test]
+    fn source_if_none_match_accepts_etag_value() {
+        let a = parse(&[
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-none-match",
+            "\"abc123\"",
+        ]);
+        assert_eq!(a.source_if_none_match.as_deref(), Some("\"abc123\""));
+    }
+
+    #[test]
+    fn target_if_none_match_accepts_etag_value() {
+        let a = parse(&[
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-none-match",
+            "\"abc123\"",
+        ]);
+        assert_eq!(a.target_if_none_match.as_deref(), Some("\"abc123\""));
     }
 
     // --- build_client_config credential branches ---

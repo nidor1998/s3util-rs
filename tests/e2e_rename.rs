@@ -17,10 +17,12 @@
 //! - Source-not-found: exit 1, no crash.
 //! - Dry run: no actual rename, exit 0.
 //! - Conditional `--source-if-match`: matching ETag succeeds, wrong ETag fails.
-//! - Conditional `--source-if-none-match`: flag always sends `*`; object exists
-//!   so the condition fails with 412 (precondition failure → exit 1).
-//! - Conditional `--target-if-none-match`: destination absent → succeeds;
-//!   destination present → precondition failure → exit 1.
+//! - Conditional `--source-if-none-match <ETAG>`: when the source ETag matches
+//!   the provided value the condition is false → 412; when it differs the
+//!   condition is true → succeeds.
+//! - Conditional `--target-if-none-match <ETAG>`: when the destination ETag
+//!   matches the provided value the condition is false → 412; when it differs
+//!   the condition is true → succeeds.
 //! - Conditional `--target-if-match`: matching destination ETag succeeds;
 //!   wrong ETag fails.
 //! - Special characters in key: spaces, slashes, Unicode percent-encoded correctly.
@@ -315,21 +317,21 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Conditional checks — source-if-none-match (1 test)
+    // Conditional checks — source-if-none-match (2 tests)
     // ---------------------------------------------------------------
 
-    /// `--source-if-none-match` always sends `*` internally. Because the
-    /// source object exists, the condition "none match" is false and the API
-    /// returns a 412 precondition failure. The source must remain intact.
+    /// `--source-if-none-match <ETAG>` when the provided ETag matches the
+    /// source object's actual ETag: condition "source ETag ≠ provided" is
+    /// false → 412 precondition failure. Source must remain intact.
     #[tokio::test]
-    async fn rename_source_if_none_match_existing_object_fails() {
+    async fn rename_source_if_none_match_matching_etag_fails() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
-        let src_key = "sinm_src.txt";
-        let dst_key = "sinm_dst.txt";
-        let body = b"source-if-none-match test";
-        let (bucket, _) = setup_bucket_with_object(&helper, src_key, body).await;
+        let src_key = "sinm_fail_src.txt";
+        let dst_key = "sinm_fail_dst.txt";
+        let body = b"source-if-none-match matching etag test";
+        let (bucket, etag) = setup_bucket_with_object(&helper, src_key, body).await;
 
         let src = format!("s3://{}/{}", bucket, src_key);
         let dst = format!("s3://{}/{}", bucket, dst_key);
@@ -339,6 +341,7 @@ mod tests {
             "--source-profile",
             "s3util-e2e-test",
             "--source-if-none-match",
+            &etag,
             &src,
             &dst,
         ]);
@@ -346,7 +349,7 @@ mod tests {
         assert_ne!(
             output.status.code(),
             Some(EXIT_CODE_SUCCESS),
-            "rename with --source-if-none-match on existing object must not succeed; stdout={}, stderr={}",
+            "rename with --source-if-none-match matching the actual ETag must not succeed; stdout={}, stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
@@ -358,21 +361,17 @@ mod tests {
         helper.delete_directory_bucket_with_cascade(&bucket).await;
     }
 
-    // ---------------------------------------------------------------
-    // Conditional checks — target-if-none-match (2 tests)
-    // ---------------------------------------------------------------
-
-    /// `--target-if-none-match` always sends `*` internally. When the
-    /// destination does not exist, the condition "none match any ETag" is
-    /// true, so the rename succeeds.
+    /// `--source-if-none-match <ETAG>` when the provided ETag does not match
+    /// the source object's actual ETag: condition "source ETag ≠ provided" is
+    /// true → rename succeeds.
     #[tokio::test]
-    async fn rename_target_if_none_match_destination_absent_succeeds() {
+    async fn rename_source_if_none_match_non_matching_etag_succeeds() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
-        let src_key = "tinm_src.txt";
-        let dst_key = "tinm_dst_absent.txt";
-        let body = b"target-if-none-match absent test";
+        let src_key = "sinm_ok_src.txt";
+        let dst_key = "sinm_ok_dst.txt";
+        let body = b"source-if-none-match non-matching etag test";
         let (bucket, _) = setup_bucket_with_object(&helper, src_key, body).await;
 
         let src = format!("s3://{}/{}", bucket, src_key);
@@ -382,7 +381,8 @@ mod tests {
             "rename",
             "--source-profile",
             "s3util-e2e-test",
-            "--target-if-none-match",
+            "--source-if-none-match",
+            "\"aaaabbbbccccdddd0000111122223333\"",
             &src,
             &dst,
         ]);
@@ -390,27 +390,79 @@ mod tests {
         assert_eq!(
             output.status.code(),
             Some(EXIT_CODE_SUCCESS),
-            "rename with --target-if-none-match on absent destination must succeed; stdout={}, stderr={}",
+            "rename with --source-if-none-match not matching the actual ETag must succeed; stdout={}, stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        assert!(helper.is_object_exist(&bucket, dst_key, None).await);
         assert!(!helper.is_object_exist(&bucket, src_key, None).await);
+        assert!(helper.is_object_exist(&bucket, dst_key, None).await);
 
         helper.delete_directory_bucket_with_cascade(&bucket).await;
     }
 
-    /// `--target-if-none-match` always sends `*` internally. When the
-    /// destination already exists, the condition is false and the API
-    /// returns 412. Source and destination must remain unchanged.
+    // ---------------------------------------------------------------
+    // Conditional checks — target-if-none-match (2 tests)
+    // ---------------------------------------------------------------
+
+    /// `--target-if-none-match <ETAG>` when the provided ETag matches the
+    /// destination object's actual ETag: condition "destination ETag ≠
+    /// provided" is false → 412 precondition failure. Source and destination
+    /// must remain unchanged.
     #[tokio::test]
-    async fn rename_target_if_none_match_destination_present_fails() {
+    async fn rename_target_if_none_match_matching_etag_fails() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
-        let src_key = "tinm_src2.txt";
-        let dst_key = "tinm_dst_present.txt";
+        let src_key = "tinm_fail_src.txt";
+        let dst_key = "tinm_fail_dst.txt";
         let src_body = b"source body";
+        let dst_body = b"pre-existing destination body";
+        let (bucket, _) = setup_bucket_with_object(&helper, src_key, src_body).await;
+        helper.put_object(&bucket, dst_key, dst_body.to_vec()).await;
+        let dst_head = helper.head_object(&bucket, dst_key, None).await;
+        let dst_etag = dst_head.e_tag().unwrap().to_string();
+
+        let src = format!("s3://{}/{}", bucket, src_key);
+        let dst = format!("s3://{}/{}", bucket, dst_key);
+
+        let output = run_s3util(&[
+            "rename",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--target-if-none-match",
+            &dst_etag,
+            &src,
+            &dst,
+        ]);
+
+        assert_ne!(
+            output.status.code(),
+            Some(EXIT_CODE_SUCCESS),
+            "rename with --target-if-none-match matching destination ETag must not succeed; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(
+            helper.is_object_exist(&bucket, src_key, None).await,
+            "source must remain"
+        );
+        let dst_bytes = helper.get_object_bytes(&bucket, dst_key, None).await;
+        assert_eq!(dst_bytes, dst_body, "destination content must be unchanged");
+
+        helper.delete_directory_bucket_with_cascade(&bucket).await;
+    }
+
+    /// `--target-if-none-match <ETAG>` when the provided ETag does not match
+    /// the destination object's actual ETag: condition "destination ETag ≠
+    /// provided" is true → rename succeeds and destination is overwritten.
+    #[tokio::test]
+    async fn rename_target_if_none_match_non_matching_etag_succeeds() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let src_key = "tinm_ok_src.txt";
+        let dst_key = "tinm_ok_dst.txt";
+        let src_body = b"source body for non-matching target";
         let dst_body = b"pre-existing destination body";
         let (bucket, _) = setup_bucket_with_object(&helper, src_key, src_body).await;
         helper.put_object(&bucket, dst_key, dst_body.to_vec()).await;
@@ -423,23 +475,20 @@ mod tests {
             "--source-profile",
             "s3util-e2e-test",
             "--target-if-none-match",
+            "\"aaaabbbbccccdddd0000111122223333\"",
             &src,
             &dst,
         ]);
 
-        assert_ne!(
+        assert_eq!(
             output.status.code(),
             Some(EXIT_CODE_SUCCESS),
-            "rename with --target-if-none-match on present destination must not succeed; stdout={}, stderr={}",
+            "rename with --target-if-none-match not matching destination ETag must succeed; stdout={}, stderr={}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
-        assert!(
-            helper.is_object_exist(&bucket, src_key, None).await,
-            "source must remain"
-        );
-        let dst_bytes = helper.get_object_bytes(&bucket, dst_key, None).await;
-        assert_eq!(dst_bytes, dst_body, "destination content must be unchanged");
+        assert!(!helper.is_object_exist(&bucket, src_key, None).await);
+        assert!(helper.is_object_exist(&bucket, dst_key, None).await);
 
         helper.delete_directory_bucket_with_cascade(&bucket).await;
     }
