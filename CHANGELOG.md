@@ -5,6 +5,12 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.2] - 2026-05-24
+
+### Fixed
+
+- `rename --source-if-match`, `--source-if-none-match`, `--target-if-match`, and `--target-if-none-match` now reject empty strings supplied via environment variables (`SOURCE_IF_MATCH`, `SOURCE_IF_NONE_MATCH`, `TARGET_IF_MATCH`, `TARGET_IF_NONE_MATCH`). Previously an empty variable was accepted and forwarded as an empty ETag to the S3 `RenameObject` API.
+
 ## [1.5.1] - 2026-05-24
 
 ### Fixed

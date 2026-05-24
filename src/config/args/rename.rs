@@ -48,6 +48,7 @@ pub struct RenameArgs {
         long,
         env,
         value_name = "ETAG",
+        value_parser = NonEmptyStringValueParser::new(),
         conflicts_with = "source_if_none_match",
         help_heading = "Conditional Checks"
     )]
@@ -58,6 +59,7 @@ pub struct RenameArgs {
         long,
         env,
         value_name = "ETAG",
+        value_parser = NonEmptyStringValueParser::new(),
         conflicts_with = "source_if_match",
         help_heading = "Conditional Checks"
     )]
@@ -68,6 +70,7 @@ pub struct RenameArgs {
         long,
         env,
         value_name = "ETAG",
+        value_parser = NonEmptyStringValueParser::new(),
         conflicts_with = "target_if_none_match",
         help_heading = "Conditional Checks"
     )]
@@ -78,6 +81,7 @@ pub struct RenameArgs {
         long,
         env,
         value_name = "ETAG",
+        value_parser = NonEmptyStringValueParser::new(),
         conflicts_with = "target_if_match",
         help_heading = "Conditional Checks"
     )]
@@ -641,6 +645,70 @@ mod tests {
             "\"abc123\"",
         ]);
         assert_eq!(a.target_if_none_match.as_deref(), Some("\"abc123\""));
+    }
+
+    #[test]
+    fn source_if_match_rejects_empty_string() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-match",
+            "",
+        ]);
+        assert!(
+            res.is_err(),
+            "--source-if-match with empty string should be rejected"
+        );
+    }
+
+    #[test]
+    fn source_if_none_match_rejects_empty_string() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--source-if-none-match",
+            "",
+        ]);
+        assert!(
+            res.is_err(),
+            "--source-if-none-match with empty string should be rejected"
+        );
+    }
+
+    #[test]
+    fn target_if_match_rejects_empty_string() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-match",
+            "",
+        ]);
+        assert!(
+            res.is_err(),
+            "--target-if-match with empty string should be rejected"
+        );
+    }
+
+    #[test]
+    fn target_if_none_match_rejects_empty_string() {
+        let res = TestCli::try_parse_from([
+            "test",
+            "rename",
+            "s3://b--az--x-s3/src",
+            "s3://b--az--x-s3/dst",
+            "--target-if-none-match",
+            "",
+        ]);
+        assert!(
+            res.is_err(),
+            "--target-if-none-match with empty string should be rejected"
+        );
     }
 
     // --- build_client_config credential branches ---
