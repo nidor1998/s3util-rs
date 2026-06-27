@@ -895,7 +895,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[cfg(target_family = "unix")]
     async fn require_parent_directory_succeeds_for_bare_filename() {
         init_dummy_tracing_subscriber();
 
