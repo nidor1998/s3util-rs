@@ -2686,7 +2686,6 @@ dependencies = [
  "mime_guess",
  "nix",
  "once_cell",
- "percent-encoding",
  "pin-project",
  "regex",
  "serde",

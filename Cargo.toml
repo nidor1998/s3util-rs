@@ -55,7 +55,6 @@ leaky-bucket = "1.1.2"
 log = "0.4.33"
 md5 = "0.8.0"
 mime_guess = "2.0.5"
-percent-encoding = "2.3.2"
 pin-project = "1.1.13"
 regex = "1.12.4"
 serde = { version = "1.0.228", features = ["derive"] }
