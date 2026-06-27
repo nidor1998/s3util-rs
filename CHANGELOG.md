@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.3] - 2026-06-27
+
+Monthly update.
+
+### Fixed
+
+- S3 keys are now taken verbatim from `s3://` paths. Previously `.` and `..` segments were resolved away as if the key were a filesystem path (e.g. `cp /etc/hosts s3://bucket/..` uploaded to key `hosts`), and `%XX` sequences were percent-decoded. Keys are now stored exactly as written, matching the AWS CLI.
+- Downloading to a bare filename in the current directory (e.g. `cp s3://bucket/key xyz`) no longer fails with `parent directory does not exist: ''`. Previously this required an explicit `./xyz`; the current directory is now used correctly when the target has no directory component.
+
+### Changed
+
+- aws-sdk-s3 `v1.133.0 -> v1.137.0`
+- Updated other dependencies
+
 ## [1.5.2] - 2026-05-24
 
 ### Fixed

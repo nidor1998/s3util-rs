@@ -1,4 +1,3 @@
-use percent_encoding::percent_decode_str;
 use regex::Regex;
 use url::{ParseError, Url};
 
@@ -124,17 +123,25 @@ fn parse_local_path(path: &str) -> StoragePath {
 
 fn parse_s3_path(path: &str) -> StoragePath {
     let bucket = Url::parse(path).unwrap().host_str().unwrap().to_string();
-    let mut prefix = Url::parse(path).unwrap().path().to_string();
 
-    // remove first '/'
-    if !prefix.is_empty() {
-        prefix.remove(0);
+    // Extract the prefix from the raw string rather than `Url::path()`. The url
+    // crate follows the WHATWG URL standard and would (1) normalize "." and ".."
+    // path segments (e.g. `s3://bucket/..` collapses to an empty prefix and
+    // `s3://bucket/a/../b` collapses to `b`) and (2) percent-decode the path.
+    // S3 is object storage, not a filesystem: "." and ".." are ordinary
+    // characters in a key. Like the AWS CLI, the key is taken verbatim and is
+    // NOT percent-decoded, so `s3://bucket/my%20key` stores the literal key
+    // `my%20key`.
+    //
+    // The authority is located via `://` (the scheme is case-insensitive, so a
+    // literal `s3://` strip would mishandle `S3://...`); the prefix is whatever
+    // follows the first '/' after the authority.
+    let after_authority = path.find("://").map(|i| &path[i + 3..]).unwrap_or(path);
+    let prefix = match after_authority.find('/') {
+        Some(i) => &after_authority[i + 1..],
+        None => "",
     }
-
-    prefix = percent_decode_str(&prefix)
-        .decode_utf8()
-        .unwrap()
-        .to_string();
+    .to_string();
 
     StoragePath::S3 { bucket, prefix }
 }
@@ -192,6 +199,67 @@ mod tests {
             assert_eq!(prefix, "my_key");
         } else {
             panic!("s3 url not found");
+        }
+    }
+
+    #[test]
+    fn parse_s3_url_preserves_dot_segments() {
+        // S3 keys treat "." and ".." as ordinary characters; they must NOT be
+        // normalized away the way a filesystem (or the url crate) would.
+        let cases = [
+            ("s3://bucket/..", ".."),
+            ("s3://bucket/../x", "../x"),
+            ("s3://bucket/a/../b", "a/../b"),
+            ("s3://bucket/./x", "./x"),
+            ("s3://bucket/.", "."),
+            ("s3://bucket/a/.", "a/."),
+        ];
+        for (url, expected_prefix) in cases {
+            match parse_storage_path(url) {
+                StoragePath::S3 { bucket, prefix } => {
+                    assert_eq!(bucket, "bucket", "bucket mismatch for {url}");
+                    assert_eq!(prefix, expected_prefix, "prefix mismatch for {url}");
+                }
+                _ => panic!("expected S3 path for {url}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_s3_url_empty_and_root_prefix() {
+        for url in ["s3://bucket", "s3://bucket/"] {
+            match parse_storage_path(url) {
+                StoragePath::S3 { bucket, prefix } => {
+                    assert_eq!(bucket, "bucket");
+                    assert_eq!(prefix, "");
+                }
+                _ => panic!("expected S3 path for {url}"),
+            }
+        }
+    }
+
+    #[test]
+    fn parse_s3_url_does_not_percent_decode_prefix() {
+        // Like the AWS CLI, the key is stored verbatim and is NOT percent-decoded.
+        match parse_storage_path("s3://bucket/my%20key") {
+            StoragePath::S3 { prefix, .. } => assert_eq!(prefix, "my%20key"),
+            _ => panic!("expected S3 path"),
+        }
+    }
+
+    #[test]
+    fn parse_s3_url_scheme_is_case_insensitive() {
+        // The URL scheme is case-insensitive; an uppercase/mixed-case scheme must
+        // resolve the bucket and key the same as lowercase `s3://`.
+        for url in ["S3://bucket/a/../b", "S3://bucket/key", "s3://bucket/key"] {
+            match parse_storage_path(url) {
+                StoragePath::S3 { bucket, .. } => assert_eq!(bucket, "bucket", "{url}"),
+                _ => panic!("expected S3 path for {url}"),
+            }
+        }
+        match parse_storage_path("S3://bucket/a/../b") {
+            StoragePath::S3 { prefix, .. } => assert_eq!(prefix, "a/../b"),
+            _ => panic!("expected S3 path"),
         }
     }
 

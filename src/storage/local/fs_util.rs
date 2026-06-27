@@ -41,6 +41,19 @@ pub fn is_key_a_directory(key: &str) -> bool {
     key.ends_with('/')
 }
 
+/// Returns the parent directory of `path`, falling back to the current
+/// directory (`.`) when there is no parent.
+///
+/// `Path::parent` returns `Some("")` (an empty path), not `None`, for a bare
+/// filename such as `xyz`. An empty path does not exist on disk, so callers
+/// must treat it the same as "no parent" and use the current directory.
+fn parent_or_current_dir(path: &Path) -> &Path {
+    match path.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => parent,
+        _ => Path::new("."),
+    }
+}
+
 pub async fn create_temp_file_from_key(path: &Path, key: &str) -> Result<NamedTempFile> {
     require_directory_for_key(path.to_path_buf(), key).await?;
 
@@ -54,14 +67,14 @@ pub async fn create_temp_file_for_key(key: &str) -> Result<NamedTempFile> {
     require_parent_directory(key).await?;
 
     let path = PathBuf::from(key);
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent = parent_or_current_dir(&path);
     let file = NamedTempFile::new_in(parent).context("NamedTempFile::new_in failed.")?;
     Ok(file)
 }
 
 pub async fn require_parent_directory(key: &str) -> Result<()> {
     let path = PathBuf::from(key);
-    let parent = path.parent().unwrap_or(Path::new("."));
+    let parent = parent_or_current_dir(&path);
 
     if parent.try_exists().unwrap_or(false) {
         return Ok(());
@@ -870,6 +883,25 @@ mod tests {
             file.path().parent().unwrap(),
             PathBuf::from(&key).parent().unwrap()
         );
+    }
+
+    #[test]
+    fn parent_or_current_dir_falls_back_for_bare_filename() {
+        // `Path::parent` returns `Some("")` (empty), not `None`, for a bare
+        // filename. That empty path must map to the current directory.
+        assert_eq!(parent_or_current_dir(Path::new("xyz")), Path::new("."));
+        // A path with a real parent is returned unchanged.
+        assert_eq!(parent_or_current_dir(Path::new("a/b")), Path::new("a"));
+    }
+
+    #[tokio::test]
+    async fn require_parent_directory_succeeds_for_bare_filename() {
+        init_dummy_tracing_subscriber();
+
+        // A bare filename (e.g. `cp s3://bucket/key xyz`) targets the current
+        // directory, which always exists, so this must succeed rather than
+        // report a missing parent directory of ''.
+        require_parent_directory("xyz").await.unwrap();
     }
 
     #[test]
