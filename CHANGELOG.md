@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   checksum, verifies the CRC64NVME returned by S3 against the locally computed
   value, and prints the response as JSON. Supports `--target-version-id`,
   `--target-request-payer`, and `--dry-run`.
+- Add `list-object-annotations` subcommand to list an object's annotations as JSON.
 
 ## [1.5.3] - 2026-06-27
 
