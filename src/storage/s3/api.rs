@@ -52,18 +52,20 @@ use aws_sdk_s3::operation::put_bucket_request_payment::PutBucketRequestPaymentOu
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
+use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
 use aws_sdk_s3::operation::rename_object::RenameObjectOutput;
 use aws_sdk_s3::operation::restore_object::RestoreObjectOutput;
 use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     AccelerateConfiguration, BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint,
     BucketLoggingStatus, BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration,
     CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
     NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
-    RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration, Tagging,
-    VersioningConfiguration, WebsiteConfiguration,
+    RequestPayer, RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration,
+    Tagging, VersioningConfiguration, WebsiteConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
@@ -170,6 +172,11 @@ const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"
 /// version when `--source-version-id` is set. `NoSuchBucket` is handled
 /// separately by `classify_not_found` and mapped to `BucketNotFound`.
 const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `put-object-annotation` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--target-version-id` is set. `NoSuchBucket` is handled
+/// separately by `classify_not_found` and mapped to `BucketNotFound`.
+const PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -317,6 +324,57 @@ pub async fn put_object_tagging(
     req.send()
         .await
         .with_context(|| format!("put-object-tagging on s3://{bucket}/{key}"))
+}
+
+/// Parameters for `put_object_annotation`. Checksums and Content-MD5 are
+/// computed by the caller (see `crate::storage::annotation`) so this wrapper
+/// stays free of hashing concerns.
+pub struct PutObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub content_md5: &'a str,
+    pub checksum_crc64_nvme: &'a str,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `PutObjectAnnotation`, attaching `payload` to the object under
+/// `params.annotation_name`. Sends `Content-MD5` and an explicit
+/// `x-amz-checksum-crc64nvme` value (no `checksum_algorithm`, so S3 validates
+/// the supplied checksum rather than recomputing). Maps `NoSuchBucket` to
+/// `BucketNotFound` and `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+pub async fn put_object_annotation(
+    client: &Client,
+    params: PutObjectAnnotationParams<'_>,
+    payload: ByteStream,
+) -> Result<PutObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .put_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name)
+        .annotation_payload(payload)
+        .content_md5(params.content_md5)
+        .checksum_crc64_nvme(params.checksum_crc64_nvme);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "put-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
 }
 
 /// Issue `DeleteObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
