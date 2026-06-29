@@ -40,6 +40,7 @@
     * [Move with mv](#move-with-mv)
     * [Rename within Express One Zone](#rename-within-express-one-zone)
     * [put-object-annotation](#put-object-annotation)
+    * [get-object-annotation](#get-object-annotation)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -173,6 +174,7 @@ machinery.
 | `get-bucket-policy-status`               | Prints policy status as JSON (`{"PolicyStatus": {"IsPublic": …}}`); exits 4 if no policy is attached |
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
 | `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
+| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename) after verification passes; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
 
 ## Features
 
@@ -483,6 +485,58 @@ Options:
 **Output:** Prints the `PutObjectAnnotation` response as JSON on success. Fields present in the response are included; absent fields are omitted. Example fields: `Key`, `AnnotationName`, `ObjectVersionId`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `RequestCharged`.
 
 Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` verification mismatch or other error.
+
+### get-object-annotation
+
+`get-object-annotation` retrieves a named annotation payload from an S3 object via the `GetObjectAnnotation` API and writes it to a file or stdout.
+
+```bash
+# Retrieve an annotation to a file
+s3util get-object-annotation s3://my-bucket/my-object output.json \
+  --annotation-name my-annotation
+
+# Stream annotation payload to stdout
+s3util get-object-annotation s3://my-bucket/my-object - \
+  --annotation-name my-annotation
+
+# Retrieve a specific object version's annotation
+s3util get-object-annotation s3://my-bucket/my-object output.json \
+  --annotation-name my-annotation \
+  --target-version-id <VERSION_ID>
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <NAME>` | String | Name of the annotation to retrieve |
+| `--target-version-id <ID>` | String | Retrieve the annotation from a specific object version |
+| `--target-request-payer` | Flag | Send `x-amz-request-payer: requester` on the API call |
+
+**Output modes:** When `<OUTFILE>` is a file path, `s3util` writes the annotation payload to a temporary file, verifies it, and atomically renames it to the target location (overwriting any existing file). Only after verification passes does the file materialize on disk. When `<OUTFILE>` is `-`, the raw payload is written to stdout and JSON output is suppressed (integrity verification still runs).
+
+**Verification:** `checksum-mode` is always `ENABLED`. The payload is integrity-checked as follows:
+- If `content-length` is present and differs from the received byte count → error (exit 1).
+- If the object is encrypted with `AES256`, the ETag (MD5) is verified against the payload.
+- If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload.
+- If neither ETag nor additional checksum verification is applicable → a warning is logged but exit code remains 0.
+
+**Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `VersionId`, `RequestCharged`.
+
+Example JSON output:
+
+```json
+{
+    "LastModified": "2026-06-18T23:04:08+00:00",
+    "ContentLength": 678260,
+    "ETag": "\"b373009fdd7e9a9a2b266c2044fb7948\"",
+    "ChecksumCRC64NVME": "hdWdywUmntQ=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+}
+```
+
+Exit codes: `0` success; `4` bucket/object/version/annotation not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` / `NoSuchAnnotation`); `1` verification mismatch or other error.
 
 ### Additional checksum verification
 
