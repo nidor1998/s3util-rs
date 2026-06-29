@@ -40,6 +40,7 @@ pub mod get_object_tagging;
 pub mod get_public_access_block;
 pub mod head_bucket;
 pub mod head_object;
+pub mod list_object_annotations;
 pub mod mv;
 pub mod presign;
 pub mod put_bucket_accelerate_configuration;
@@ -95,6 +96,7 @@ pub use get_object_tagging::GetObjectTaggingArgs;
 pub use get_public_access_block::GetPublicAccessBlockArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
+pub use list_object_annotations::ListObjectAnnotationsArgs;
 pub use mv::MvArgs;
 pub use presign::PresignArgs;
 pub use put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationArgs;
@@ -242,6 +244,9 @@ pub enum Commands {
     /// Head an S3 object and print its metadata as JSON
     #[command(display_order = 4)]
     HeadObject(HeadObjectArgs),
+    /// List the annotations of an S3 object and print them as JSON
+    #[command(display_order = 50)]
+    ListObjectAnnotations(ListObjectAnnotationsArgs),
     /// Move objects from/to S3 (copy then delete source)
     #[command(display_order = 2)]
     Mv(MvArgs),
@@ -440,6 +445,10 @@ where
         ),
         Commands::HeadObject(_) => Err(
             "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::ListObjectAnnotations(_) => Err(
+            "build_config_from_args is for cp/mv only; list-object-annotations is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
