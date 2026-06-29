@@ -23,6 +23,7 @@ use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
 use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
@@ -219,6 +220,108 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
             Value::String(v.as_str().to_string()),
         );
     }
+    Value::Object(map)
+}
+
+/// Build AWS-CLI-shape JSON for a `ListObjectAnnotations` response.
+///
+/// Unlike the sparse `get_*_to_json` serializers, this emits a stable key set:
+/// `AnnotationPrefix`, `ObjectVersionId`, and `RequestCharged` are explicit
+/// `null` when absent, and `Bucket`, `Key`, `AnnotationCount`, `Annotations`
+/// are always present.
+pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Value {
+    let mut map = Map::new();
+
+    let annotations: Vec<Value> = out
+        .annotations()
+        .iter()
+        .map(|a| {
+            let mut e = Map::new();
+            e.insert(
+                "AnnotationName".to_string(),
+                Value::String(a.annotation_name().to_string()),
+            );
+            if let Ok(dt) = a.last_modified().to_chrono_utc() {
+                e.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
+            }
+            match a.e_tag() {
+                Some(v) => {
+                    e.insert("ETag".to_string(), Value::String(v.to_string()));
+                }
+                None => {
+                    e.insert("ETag".to_string(), Value::Null);
+                }
+            }
+            let algos: Vec<Value> = a
+                .checksum_algorithm()
+                .iter()
+                .map(|c| Value::String(c.as_str().to_string()))
+                .collect();
+            e.insert("ChecksumAlgorithm".to_string(), Value::Array(algos));
+            e.insert(
+                "Size".to_string(),
+                Value::Number(serde_json::Number::from(a.size())),
+            );
+            Value::Object(e)
+        })
+        .collect();
+    map.insert("Annotations".to_string(), Value::Array(annotations));
+
+    match out.annotation_count() {
+        Some(v) => {
+            map.insert(
+                "AnnotationCount".to_string(),
+                Value::Number(serde_json::Number::from(v)),
+            );
+        }
+        None => {
+            map.insert("AnnotationCount".to_string(), Value::Null);
+        }
+    }
+    match out.annotation_prefix() {
+        Some(v) => {
+            map.insert("AnnotationPrefix".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("AnnotationPrefix".to_string(), Value::Null);
+        }
+    }
+    match out.bucket() {
+        Some(v) => {
+            map.insert("Bucket".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("Bucket".to_string(), Value::Null);
+        }
+    }
+    match out.key() {
+        Some(v) => {
+            map.insert("Key".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("Key".to_string(), Value::Null);
+        }
+    }
+    match out.object_version_id() {
+        Some(v) => {
+            map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("ObjectVersionId".to_string(), Value::Null);
+        }
+    }
+    match out.request_charged() {
+        Some(v) => {
+            map.insert(
+                "RequestCharged".to_string(),
+                Value::String(v.as_str().to_string()),
+            );
+        }
+        None => {
+            map.insert("RequestCharged".to_string(), Value::Null);
+        }
+    }
+
     Value::Object(map)
 }
 
@@ -4143,5 +4246,47 @@ mod tests {
         assert!(json.get("LastModified").is_some());
         // Payload bytes are never serialized.
         assert!(json.get("AnnotationPayload").is_none());
+    }
+
+    #[test]
+    fn list_object_annotations_to_json_shape() {
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::{AnnotationEntry, ChecksumAlgorithm};
+
+        let entry = AnnotationEntry::builder()
+            .annotation_name("xs3util")
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .e_tag("\"8c234b3fb7e4a27f1364df17cb6b22c5\"")
+            .checksum_algorithm(ChecksumAlgorithm::Crc64Nvme)
+            .size(3191)
+            .build()
+            .unwrap();
+
+        let out = ListObjectAnnotationsOutput::builder()
+            .annotations(entry)
+            .annotation_count(1)
+            .bucket("data.cpp17.org")
+            .key("hosts")
+            .build();
+
+        let json = list_object_annotations_to_json(&out);
+        assert_eq!(json["AnnotationCount"], 1);
+        assert_eq!(json["Bucket"], "data.cpp17.org");
+        assert_eq!(json["Key"], "hosts");
+        // Absent optionals are explicit null.
+        assert!(json["AnnotationPrefix"].is_null());
+        assert!(json["ObjectVersionId"].is_null());
+        assert!(json["RequestCharged"].is_null());
+        // Annotations array.
+        let arr = json["Annotations"]
+            .as_array()
+            .expect("Annotations is array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["AnnotationName"], "xs3util");
+        assert_eq!(arr[0]["ETag"], "\"8c234b3fb7e4a27f1364df17cb6b22c5\"");
+        assert_eq!(arr[0]["Size"], 3191);
+        assert_eq!(arr[0]["ChecksumAlgorithm"][0], "CRC64NVME");
+        assert!(arr[0].get("LastModified").is_some());
     }
 }
