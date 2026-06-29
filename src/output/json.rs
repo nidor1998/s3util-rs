@@ -22,6 +22,7 @@ use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
 
@@ -106,6 +107,50 @@ pub fn get_object_tagging_to_json(out: &GetObjectTaggingOutput) -> Value {
         map.insert("VersionId".to_string(), Value::String(v.to_string()));
     }
 
+    Value::Object(map)
+}
+
+/// Serialise a `PutObjectAnnotation` response to `aws s3api`-shape JSON.
+/// Absent fields are omitted. The ETag is echoed for information only; it is
+/// not used for verification.
+pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(v) = out.key() {
+        map.insert("Key".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.annotation_name() {
+        map.insert("AnnotationName".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.object_version_id() {
+        map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.e_tag() {
+        map.insert("ETag".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc64_nvme() {
+        map.insert(
+            "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_type() {
+        map.insert(
+            "ChecksumType".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.server_side_encryption() {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
     Value::Object(map)
 }
 
@@ -3978,5 +4023,28 @@ mod tests {
             .build();
         let json = get_bucket_logging_to_json(&out);
         assert!(json["LoggingEnabled"].get("TargetGrants").is_none());
+    }
+
+    #[test]
+    fn put_object_annotation_to_json_shape() {
+        use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+
+        let out = PutObjectAnnotationOutput::builder()
+            .key("dir/obj.txt")
+            .annotation_name("note")
+            .object_version_id("v1")
+            .e_tag("\"abc123\"")
+            .checksum_crc64_nvme("AAAAAAAAAAA=")
+            .build();
+
+        let json = put_object_annotation_to_json(&out);
+        assert_eq!(json["Key"], "dir/obj.txt");
+        assert_eq!(json["AnnotationName"], "note");
+        assert_eq!(json["ObjectVersionId"], "v1");
+        assert_eq!(json["ETag"], "\"abc123\"");
+        assert_eq!(json["ChecksumCRC64NVME"], "AAAAAAAAAAA=");
+        // Absent fields are omitted, per the file's convention.
+        assert!(json.get("ServerSideEncryption").is_none());
+        assert!(json.get("RequestCharged").is_none());
     }
 }
