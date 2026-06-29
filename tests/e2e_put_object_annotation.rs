@@ -51,7 +51,9 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let key = "annotation-target.txt";
-        helper.put_object(&bucket, key, b"object body".to_vec()).await;
+        helper
+            .put_object(&bucket, key, b"object body".to_vec())
+            .await;
 
         let tmp_dir = TestHelper::create_temp_dir();
         let payload_file =
@@ -108,7 +110,9 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let key = "annotation-stdin-target.txt";
-        helper.put_object(&bucket, key, b"stdin test body".to_vec()).await;
+        helper
+            .put_object(&bucket, key, b"stdin test body".to_vec())
+            .await;
 
         let object_arg = format!("s3://{bucket}/{key}");
         let out = run_s3util_with_stdin(
@@ -219,7 +223,9 @@ mod tests {
         helper.create_bucket(&bucket, REGION).await;
 
         let key = "rp-annotation-target.txt";
-        helper.put_object(&bucket, key, b"rp test body".to_vec()).await;
+        helper
+            .put_object(&bucket, key, b"rp test body".to_vec())
+            .await;
 
         let tmp_dir = TestHelper::create_temp_dir();
         let payload_file =
@@ -318,10 +324,7 @@ mod tests {
             object_arg,
         ]);
 
-        assert!(
-            !out.status.success(),
-            "oversized payload must not succeed"
-        );
+        assert!(!out.status.success(), "oversized payload must not succeed");
         assert_eq!(
             out.status.code(),
             Some(1),

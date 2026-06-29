@@ -39,6 +39,7 @@
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
     * [Rename within Express One Zone](#rename-within-express-one-zone)
+    * [put-object-annotation](#put-object-annotation)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -171,6 +172,7 @@ machinery.
 | `get-bucket-request-payment`             | Prints request-payment configuration as JSON (`{"Payer": "BucketOwner"}`)          |
 | `get-bucket-policy-status`               | Prints policy status as JSON (`{"PolicyStatus": {"IsPublic": …}}`); exits 4 if no policy is attached |
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
+| `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
 
 ## Features
 
@@ -435,6 +437,53 @@ Conditional check flags:
 
 Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
 
+### put-object-annotation
+
+`put-object-annotation` attaches a named annotation payload to an S3 object via the `PutObjectAnnotation` API. The payload is read from a file path, or from stdin when `--annotation-payload -` is given.
+
+```bash
+# Attach an annotation from a file
+s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json
+
+# Attach an annotation from stdin
+echo '{"note": "approved"}' | s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name review \
+  --annotation-payload -
+
+# Target a specific object version
+s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json \
+  --target-version-id <VERSION_ID>
+
+# Preview without making the API call
+s3util put-object-annotation --dry-run s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <NAME>` | String | Name of the annotation to attach |
+| `--annotation-payload <PATH\|->` | Path\|- | File to read the payload from; `-` reads from stdin |
+| `--target-version-id <ID>` | String | Attach the annotation to a specific object version |
+| `--target-request-payer` | Flag | Send `x-amz-request-payer: requester` on the API call |
+| `--dry-run` | Flag | Log what would be sent and exit 0 without calling the API |
+
+**Payload constraints:** The payload must be between 1 byte and 1 MiB (inclusive) and valid UTF-8; S3 enforces UTF-8 server-side and the size limit is enforced locally before any network call. Binary payloads must be Base64-encoded by the caller before passing them as the annotation payload.
+
+**Verification:** `s3util` sends a `Content-MD5` header for transit integrity and an explicit CRC64NVME checksum on every `PutObjectAnnotation` call. After the call it compares the CRC64NVME value returned by S3 against the locally computed value; a mismatch is treated as an error (exit 1). The ETag is echoed in the JSON output but is not used for verification.
+
+**SSE inheritance:** Annotation encryption inherits the parent object's server-side encryption. Objects with no SSE are annotated under SSE-S3. Objects encrypted with SSE-C cannot have annotations — `put-object-annotation` does not support SSE-C-encrypted objects.
+
+**Output:** Prints the `PutObjectAnnotation` response as JSON on success. Fields present in the response are included; absent fields are omitted. Example fields: `Key`, `AnnotationName`, `ObjectVersionId`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `RequestCharged`.
+
+Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` verification mismatch or other error.
+
 ### Additional checksum verification
 
 ```bash
@@ -567,7 +616,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — an argument is unknown, missing, or has an invalid value                                   |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
-| 4    | Not found — `head-bucket` / `head-object` / `restore-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
+| 4    | Not found — `head-bucket` / `head-object` / `restore-object` / `put-object-annotation` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
 | 101  | Abnormal termination (internal panic)                                                                               |
 | 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 
@@ -621,7 +670,7 @@ Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level 
 
 `s3util` uses [tracing-subscriber](https://docs.rs/tracing-subscriber) for tracing. More occurrences of `-v` increase verbosity (`-v`: `info`, `-vv`: `debug`, `-vvv`: `trace`). Use `-q`, `-qq` to reduce verbosity. Default: warning and error messages.
 
-With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `restore-object`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, `get-bucket-notification-configuration`, and `get-bucket-accelerate-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these four).
+With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `restore-object`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands (except `put-object-annotation`, which always prints JSON on success)) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, `get-bucket-notification-configuration`, and `get-bucket-accelerate-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these four).
 
 ### --aws-sdk-tracing
 
