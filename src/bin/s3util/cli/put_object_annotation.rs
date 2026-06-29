@@ -38,14 +38,18 @@ pub async fn run_put_object_annotation(
 
     let payload: Vec<u8> = if payload_arg == "-" {
         let mut buf = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)
+        let cap = (annotation::MAX_ANNOTATION_PAYLOAD_LEN as u64) + 1;
+        std::io::Read::read_to_end(&mut std::io::Read::take(std::io::stdin(), cap), &mut buf)
             .context("reading annotation payload from stdin")?;
+        annotation::validate_payload_len(buf.len())?;
         buf
     } else {
+        let meta = std::fs::metadata(payload_arg)
+            .with_context(|| format!("reading annotation payload metadata from {payload_arg}"))?;
+        annotation::validate_payload_len(usize::try_from(meta.len()).unwrap_or(usize::MAX))?;
         std::fs::read(payload_arg)
             .with_context(|| format!("reading annotation payload from {payload_arg}"))?
     };
-    annotation::validate_payload_len(payload.len())?;
 
     let content_md5 = annotation::content_md5_base64(&payload);
     let crc64 = annotation::crc64nvme_base64(&payload);

@@ -116,3 +116,32 @@ fn auto_complete_shell_short_circuits_without_target() {
     assert!(ok, "auto-complete-shell must succeed without a target");
     assert!(stdout.contains("_s3util"));
 }
+
+#[test]
+fn oversize_file_payload_exits_1_without_network() {
+    // Create a temp file slightly larger than 1 MiB to trigger local validation.
+    // No AWS credentials or network access are needed.
+    let max: usize = 1024 * 1024; // MAX_ANNOTATION_PAYLOAD_LEN
+    let path = std::env::temp_dir().join("s3util_test_oversize_annotation_payload.bin");
+    {
+        let data = vec![0u8; max + 1];
+        std::fs::write(&path, &data).expect("write temp oversize file");
+    }
+    let path_str = path.to_str().expect("UTF-8 temp path");
+    let (ok, _stdout, stderr, code) = run(s3util().args([
+        "put-object-annotation",
+        "s3://bucket/key",
+        "--annotation-name",
+        "note",
+        "--annotation-payload",
+        path_str,
+    ]));
+    // Clean up regardless of outcome.
+    let _ = std::fs::remove_file(&path);
+    assert!(!ok, "oversize payload should fail; stderr: {stderr}");
+    assert_eq!(code, Some(1), "expected exit code 1; stderr: {stderr}");
+    assert!(
+        stderr.contains("1 MiB") || stderr.contains("1048576"),
+        "expected size-limit error message; stderr: {stderr}"
+    );
+}

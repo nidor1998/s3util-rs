@@ -289,7 +289,7 @@ pub enum Commands {
     #[command(display_order = 31)]
     PutBucketWebsite(PutBucketWebsiteArgs),
     /// Attach a named annotation payload to an S3 object
-    #[command(display_order = 6)]
+    #[command(display_order = 48)]
     PutObjectAnnotation(PutObjectAnnotationArgs),
     /// Replace all tags on an S3 object
     #[command(display_order = 5)]
