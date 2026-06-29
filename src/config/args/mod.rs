@@ -186,6 +186,9 @@ pub enum Commands {
     /// Delete the website configuration from an S3 bucket
     #[command(display_order = 33)]
     DeleteBucketWebsite(DeleteBucketWebsiteArgs),
+    /// Delete a named annotation from an S3 object
+    #[command(display_order = 51)]
+    DeleteObjectAnnotation(DeleteObjectAnnotationArgs),
     /// Delete all tags from an S3 object
     #[command(display_order = 7)]
     DeleteObjectTagging(DeleteObjectTaggingArgs),
@@ -367,6 +370,10 @@ where
         ),
         Commands::DeleteBucketWebsite(_) => Err(
             "build_config_from_args is for cp/mv only; delete-bucket-website is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::DeleteObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-object-annotation is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::DeleteObjectTagging(_) => Err(

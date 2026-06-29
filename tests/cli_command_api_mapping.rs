@@ -87,6 +87,13 @@ const COMMAND_ROUTES: &[CommandRoute] = &[
         api_calls: &["get_object_tagging"],
     },
     CommandRoute {
+        variant: "DeleteObjectAnnotation",
+        cli_name: "delete-object-annotation",
+        runner: "run_delete_object_annotation",
+        runtime_file: Some("delete_object_annotation.rs"),
+        api_calls: &["delete_object_annotation"],
+    },
+    CommandRoute {
         variant: "GetObjectAnnotation",
         cli_name: "get-object-annotation",
         runner: "run_get_object_annotation",

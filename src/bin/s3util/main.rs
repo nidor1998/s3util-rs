@@ -1128,6 +1128,28 @@ async fn main() -> ExitCode {
             };
             return ExitCode::from(exit_code as u8);
         }
+        Commands::DeleteObjectAnnotation(args) => {
+            if let Some(shell) = args.auto_complete_shell() {
+                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
+                return ExitCode::SUCCESS;
+            }
+
+            let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
+            if let Some(tc) = &tracing_config {
+                tracing_init::init_tracing(tc);
+            }
+
+            let client_config = args.common.build_client_config();
+
+            let exit_code = match cli::run_delete_object_annotation(args, client_config).await {
+                Ok(status) => status.code(),
+                Err(e) => {
+                    tracing::error!(error = format!("{e:#}"));
+                    cli::EXIT_CODE_ERROR
+                }
+            };
+            return ExitCode::from(exit_code as u8);
+        }
         Commands::PutObjectAnnotation(args) => {
             if let Some(shell) = args.auto_complete_shell() {
                 generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
