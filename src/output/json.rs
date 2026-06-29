@@ -18,6 +18,7 @@ use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOu
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
+use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
@@ -148,6 +149,73 @@ pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
     if let Some(v) = out.request_charged() {
         map.insert(
             "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+/// Serialise a `GetObjectAnnotation` response to `aws s3api`-shape JSON.
+/// Absent fields are omitted. The annotation payload itself is never included
+/// (it is written to the output file / stdout, not to the JSON).
+pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(v) = out.last_modified() {
+        if let Ok(dt) = v.to_chrono_utc() {
+            map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
+        }
+    }
+    if let Some(v) = out.content_length() {
+        map.insert(
+            "ContentLength".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.e_tag() {
+        map.insert("ETag".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32() {
+        map.insert("ChecksumCRC32".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32_c() {
+        map.insert("ChecksumCRC32C".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc64_nvme() {
+        map.insert(
+            "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_sha1() {
+        map.insert("ChecksumSHA1".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_sha256() {
+        map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_type() {
+        map.insert(
+            "ChecksumType".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.server_side_encryption() {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.object_version_id() {
+        map.insert("VersionId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.replication_status() {
+        map.insert(
+            "ReplicationStatus".to_string(),
             Value::String(v.as_str().to_string()),
         );
     }
@@ -4046,5 +4114,34 @@ mod tests {
         // Absent fields are omitted, per the file's convention.
         assert!(json.get("ServerSideEncryption").is_none());
         assert!(json.get("RequestCharged").is_none());
+    }
+
+    #[test]
+    fn get_object_annotation_to_json_shape() {
+        use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+        use aws_sdk_s3::primitives::{ByteStream, DateTime};
+        use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption};
+
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(ByteStream::from_static(b"payload"))
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .content_length(678260)
+            .e_tag("\"b373009fdd7e9a9a2b266c2044fb7948\"")
+            .checksum_crc64_nvme("hdWdywUmntQ=")
+            .checksum_type(ChecksumType::FullObject)
+            .server_side_encryption(ServerSideEncryption::Aes256)
+            .object_version_id("v1")
+            .build();
+
+        let json = get_object_annotation_to_json(&out);
+        assert_eq!(json["ContentLength"], 678260);
+        assert_eq!(json["ETag"], "\"b373009fdd7e9a9a2b266c2044fb7948\"");
+        assert_eq!(json["ChecksumCRC64NVME"], "hdWdywUmntQ=");
+        assert_eq!(json["ChecksumType"], "FULL_OBJECT");
+        assert_eq!(json["ServerSideEncryption"], "AES256");
+        assert_eq!(json["VersionId"], "v1");
+        assert!(json.get("LastModified").is_some());
+        // Payload bytes are never serialized.
+        assert!(json.get("AnnotationPayload").is_none());
     }
 }
