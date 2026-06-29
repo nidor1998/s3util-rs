@@ -35,6 +35,7 @@ pub mod get_bucket_request_payment;
 pub mod get_bucket_tagging;
 pub mod get_bucket_versioning;
 pub mod get_bucket_website;
+pub mod get_object_annotation;
 pub mod get_object_tagging;
 pub mod get_public_access_block;
 pub mod head_bucket;
