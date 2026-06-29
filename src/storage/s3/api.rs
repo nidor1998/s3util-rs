@@ -36,6 +36,7 @@ use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOu
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
+use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
@@ -177,6 +178,11 @@ const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 /// version when `--target-version-id` is set. `NoSuchBucket` is handled
 /// separately by `classify_not_found` and mapped to `BucketNotFound`.
 const PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `get-object-annotation` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--target-version-id` is set. `NoSuchBucket` is handled
+/// separately by `classify_not_found` and mapped to `BucketNotFound`.
+const GET_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -371,6 +377,50 @@ pub async fn put_object_annotation(
             Some(he) => he,
             None => HeadError::Other(anyhow::Error::new(e).context(format!(
                 "put-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
+}
+
+/// Parameters for `get_object_annotation`. `checksum_mode` is always set to
+/// `ENABLED` by the wrapper so S3 returns the stored additional checksum.
+pub struct GetObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `GetObjectAnnotation`, returning the annotation payload (as a
+/// `ByteStream` on the output) plus metadata. Always sends
+/// `checksum_mode=ENABLED`. Maps `NoSuchBucket` to `BucketNotFound` and
+/// `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+pub async fn get_object_annotation(
+    client: &Client,
+    params: GetObjectAnnotationParams<'_>,
+) -> Result<GetObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .get_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name)
+        .checksum_mode(ChecksumMode::Enabled);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, GET_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "get-object-annotation on s3://{}/{}",
                 params.bucket, params.key
             ))),
         }
