@@ -288,6 +288,9 @@ pub enum Commands {
     /// Set the website configuration on an S3 bucket
     #[command(display_order = 31)]
     PutBucketWebsite(PutBucketWebsiteArgs),
+    /// Attach a named annotation payload to an S3 object
+    #[command(display_order = 6)]
+    PutObjectAnnotation(PutObjectAnnotationArgs),
     /// Replace all tags on an S3 object
     #[command(display_order = 5)]
     PutObjectTagging(PutObjectTaggingArgs),
@@ -485,6 +488,10 @@ where
         ),
         Commands::PutBucketWebsite(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-website is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; put-object-annotation is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::PutObjectTagging(_) => Err(

@@ -80,6 +80,7 @@ mod tests {
             | Commands::PutBucketTagging(_)
             | Commands::PutBucketVersioning(_)
             | Commands::PutBucketWebsite(_)
+            | Commands::PutObjectAnnotation(_)
             | Commands::PutObjectTagging(_)
             | Commands::PutPublicAccessBlock(_)
             | Commands::Rename(_)
