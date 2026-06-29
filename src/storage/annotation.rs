@@ -18,9 +18,7 @@ pub fn validate_payload_len(len: usize) -> Result<()> {
         bail!("annotation payload must be at least 1 byte");
     }
     if len > MAX_ANNOTATION_PAYLOAD_LEN {
-        bail!(
-            "annotation payload must be at most 1 MiB ({MAX_ANNOTATION_PAYLOAD_LEN} bytes), got {len} bytes"
-        );
+        bail!("annotation payload must be at most 1 MiB ({MAX_ANNOTATION_PAYLOAD_LEN} bytes)");
     }
     Ok(())
 }
