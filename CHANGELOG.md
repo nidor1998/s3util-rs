@@ -16,6 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   value, and prints the response as JSON. Supports `--target-version-id`,
   `--target-request-payer`, and `--dry-run`.
 - Add `list-object-annotations` subcommand to list an object's annotations as JSON.
+- Add `delete-object-annotation` subcommand to delete a named annotation from an S3 object.
 
 ## [1.5.3] - 2026-06-27
 

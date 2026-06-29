@@ -42,6 +42,7 @@
     * [put-object-annotation](#put-object-annotation)
     * [get-object-annotation](#get-object-annotation)
     * [list-object-annotations](#list-object-annotations)
+    * [delete-object-annotation](#delete-object-annotation)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -177,6 +178,7 @@ machinery.
 | `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename) after verification passes; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `list-object-annotations`                | Lists annotations on an S3 object via `ListObjectAnnotations`; makes a single request (up to 1000 results, pagination is not followed); supports `--annotation-prefix`, `--target-version-id`; outputs AWS-CLI-shape JSON on stdout; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
+| `delete-object-annotation`               | Removes a named annotation from an S3 object via `DeleteObjectAnnotation`; supports `--annotation-name` (required), `--target-version-id`, `--target-request-payer`, `--dry-run`; produces no output on success; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 
 ## Features
 
@@ -592,6 +594,39 @@ Example JSON output:
 
 Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` other error; `2` argument/usage error.
 
+### delete-object-annotation
+
+`delete-object-annotation` removes a named annotation from an S3 object via the `DeleteObjectAnnotation` API. On success, nothing is written to stdout.
+
+```bash
+# Delete an annotation by name
+s3util delete-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation
+
+# Delete an annotation on a specific object version
+s3util delete-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --target-version-id <VERSION_ID>
+
+# Preview what would be deleted without making any changes
+s3util delete-object-annotation --dry-run s3://my-bucket/my-object \
+  --annotation-name my-annotation
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <VALUE>` | String (required) | Name of the annotation to delete |
+| `--target-version-id <VALUE>` | String | Delete the annotation for a specific object version |
+| `--dry-run` | Flag | Validate arguments and permissions without deleting |
+
+Common options (e.g. `--target-region`, `--target-access-key`, `--target-request-payer`, `--verbose`) apply the same way as for other subcommands.
+
+**Behavior:** A single `DeleteObjectAnnotation` request is made. Nothing is written to stdout on success.
+
+Exit codes: `0` success; `4` object/bucket/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` other error.
+
 ### Additional checksum verification
 
 ```bash
@@ -724,7 +759,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — an argument is unknown, missing, or has an invalid value                                   |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
-| 4    | Not found — `head-bucket` / `head-object` / `restore-object` / `put-object-annotation` / `get-object-annotation` / `list-object-annotations` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
+| 4    | Not found — `head-bucket` / `head-object` / `restore-object` / `put-object-annotation` / `get-object-annotation` / `list-object-annotations` / `delete-object-annotation` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
 | 101  | Abnormal termination (internal panic)                                                                               |
 | 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 
