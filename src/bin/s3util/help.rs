@@ -26,6 +26,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
             "head-object",
             "get-object-tagging",
             "get-object-annotation",
+            "list-object-annotations",
             "put-object-tagging",
             "delete-object-tagging",
             "put-object-annotation",
