@@ -87,6 +87,13 @@ const COMMAND_ROUTES: &[CommandRoute] = &[
         api_calls: &["get_object_tagging"],
     },
     CommandRoute {
+        variant: "GetObjectAnnotation",
+        cli_name: "get-object-annotation",
+        runner: "run_get_object_annotation",
+        runtime_file: Some("get_object_annotation.rs"),
+        api_calls: &["get_object_annotation"],
+    },
+    CommandRoute {
         variant: "PutObjectAnnotation",
         cli_name: "put-object-annotation",
         runner: "run_put_object_annotation",

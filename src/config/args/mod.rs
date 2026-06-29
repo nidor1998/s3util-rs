@@ -90,6 +90,7 @@ pub use get_bucket_request_payment::GetBucketRequestPaymentArgs;
 pub use get_bucket_tagging::GetBucketTaggingArgs;
 pub use get_bucket_versioning::GetBucketVersioningArgs;
 pub use get_bucket_website::GetBucketWebsiteArgs;
+pub use get_object_annotation::GetObjectAnnotationArgs;
 pub use get_object_tagging::GetObjectTaggingArgs;
 pub use get_public_access_block::GetPublicAccessBlockArgs;
 pub use head_bucket::HeadBucketArgs;
@@ -226,6 +227,9 @@ pub enum Commands {
     /// Retrieve the website configuration of an S3 bucket and print it as JSON
     #[command(display_order = 32)]
     GetBucketWebsite(GetBucketWebsiteArgs),
+    /// Download a named annotation payload from an S3 object
+    #[command(display_order = 49)]
+    GetObjectAnnotation(GetObjectAnnotationArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
     #[command(display_order = 6)]
     GetObjectTagging(GetObjectTaggingArgs),
@@ -416,6 +420,10 @@ where
         ),
         Commands::GetBucketWebsite(_) => Err(
             "build_config_from_args is for cp/mv only; get-bucket-website is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::GetObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; get-object-annotation is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::GetObjectTagging(_) => Err(

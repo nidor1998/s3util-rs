@@ -62,6 +62,7 @@ mod tests {
             | Commands::GetBucketTagging(_)
             | Commands::GetBucketVersioning(_)
             | Commands::GetBucketWebsite(_)
+            | Commands::GetObjectAnnotation(_)
             | Commands::GetObjectTagging(_)
             | Commands::GetPublicAccessBlock(_)
             | Commands::HeadBucket(_)
