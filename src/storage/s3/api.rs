@@ -21,6 +21,7 @@ use aws_sdk_s3::operation::delete_bucket_replication::DeleteBucketReplicationOut
 use aws_sdk_s3::operation::delete_bucket_tagging::DeleteBucketTaggingOutput;
 use aws_sdk_s3::operation::delete_bucket_website::DeleteBucketWebsiteOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
 use aws_sdk_s3::operation::delete_public_access_block::DeletePublicAccessBlockOutput;
 use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
@@ -174,6 +175,8 @@ const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"
 /// version when `--source-version-id` is set. `NoSuchBucket` is handled
 /// separately by `classify_not_found` and mapped to `BucketNotFound`.
 const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `delete-object-annotation` treats as a target NotFound.
+const DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 /// S3 error codes that `put-object-annotation` treats as a target NotFound.
 /// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
 /// version when `--target-version-id` is set. `NoSuchBucket` is handled
@@ -383,6 +386,47 @@ pub async fn put_object_annotation(
             Some(he) => he,
             None => HeadError::Other(anyhow::Error::new(e).context(format!(
                 "put-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
+}
+
+/// Parameters for `delete_object_annotation`.
+pub struct DeleteObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `DeleteObjectAnnotation`, removing the annotation stored under
+/// `params.annotation_name`. Maps `NoSuchBucket` to `BucketNotFound` and
+/// `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+pub async fn delete_object_annotation(
+    client: &Client,
+    params: DeleteObjectAnnotationParams<'_>,
+) -> Result<DeleteObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .delete_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "delete-object-annotation on s3://{}/{}",
                 params.bucket, params.key
             ))),
         }
