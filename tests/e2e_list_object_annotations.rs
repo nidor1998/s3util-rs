@@ -317,4 +317,30 @@ mod tests {
             "Annotations for v1 must contain v1-list-note; got: {json}"
         );
     }
+
+    /// Not-found: list-object-annotations on a bucket that does not exist must
+    /// exit 4 (S3 returns NoSuchBucket → `HeadError::BucketNotFound`).
+    #[tokio::test]
+    async fn list_object_annotations_missing_bucket_exits_4() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+
+        let object_arg = format!("s3://{nonexistent}/some-key");
+        let out = run_s3util(&[
+            "list-object-annotations",
+            "--target-profile",
+            "s3util-e2e-test",
+            &object_arg,
+        ]);
+
+        assert!(
+            !out.status.success(),
+            "list-object-annotations on missing bucket must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "missing bucket must exit 4 (NoSuchBucket); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }

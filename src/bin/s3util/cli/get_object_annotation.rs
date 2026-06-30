@@ -197,3 +197,108 @@ pub async fn run_get_object_annotation(
     );
     Ok(ExitStatus::Success)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use aws_sdk_s3::primitives::ByteStream;
+
+    // `detect_checksum` ignores the payload, but `annotation_payload` is a
+    // required builder field, so every output carries an empty stream.
+    fn empty_payload() -> ByteStream {
+        ByteStream::from_static(b"")
+    }
+
+    #[test]
+    fn detect_checksum_none_when_no_checksum_present() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .build();
+        assert!(detect_checksum(&out).is_none());
+    }
+
+    #[test]
+    fn detect_checksum_crc64nvme() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_crc64_nvme("crc64val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Crc64Nvme);
+        assert_eq!(val, "crc64val");
+    }
+
+    #[test]
+    fn detect_checksum_crc32() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_crc32("crc32val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Crc32);
+        assert_eq!(val, "crc32val");
+    }
+
+    #[test]
+    fn detect_checksum_crc32c() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_crc32_c("crc32cval")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Crc32C);
+        assert_eq!(val, "crc32cval");
+    }
+
+    #[test]
+    fn detect_checksum_sha1() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_sha1("sha1val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Sha1);
+        assert_eq!(val, "sha1val");
+    }
+
+    #[test]
+    fn detect_checksum_sha256() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_sha256("sha256val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Sha256);
+        assert_eq!(val, "sha256val");
+    }
+
+    // CRC64NVME outranks every other algorithm when several are present.
+    #[test]
+    fn detect_checksum_prefers_crc64nvme_over_others() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_crc64_nvme("crc64val")
+            .checksum_crc32("crc32val")
+            .checksum_crc32_c("crc32cval")
+            .checksum_sha1("sha1val")
+            .checksum_sha256("sha256val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Crc64Nvme);
+        assert_eq!(val, "crc64val");
+    }
+
+    // Absent CRC64NVME, CRC32 outranks the SHA family.
+    #[test]
+    fn detect_checksum_prefers_crc32_over_sha() {
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(empty_payload())
+            .checksum_crc32("crc32val")
+            .checksum_sha1("sha1val")
+            .checksum_sha256("sha256val")
+            .build();
+        let (algo, val) = detect_checksum(&out).expect("checksum present");
+        assert_eq!(algo, ChecksumAlgorithm::Crc32);
+        assert_eq!(val, "crc32val");
+    }
+}

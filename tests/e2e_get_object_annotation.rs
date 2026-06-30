@@ -305,4 +305,37 @@ mod tests {
             "retrieved v1 annotation payload must equal the put payload"
         );
     }
+
+    /// Not-found: get-object-annotation on a bucket that does not exist must exit
+    /// 4 (S3 returns NoSuchBucket → `HeadError::BucketNotFound`).
+    #[tokio::test]
+    async fn get_object_annotation_missing_bucket_exits_4() {
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let out_file = tmp_dir.join("nb-out.bin");
+        let out_path = out_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{nonexistent}/some-key");
+        let out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "nb-note",
+            &object_arg,
+            out_path,
+        ]);
+
+        assert!(
+            !out.status.success(),
+            "get-object-annotation on missing bucket must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "missing bucket must exit 4 (NoSuchBucket); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
