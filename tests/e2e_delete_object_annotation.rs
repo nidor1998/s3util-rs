@@ -25,7 +25,7 @@ mod tests {
     /// get-object-annotation for the same name and asserting exit 4.
     ///
     /// Note: after deletion the get command returns exit 4 because the annotation
-    /// is absent and S3 classifies that as NoSuchKey (mapped by
+    /// is absent and S3 classifies that as NoSuchAnnotation (mapped by
     /// GET_OBJECT_ANNOTATION_NOT_FOUND_CODES → HeadError::NotFound → exit 4).
     #[tokio::test]
     async fn delete_object_annotation_happy_path_exits_0_and_annotation_is_gone() {
@@ -109,7 +109,7 @@ mod tests {
         assert_eq!(
             get_out.status.code(),
             Some(4),
-            "deleted annotation must cause get to exit 4 (NoSuchKey); stderr: {}",
+            "deleted annotation must cause get to exit 4 (NoSuchAnnotation); stderr: {}",
             String::from_utf8_lossy(&get_out.stderr)
         );
     }

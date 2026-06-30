@@ -176,7 +176,11 @@ const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"
 /// separately by `classify_not_found` and mapped to `BucketNotFound`.
 const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 /// S3 error codes that `delete-object-annotation` treats as a target NotFound.
-const DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// `NoSuchKey`/`NoSuchVersion` cover a missing object/version; `NoSuchAnnotation`
+/// covers deleting an annotation name that is not present. `NoSuchBucket` is
+/// handled separately and mapped to `BucketNotFound`.
+const DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] =
+    &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"];
 /// S3 error codes that `put-object-annotation` treats as a target NotFound.
 /// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
 /// version when `--target-version-id` is set. `NoSuchBucket` is handled
@@ -184,9 +188,13 @@ const DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuch
 const PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 /// S3 error codes that `get-object-annotation` treats as a target NotFound.
 /// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
-/// version when `--target-version-id` is set. `NoSuchBucket` is handled
-/// separately by `classify_not_found` and mapped to `BucketNotFound`.
-const GET_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// version when `--target-version-id` is set; `NoSuchAnnotation` covers an
+/// object that exists but has no annotation under the requested name (S3
+/// returns this distinct code, e.g. after the annotation has been deleted).
+/// `NoSuchBucket` is handled separately by `classify_not_found` and mapped to
+/// `BucketNotFound`.
+const GET_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] =
+    &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"];
 /// S3 error codes that `list-object-annotations` treats as a target NotFound.
 /// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
 /// version when `--target-version-id` is set. `NoSuchBucket` is handled
@@ -403,7 +411,7 @@ pub struct DeleteObjectAnnotationParams<'a> {
 
 /// Issue `DeleteObjectAnnotation`, removing the annotation stored under
 /// `params.annotation_name`. Maps `NoSuchBucket` to `BucketNotFound` and
-/// `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
 pub async fn delete_object_annotation(
     client: &Client,
     params: DeleteObjectAnnotationParams<'_>,
@@ -446,7 +454,7 @@ pub struct GetObjectAnnotationParams<'a> {
 /// Issue `GetObjectAnnotation`, returning the annotation payload (as a
 /// `ByteStream` on the output) plus metadata. Always sends
 /// `checksum_mode=ENABLED`. Maps `NoSuchBucket` to `BucketNotFound` and
-/// `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
 pub async fn get_object_annotation(
     client: &Client,
     params: GetObjectAnnotationParams<'_>,
@@ -1663,6 +1671,45 @@ mod tests {
     fn restore_object_not_found_codes_pinned() {
         assert_eq!(
             RESTORE_OBJECT_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion"]
+        );
+    }
+
+    #[test]
+    fn delete_object_annotation_not_found_codes_pinned() {
+        // `NoSuchAnnotation` covers deleting an annotation name that is absent.
+        assert_eq!(
+            DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"]
+        );
+    }
+
+    #[test]
+    fn put_object_annotation_not_found_codes_pinned() {
+        // No `NoSuchAnnotation`: put creates/overwrites the annotation, so a
+        // missing-annotation code is never the relevant not-found condition.
+        assert_eq!(
+            PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion"]
+        );
+    }
+
+    #[test]
+    fn get_object_annotation_not_found_codes_pinned() {
+        // `NoSuchAnnotation` covers an existing object whose annotation is absent
+        // (e.g. after delete) — S3 returns this distinct code, not `NoSuchKey`.
+        assert_eq!(
+            GET_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"]
+        );
+    }
+
+    #[test]
+    fn list_object_annotations_not_found_codes_pinned() {
+        // No `NoSuchAnnotation`: listing an annotation-less object returns an
+        // empty set, not a not-found error.
+        assert_eq!(
+            LIST_OBJECT_ANNOTATIONS_NOT_FOUND_CODES,
             &["NoSuchKey", "NoSuchVersion"]
         );
     }
