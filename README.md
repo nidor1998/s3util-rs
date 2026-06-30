@@ -525,7 +525,7 @@ Options:
 - If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload.
 - If neither ETag nor additional checksum verification is applicable → a warning is logged but exit code remains 0.
 
-**Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `VersionId`, `RequestCharged`.
+**Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `ObjectVersionId`, `RequestCharged`.
 
 Example JSON output:
 
