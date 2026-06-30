@@ -260,4 +260,102 @@ mod tests {
         );
         assert_eq!(get_out.status.code(), Some(0));
     }
+
+    /// `--target-version-id` round-trip: on a versioned bucket, annotate a
+    /// specific (older) version, delete that version's annotation by the same
+    /// version ID (exit 0), then confirm a get on that version exits 4.
+    #[tokio::test]
+    async fn delete_object_annotation_with_target_version_id_exits_0_and_annotation_is_gone() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "versioned-del-target.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"version one body".to_vec())
+            .await;
+        // Newer version so v1 is non-current.
+        helper
+            .put_object_with_version(&bucket, key, b"version two body".to_vec())
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let payload_file = TestHelper::create_test_file(
+            &tmp_dir,
+            "v1-del-payload.txt",
+            b"v1 annotation to delete",
+        );
+        let payload_path = payload_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // Annotate v1 specifically.
+        let put_out = run_s3util(&[
+            "put-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-del-note",
+            "--annotation-payload",
+            payload_path,
+            "--target-version-id",
+            &v1,
+            &object_arg,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-object-annotation on v1 must succeed before delete test; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // Delete v1's annotation by version ID.
+        let out = run_s3util(&[
+            "delete-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-del-note",
+            "--target-version-id",
+            &v1,
+            &object_arg,
+        ]);
+
+        assert!(
+            out.status.success(),
+            "delete-object-annotation --target-version-id should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0));
+
+        // Confirm v1's annotation is gone: get on v1 must exit 4.
+        let get_out_file = tmp_dir.join("v1-after-delete.bin");
+        let get_out_path = get_out_file.to_str().unwrap();
+        let get_out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-del-note",
+            "--target-version-id",
+            &v1,
+            &object_arg,
+            get_out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !get_out.status.success(),
+            "get on v1 after delete must not succeed"
+        );
+        assert_eq!(
+            get_out.status.code(),
+            Some(4),
+            "deleted v1 annotation must cause get to exit 4 (NoSuchAnnotation); stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+    }
 }

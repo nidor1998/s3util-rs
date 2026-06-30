@@ -408,4 +408,80 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// --dry-run: put-object-annotation exits 0 but makes no S3 call, so the
+    /// annotation is never created. A follow-up get-object-annotation for the
+    /// same name must therefore exit 4 (NoSuchAnnotation).
+    ///
+    /// The dry-run path in the runner returns ExitStatus::Success immediately
+    /// after emitting an info log, before sending PutObjectAnnotation.
+    #[tokio::test]
+    async fn put_object_annotation_dry_run_exits_0_and_annotation_not_created() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "dry-run-put-target.txt";
+        helper
+            .put_object(&bucket, key, b"dry-run put body".to_vec())
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let payload_file = TestHelper::create_test_file(
+            &tmp_dir,
+            "dry-run-put-payload.txt",
+            b"dry-run put annotation",
+        );
+        let payload_path = payload_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // Dry-run put — must exit 0 without sending a PutObjectAnnotation request.
+        let out = run_s3util(&[
+            "put-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "dry-run-put-note",
+            "--annotation-payload",
+            payload_path,
+            "--dry-run",
+            &object_arg,
+        ]);
+
+        assert!(
+            out.status.success(),
+            "put-object-annotation --dry-run should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0));
+
+        // Nothing was created: get-object-annotation must exit 4.
+        let get_out_file = tmp_dir.join("dry-run-put-get.bin");
+        let get_out_path = get_out_file.to_str().unwrap();
+        let get_out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "dry-run-put-note",
+            &object_arg,
+            get_out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !get_out.status.success(),
+            "get after dry-run put must not succeed (nothing was created)"
+        );
+        assert_eq!(
+            get_out.status.code(),
+            Some(4),
+            "no annotation was created by dry-run, so get must exit 4; stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+    }
 }

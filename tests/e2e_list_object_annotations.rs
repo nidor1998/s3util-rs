@@ -236,4 +236,85 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// `--target-version-id`: annotate a specific (older) version, then list that
+    /// version's annotations and confirm the entry appears. The current version
+    /// carries no annotation, so finding the entry proves version targeting.
+    #[tokio::test]
+    async fn list_object_annotations_with_target_version_id_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "versioned-list-target.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"version one body".to_vec())
+            .await;
+        // Newer version so v1 is non-current.
+        helper
+            .put_object_with_version(&bucket, key, b"version two body".to_vec())
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let payload_file =
+            TestHelper::create_test_file(&tmp_dir, "v1-list-payload.txt", b"v1 list annotation");
+        let payload_path = payload_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // Seed an annotation on v1 specifically.
+        let put_out = run_s3util(&[
+            "put-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-list-note",
+            "--annotation-payload",
+            payload_path,
+            "--target-version-id",
+            &v1,
+            &object_arg,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-object-annotation on v1 must succeed before list test; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // List v1's annotations by version ID.
+        let out = run_s3util(&[
+            "list-object-annotations",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-version-id",
+            &v1,
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            out.status.success(),
+            "list-object-annotations --target-version-id should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0));
+
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be valid JSON");
+        let annotations = json["Annotations"]
+            .as_array()
+            .expect("Annotations must be an array");
+        let found = annotations
+            .iter()
+            .any(|a| a.get("AnnotationName").and_then(|v| v.as_str()) == Some("v1-list-note"));
+        assert!(
+            found,
+            "Annotations for v1 must contain v1-list-note; got: {json}"
+        );
+    }
 }

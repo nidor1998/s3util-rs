@@ -224,4 +224,85 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// `--target-version-id` round-trip: on a versioned bucket, annotate a
+    /// specific (older) version and read that annotation back by the same
+    /// version ID. Exit 0 plus the correct payload proves version targeting
+    /// worked — the current version carries no annotation, so a non-targeted get
+    /// would have exited 4.
+    #[tokio::test]
+    async fn get_object_annotation_with_target_version_id_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "versioned-get-target.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"version one body".to_vec())
+            .await;
+        // Newer version so v1 is non-current.
+        helper
+            .put_object_with_version(&bucket, key, b"version two body".to_vec())
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let payload = b"annotation for v1 get";
+        let payload_file = TestHelper::create_test_file(&tmp_dir, "v1-get-payload.txt", payload);
+        let payload_path = payload_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // Annotate v1 specifically.
+        let put_out = run_s3util(&[
+            "put-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-get-note",
+            "--annotation-payload",
+            payload_path,
+            "--target-version-id",
+            &v1,
+            &object_arg,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-object-annotation on v1 must succeed before get test; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // Get v1's annotation back by version ID.
+        let out_file = tmp_dir.join("v1-got.bin");
+        let out_path = out_file.to_str().unwrap();
+        let out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "v1-get-note",
+            "--target-version-id",
+            &v1,
+            &object_arg,
+            out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            out.status.success(),
+            "get-object-annotation --target-version-id should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0));
+
+        let got_bytes = std::fs::read(out_path).expect("output file must exist");
+        assert_eq!(
+            got_bytes.as_slice(),
+            payload,
+            "retrieved v1 annotation payload must equal the put payload"
+        );
+    }
 }
