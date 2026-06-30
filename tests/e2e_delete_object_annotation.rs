@@ -358,4 +358,52 @@ mod tests {
             String::from_utf8_lossy(&get_out.stderr)
         );
     }
+
+    /// Object-version not-found: the object exists, but we target a *real,
+    /// well-formed* version ID belonging to a different object, so it is absent
+    /// for this key. S3 returns NoSuchVersion (mapped to HeadError::NotFound →
+    /// exit 4). A real version ID avoids the 400 InvalidArgument a fabricated
+    /// ID could trigger.
+    #[tokio::test]
+    async fn delete_object_annotation_nonexistent_version_id_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "version-nf-del-target.txt";
+        helper
+            .put_object_with_version(&bucket, key, b"current body".to_vec())
+            .await;
+        let other_version = helper
+            .put_object_with_version(&bucket, "other-del-object.txt", b"other body".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let out = run_s3util(&[
+            "delete-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "nv-note",
+            "--target-version-id",
+            &other_version,
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !out.status.success(),
+            "delete-object-annotation with a nonexistent version must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "nonexistent version must exit 4 (NoSuchVersion); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
