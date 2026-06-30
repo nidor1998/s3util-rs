@@ -59,6 +59,7 @@ pub async fn run_get_object_annotation(
         .annotation_name
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("--annotation-name is required"))?;
+    annotation::validate_annotation_name(annotation_name)?;
     let outfile = args
         .outfile
         .as_deref()
@@ -103,13 +104,25 @@ pub async fn run_get_object_annotation(
         detect_checksum(&out)
     };
 
-    // Consume the payload body (moves the public `annotation_payload` field).
-    let payload = out
-        .annotation_payload
-        .collect()
+    // Consume the payload body with a bounded read (moves the public
+    // `annotation_payload` field). Streaming with a hard cap means a buggy or
+    // hostile endpoint returning more than the 1 MiB annotation limit can't OOM
+    // the process before the content-length check runs.
+    let mut body = out.annotation_payload;
+    let cap = annotation::MAX_ANNOTATION_PAYLOAD_LEN;
+    let mut payload: Vec<u8> = Vec::new();
+    while let Some(chunk) = body
+        .try_next()
         .await
         .context("reading annotation payload body")?
-        .into_bytes();
+    {
+        payload.extend_from_slice(&chunk);
+        if payload.len() > cap {
+            anyhow::bail!(
+                "annotation payload for s3://{bucket}/{key} exceeds the 1 MiB limit ({cap} bytes)"
+            );
+        }
+    }
 
     // Content-length sanity check (always possible; mismatch is fatal).
     if let Some(len) = content_length
@@ -169,12 +182,18 @@ pub async fn run_get_object_annotation(
         .map_err(|e| anyhow::anyhow!("persisting annotation payload to {outfile}: {e}"))?;
 
     println!("{}", serde_json::to_string_pretty(&json)?);
+    let outcome = if verified {
+        "written and verified"
+    } else {
+        "written, but integrity could NOT be verified"
+    };
     info!(
         bucket = %bucket,
         key = %key,
         annotation_name = %annotation_name,
         outfile = %outfile,
-        "Annotation payload written and verified."
+        "Annotation payload {}.",
+        outcome
     );
     Ok(ExitStatus::Success)
 }

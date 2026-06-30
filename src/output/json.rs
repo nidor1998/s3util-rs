@@ -206,7 +206,7 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
         );
     }
     if let Some(v) = out.object_version_id() {
-        map.insert("VersionId".to_string(), Value::String(v.to_string()));
+        map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
     }
     if let Some(v) = out.request_charged() {
         map.insert(
@@ -226,9 +226,11 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
 /// Build AWS-CLI-shape JSON for a `ListObjectAnnotations` response.
 ///
 /// Unlike the sparse `get_*_to_json` serializers, this emits a stable key set:
-/// `AnnotationPrefix`, `ObjectVersionId`, and `RequestCharged` are explicit
-/// `null` when absent, and `Bucket`, `Key`, `AnnotationCount`, `Annotations`
-/// are always present.
+/// `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`, and
+/// `NextContinuationToken` are explicit `null` when absent, and `Bucket`, `Key`,
+/// `AnnotationCount`, `Annotations`, `IsTruncated` are always present.
+/// `IsTruncated`/`NextContinuationToken` reflect that the wrapper makes a single
+/// request and does not follow pagination, so callers can detect a partial listing.
 pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Value {
     let mut map = Map::new();
 
@@ -319,6 +321,24 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
         }
         None => {
             map.insert("RequestCharged".to_string(), Value::Null);
+        }
+    }
+    // Truncation signal: the wrapper issues a single request (max 1000 results)
+    // and does not follow pagination, so surface whether more annotations exist
+    // rather than silently presenting a partial listing as complete.
+    map.insert(
+        "IsTruncated".to_string(),
+        Value::Bool(out.next_continuation_token().is_some()),
+    );
+    match out.next_continuation_token() {
+        Some(v) => {
+            map.insert(
+                "NextContinuationToken".to_string(),
+                Value::String(v.to_string()),
+            );
+        }
+        None => {
+            map.insert("NextContinuationToken".to_string(), Value::Null);
         }
     }
 
@@ -4242,7 +4262,7 @@ mod tests {
         assert_eq!(json["ChecksumCRC64NVME"], "hdWdywUmntQ=");
         assert_eq!(json["ChecksumType"], "FULL_OBJECT");
         assert_eq!(json["ServerSideEncryption"], "AES256");
-        assert_eq!(json["VersionId"], "v1");
+        assert_eq!(json["ObjectVersionId"], "v1");
         assert!(json.get("LastModified").is_some());
         // Payload bytes are never serialized.
         assert!(json.get("AnnotationPayload").is_none());
@@ -4278,6 +4298,9 @@ mod tests {
         assert!(json["AnnotationPrefix"].is_null());
         assert!(json["ObjectVersionId"].is_null());
         assert!(json["RequestCharged"].is_null());
+        // Single non-truncated page: IsTruncated false, NextContinuationToken null.
+        assert_eq!(json["IsTruncated"], Value::Bool(false));
+        assert!(json["NextContinuationToken"].is_null());
         // Annotations array.
         let arr = json["Annotations"]
             .as_array()

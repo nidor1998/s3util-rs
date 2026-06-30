@@ -119,14 +119,15 @@ fn auto_complete_shell_short_circuits_without_target() {
 
 #[test]
 fn oversize_file_payload_exits_1_without_network() {
-    // Create a temp file slightly larger than 1 MiB to trigger local validation.
-    // No AWS credentials or network access are needed.
+    // Create a unique temp file slightly larger than 1 MiB to trigger local
+    // validation. A unique path (not a fixed shared name) keeps concurrent test
+    // runs / shared $TMPDIR from racing. No AWS credentials or network needed.
     let max: usize = 1024 * 1024; // MAX_ANNOTATION_PAYLOAD_LEN
-    let path = std::env::temp_dir().join("s3util_test_oversize_annotation_payload.bin");
-    {
-        let data = vec![0u8; max + 1];
-        std::fs::write(&path, &data).expect("write temp oversize file");
-    }
+    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    tmp.write_all(&vec![0u8; max + 1])
+        .expect("write temp oversize file");
+    tmp.flush().expect("flush temp file");
+    let path = tmp.path().to_path_buf();
     let path_str = path.to_str().expect("UTF-8 temp path");
     let (ok, _stdout, stderr, code) = run(s3util().args([
         "put-object-annotation",
@@ -136,8 +137,7 @@ fn oversize_file_payload_exits_1_without_network() {
         "--annotation-payload",
         path_str,
     ]));
-    // Clean up regardless of outcome.
-    let _ = std::fs::remove_file(&path);
+    // `tmp` is deleted when dropped at end of scope.
     assert!(!ok, "oversize payload should fail; stderr: {stderr}");
     assert_eq!(code, Some(1), "expected exit code 1; stderr: {stderr}");
     assert!(

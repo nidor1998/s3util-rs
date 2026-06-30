@@ -23,6 +23,23 @@ pub fn validate_payload_len(len: usize) -> Result<()> {
     Ok(())
 }
 
+/// Maximum annotation-name length accepted by S3 (512 bytes).
+pub const MAX_ANNOTATION_NAME_LEN: usize = 512;
+
+/// Validate the annotation name against S3's 1..=512-byte constraint. Checked
+/// locally so the user gets a clear error before any network call (the length is
+/// measured in bytes, matching the documented "1-512 bytes" limit).
+pub fn validate_annotation_name(name: &str) -> Result<()> {
+    let len = name.len();
+    if len == 0 {
+        bail!("annotation name must be at least 1 byte");
+    }
+    if len > MAX_ANNOTATION_NAME_LEN {
+        bail!("annotation name must be at most {MAX_ANNOTATION_NAME_LEN} bytes (got {len})");
+    }
+    Ok(())
+}
+
 /// Base64-encoded MD5 of the payload, for the `Content-MD5` request header.
 pub fn content_md5_base64(payload: &[u8]) -> String {
     general_purpose::STANDARD.encode(md5::compute(payload).as_slice())
@@ -83,7 +100,10 @@ pub fn verify_crc64nvme(expected_base64: &str, returned: Option<&str>) -> Result
             bail!("CRC64NVME verification failed: expected {expected_base64}, got {actual}")
         }
         None => {
-            bail!("CRC64NVME verification failed: response did not include a CRC64NVME checksum")
+            bail!(
+                "CRC64NVME verification failed: the annotation was written, but the response did \
+                 not include a CRC64NVME checksum to verify it against"
+            )
         }
     }
 }
@@ -106,6 +126,22 @@ mod tests {
     #[test]
     fn rejects_over_max() {
         assert!(validate_payload_len(MAX_ANNOTATION_PAYLOAD_LEN + 1).is_err());
+    }
+
+    #[test]
+    fn annotation_name_rejects_empty() {
+        assert!(validate_annotation_name("").is_err());
+    }
+
+    #[test]
+    fn annotation_name_accepts_one_byte_and_max() {
+        assert!(validate_annotation_name("x").is_ok());
+        assert!(validate_annotation_name(&"x".repeat(MAX_ANNOTATION_NAME_LEN)).is_ok());
+    }
+
+    #[test]
+    fn annotation_name_rejects_over_max() {
+        assert!(validate_annotation_name(&"x".repeat(MAX_ANNOTATION_NAME_LEN + 1)).is_err());
     }
 
     #[test]

@@ -3,6 +3,7 @@ use tracing::info;
 
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::delete_object_annotation::DeleteObjectAnnotationArgs;
+use s3util_rs::storage::annotation;
 use s3util_rs::storage::s3::api::{self, DeleteObjectAnnotationParams, HeadError};
 
 use super::ExitStatus;
@@ -26,6 +27,7 @@ pub async fn run_delete_object_annotation(
         .annotation_name
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("--annotation-name is required"))?;
+    annotation::validate_annotation_name(annotation_name)?;
 
     let request_payer = client_config.request_payer.clone();
     let client = client_config.create_client().await;

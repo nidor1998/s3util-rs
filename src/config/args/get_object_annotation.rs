@@ -18,7 +18,9 @@ pub struct GetObjectAnnotationArgs {
     pub target: Option<String>,
 
     /// Output file path, or "-" to write the payload to stdout.
-    #[arg(env, required_unless_present = "auto_complete_shell")]
+    // No `env`: a destination file path should not be silently sourced from a
+    // generic `$OUTFILE` environment variable.
+    #[arg(required_unless_present = "auto_complete_shell")]
     pub outfile: Option<String>,
 
     /// Name of the annotation to retrieve (1-512 bytes).

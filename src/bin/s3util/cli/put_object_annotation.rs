@@ -31,24 +31,29 @@ pub async fn run_put_object_annotation(
         .annotation_name
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("--annotation-name is required"))?;
+    annotation::validate_annotation_name(annotation_name)?;
     let payload_arg = args
         .annotation_payload
         .as_deref()
         .ok_or_else(|| anyhow::anyhow!("--annotation-payload is required"))?;
 
+    let cap = (annotation::MAX_ANNOTATION_PAYLOAD_LEN as u64) + 1;
     let payload: Vec<u8> = if payload_arg == "-" {
         let mut buf = Vec::new();
-        let cap = (annotation::MAX_ANNOTATION_PAYLOAD_LEN as u64) + 1;
         std::io::Read::read_to_end(&mut std::io::Read::take(std::io::stdin(), cap), &mut buf)
             .context("reading annotation payload from stdin")?;
         annotation::validate_payload_len(buf.len())?;
         buf
     } else {
-        let meta = std::fs::metadata(payload_arg)
-            .with_context(|| format!("reading annotation payload metadata from {payload_arg}"))?;
-        annotation::validate_payload_len(usize::try_from(meta.len()).unwrap_or(usize::MAX))?;
-        std::fs::read(payload_arg)
-            .with_context(|| format!("reading annotation payload from {payload_arg}"))?
+        // Bounded read over the actual bytes (not the stat size): correct for
+        // FIFOs/special files and not TOCTOU-racy, matching the stdin path.
+        let file = std::fs::File::open(payload_arg)
+            .with_context(|| format!("reading annotation payload from {payload_arg}"))?;
+        let mut buf = Vec::new();
+        std::io::Read::read_to_end(&mut std::io::Read::take(file, cap), &mut buf)
+            .with_context(|| format!("reading annotation payload from {payload_arg}"))?;
+        annotation::validate_payload_len(buf.len())?;
+        buf
     };
 
     let content_md5 = annotation::content_md5_base64(&payload);

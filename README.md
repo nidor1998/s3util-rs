@@ -619,7 +619,7 @@ Options:
 |------|------|-------------|
 | `--annotation-name <VALUE>` | String (required) | Name of the annotation to delete |
 | `--target-version-id <VALUE>` | String | Delete the annotation for a specific object version |
-| `--dry-run` | Flag | Validate arguments and permissions without deleting |
+| `--dry-run` | Flag | Log what would be sent and exit 0 without calling the API |
 
 Common options (e.g. `--target-region`, `--target-access-key`, `--target-request-payer`, `--verbose`) apply the same way as for other subcommands.
 
