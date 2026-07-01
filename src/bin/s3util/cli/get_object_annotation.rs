@@ -93,6 +93,34 @@ fn check_integrity(
     })
 }
 
+/// Re-read the saved file from disk and re-run the integrity checks against its
+/// on-disk bytes — the `cp`-style, recompute-from-disk verification. Runs after
+/// the temp file has been renamed into place; a mismatch here can only mean the
+/// write corrupted the data, so the error is wrapped with context saying the
+/// saved file may be corrupted. `Verified`/`Unverifiable` are both success (the
+/// pre-write step already warned about un-verifiability).
+fn verify_saved_file(
+    path: &Path,
+    content_length: Option<i64>,
+    e_tag: Option<&str>,
+    sse: Option<&ServerSideEncryption>,
+    checksum: Option<&(ChecksumAlgorithm, String)>,
+    bucket: &str,
+    key: &str,
+) -> Result<()> {
+    let on_disk = std::fs::read(path)
+        .with_context(|| format!("re-reading saved file {} for verification", path.display()))?;
+    check_integrity(&on_disk, content_length, e_tag, sse, checksum, bucket, key).with_context(
+        || {
+            format!(
+                "post-write verification failed for s3://{bucket}/{key}: the saved file {} may be corrupted",
+                path.display()
+            )
+        },
+    )?;
+    Ok(())
+}
+
 /// Runtime entry for
 /// `s3util get-object-annotation s3://<BUCKET>/<KEY> <OUTFILE> --annotation-name N`.
 ///
@@ -225,6 +253,20 @@ pub async fn run_get_object_annotation(
         .context("flushing annotation payload temp file")?;
     tmp.persist(path)
         .map_err(|e| anyhow::anyhow!("persisting annotation payload to {outfile}: {e}"))?;
+
+    // Post-write verification: re-read the saved file and recompute the ETag /
+    // additional checksum from disk (cp-style, rename-then-verify order). A
+    // mismatch can only mean the write corrupted the data; the file is left in
+    // place and we return Err.
+    verify_saved_file(
+        path,
+        content_length,
+        e_tag.as_deref(),
+        sse.as_ref(),
+        checksum.as_ref(),
+        &bucket,
+        &key,
+    )?;
 
     println!("{}", serde_json::to_string_pretty(&json)?);
     let outcome = if verified {
@@ -418,5 +460,43 @@ mod tests {
         let err = check_integrity(b"hello world", None, None, None, Some(&checksum), "b", "k")
             .unwrap_err();
         assert!(format!("{err:#}").contains("checksum verification failed"));
+    }
+
+    #[test]
+    fn verify_saved_file_ok_when_bytes_match_checksum() {
+        let payload = b"hello world";
+        let checksum = (
+            ChecksumAlgorithm::Crc64Nvme,
+            annotation::compute_checksum_base64(payload, ChecksumAlgorithm::Crc64Nvme),
+        );
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), payload).unwrap();
+        let res = verify_saved_file(
+            tmp.path(),
+            Some(payload.len() as i64),
+            None,
+            None,
+            Some(&checksum),
+            "b",
+            "k",
+        );
+        assert!(res.is_ok(), "expected ok, got: {res:?}");
+    }
+
+    #[test]
+    fn verify_saved_file_err_when_bytes_corrupted() {
+        let payload = b"hello world";
+        // Checksum computed over the *correct* payload; the file on disk holds
+        // different bytes, simulating a corrupt write.
+        let checksum = (
+            ChecksumAlgorithm::Crc64Nvme,
+            annotation::compute_checksum_base64(payload, ChecksumAlgorithm::Crc64Nvme),
+        );
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), b"totally different bytes").unwrap();
+        let err =
+            verify_saved_file(tmp.path(), None, None, None, Some(&checksum), "b", "k").unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.contains("may be corrupted"), "got: {msg}");
     }
 }
