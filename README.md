@@ -39,6 +39,7 @@
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
     * [Rename within Express One Zone](#rename-within-express-one-zone)
+    * [presign](#presign)
     * [put-object-annotation](#put-object-annotation)
     * [get-object-annotation](#get-object-annotation)
     * [list-object-annotations](#list-object-annotations)
@@ -175,6 +176,7 @@ machinery.
 | `get-bucket-request-payment`             | Prints request-payment configuration as JSON (`{"Payer": "BucketOwner"}`)          |
 | `get-bucket-policy-status`               | Prints policy status as JSON (`{"PolicyStatus": {"IsPublic": …}}`); exits 4 if no policy is attached |
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
+| `presign`                                | Generates a pre-signed `GetObject` URL (GET only) and prints it to stdout; signed locally with no S3 API call, so bucket/object existence is not verified; `--expires-in <SECONDS>` sets validity (default 3600, max 604800 = 7 days) |
 | `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename) after verification passes; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `list-object-annotations`                | Lists annotations on an S3 object via `ListObjectAnnotations`; makes a single request (up to 1000 results, pagination is not followed); supports `--annotation-prefix`, `--target-version-id`; outputs AWS-CLI-shape JSON on stdout; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
@@ -442,6 +444,26 @@ Conditional check flags:
 | `--target-if-none-match <ETAG>` | String | Proceed only if the destination ETag does not match the given value |
 
 Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
+
+### presign
+
+`presign` generates a [pre-signed URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html) for a `GetObject` request and prints it to stdout. The URL grants temporary, credential-free read access to a single object: anyone holding it can download that object until it expires. The URL is signed locally from the resolved credentials — **no S3 API call is made** — so the bucket and key are not checked for existence, and signing succeeds even if the object does not exist.
+
+```bash
+# Pre-sign with the default 1-hour expiry (3600 seconds)
+s3util presign s3://my-bucket/report.pdf
+
+# Pre-sign with a custom expiry (seconds; max 604800 = 7 days)
+s3util presign s3://my-bucket/report.pdf --expires-in 86400
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--expires-in <SECONDS>` | Integer | Seconds until the URL expires. Default `3600`; must be greater than `0` and at most `604800` (7 days, S3's maximum for a SigV4 pre-signed URL) |
+
+Common options (e.g. `--target-region`, `--target-access-key`, `--target-profile`) apply the same way as for other subcommands. `presign` covers `GetObject` only — it does not pre-sign uploads or any other operation. If the signing credentials are temporary (for example STS or SSO session credentials), the URL stops working once those credentials expire, even if `--expires-in` has not elapsed. Because no request is sent to S3, `presign` has no `--dry-run` and never returns the not-found exit code `4`: it exits `0` once the URL is printed, or `1` / `2` on a signing or argument error.
 
 ### put-object-annotation
 
