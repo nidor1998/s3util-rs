@@ -17,7 +17,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `--target-request-payer`, and `--dry-run`.
 - Add `get-object-annotation` subcommand to retrieve a named annotation payload
   from an S3 object (to a file or stdout), verifying the payload's integrity
-  before it is written. Supports `--target-version-id` and `--target-request-payer`.
+  before it is written and, for file output, re-reading the saved file to
+  recompute and re-verify its ETag / additional checksum from disk (like `cp`);
+  a post-write mismatch leaves the file in place and exits 1. Supports
+  `--target-version-id` and `--target-request-payer`.
 - Add `list-object-annotations` subcommand to list an object's annotations as JSON.
 - Add `delete-object-annotation` subcommand to delete a named annotation from an S3 object.
 

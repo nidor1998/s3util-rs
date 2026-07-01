@@ -128,10 +128,13 @@ fn verify_saved_file(
 /// (≤1 MiB), verifies content length, the ETag/MD5 (only for AES256 objects),
 /// and the additional checksum (if any); warns when neither check applies. Then
 /// writes the payload to a temp file and atomically renames it to `<OUTFILE>`
-/// (or streams to stdout when `<OUTFILE>` is `-`), and prints AWS-CLI-shape JSON
-/// metadata (file mode only). Returns `ExitStatus::NotFound` (exit 4) when the
-/// bucket, object, or version does not exist; a verification mismatch returns
-/// `Err` (exit 1).
+/// (or streams to stdout when `<OUTFILE>` is `-`). For file output it then
+/// re-reads the saved file and recomputes the same ETag / additional checksum
+/// from disk (`cp`-style, rename-then-verify order) so a corrupt write is
+/// caught; a post-write mismatch leaves the file in place and returns `Err`.
+/// Finally it prints AWS-CLI-shape JSON metadata (file mode only). Returns
+/// `ExitStatus::NotFound` (exit 4) when the bucket, object, or version does not
+/// exist; a verification mismatch returns `Err` (exit 1).
 pub async fn run_get_object_annotation(
     args: GetObjectAnnotationArgs,
     client_config: ClientConfig,
