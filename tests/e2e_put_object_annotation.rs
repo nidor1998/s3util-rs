@@ -152,6 +152,188 @@ mod tests {
         );
     }
 
+    /// stdin integrity roundtrip: pipe a payload in via stdin (`-`), then read
+    /// it back with get-object-annotation and assert the retrieved bytes equal
+    /// the piped bytes exactly. Proves the stdin read path transfers the payload
+    /// byte-for-byte (including multi-byte UTF-8), not merely that it exits 0.
+    #[tokio::test]
+    async fn put_object_annotation_stdin_payload_roundtrips_via_get() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "annotation-stdin-roundtrip.txt";
+        helper
+            .put_object(&bucket, key, b"stdin roundtrip body".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let payload = "roundtrip via stdin: 日本語 ✓".as_bytes();
+
+        // Put the annotation, reading the payload from stdin (`-`).
+        let put_out = run_s3util_with_stdin(
+            &[
+                "put-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                "stdin-roundtrip-note",
+                "--annotation-payload",
+                "-",
+                &object_arg,
+            ],
+            payload,
+        );
+        assert!(
+            put_out.status.success(),
+            "put-object-annotation from stdin should exit 0; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // Read the annotation back to a file and compare bytes.
+        let tmp_dir = TestHelper::create_temp_dir();
+        let out_file = tmp_dir.join("stdin-roundtrip-got.bin");
+        let out_path = out_file.to_str().unwrap();
+        let get_out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "stdin-roundtrip-note",
+            &object_arg,
+            out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            get_out.status.success(),
+            "get-object-annotation should exit 0; stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+        let got_bytes = std::fs::read(out_path).expect("output file must exist");
+        assert_eq!(
+            got_bytes.as_slice(),
+            payload,
+            "annotation payload read back must equal the bytes piped via stdin"
+        );
+    }
+
+    /// stdin size boundary (maximum): piping exactly 1 MiB via stdin is accepted
+    /// (exit 0). Exercises the bounded stdin read (`take(MAX + 1)`) receiving
+    /// exactly the maximum without tripping the oversize check.
+    #[tokio::test]
+    async fn put_object_annotation_stdin_max_payload_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "annotation-stdin-max.txt";
+        helper
+            .put_object(&bucket, key, b"stdin max body".to_vec())
+            .await;
+
+        // Exactly 1 MiB — the inclusive maximum accepted by validate_payload_len.
+        let payload = vec![b'a'; 1024 * 1024];
+
+        let object_arg = format!("s3://{bucket}/{key}");
+        let out = run_s3util_with_stdin(
+            &[
+                "put-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                "stdin-max-note",
+                "--annotation-payload",
+                "-",
+                &object_arg,
+            ],
+            &payload,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            out.status.success(),
+            "put-object-annotation with a 1 MiB stdin payload should exit 0; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(out.status.code(), Some(0));
+    }
+
+    /// stdin size boundary (maximum exceeded): piping 1 MiB + 1 byte via stdin
+    /// must fail locally with exit 1 before any network call. The target bucket
+    /// does not exist, so if the size check were skipped the request would exit
+    /// 4 (NoSuchBucket) instead of 1 — catching such a regression.
+    #[tokio::test]
+    async fn put_object_annotation_stdin_oversized_payload_exits_1_without_network() {
+        // 1 MiB + 1 byte exceeds the local validation limit.
+        let payload = vec![b'a'; 1024 * 1024 + 1];
+
+        let object_arg = "s3://s3util-e2e-nonexistent-bucket-for-stdin-size/key";
+        let out = run_s3util_with_stdin(
+            &[
+                "put-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                "stdin-oversized-note",
+                "--annotation-payload",
+                "-",
+                object_arg,
+            ],
+            &payload,
+        );
+
+        assert!(
+            !out.status.success(),
+            "oversized stdin payload must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "oversized stdin payload must exit 1 (local validation); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// stdin size boundary (minimum): an empty stdin payload (0 bytes) is
+    /// rejected locally with exit 1 (validate_payload_len requires >= 1 byte),
+    /// before any network call. The target bucket does not exist, so a skipped
+    /// check would surface as exit 4 rather than 1.
+    #[tokio::test]
+    async fn put_object_annotation_stdin_empty_payload_exits_1() {
+        let object_arg = "s3://s3util-e2e-nonexistent-bucket-for-stdin-empty/key";
+        let out = run_s3util_with_stdin(
+            &[
+                "put-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                "stdin-empty-note",
+                "--annotation-payload",
+                "-",
+                object_arg,
+            ],
+            b"",
+        );
+
+        assert!(
+            !out.status.success(),
+            "empty stdin payload must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(1),
+            "empty stdin payload must exit 1 (local validation); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
     /// `--target-version-id` against a versioned bucket: enable versioning,
     /// put two versions of the same key, then annotate the first version by
     /// its version ID and assert exit 0.
@@ -491,7 +673,7 @@ mod tests {
     /// exit 4). A real version ID avoids the 400 InvalidArgument a fabricated
     /// ID could trigger.
     #[tokio::test]
-    async fn put_object_annotation_nonexistent_version_id_exits_4() {
+    async fn put_object_annotation_version_id_from_other_object_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;

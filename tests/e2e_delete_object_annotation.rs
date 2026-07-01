@@ -365,7 +365,7 @@ mod tests {
     /// exit 4). A real version ID avoids the 400 InvalidArgument a fabricated
     /// ID could trigger.
     #[tokio::test]
-    async fn delete_object_annotation_nonexistent_version_id_exits_4() {
+    async fn delete_object_annotation_version_id_from_other_object_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;

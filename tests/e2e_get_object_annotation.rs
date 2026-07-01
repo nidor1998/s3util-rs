@@ -345,7 +345,7 @@ mod tests {
     /// HeadError::NotFound → exit 4). Using a real version ID avoids the
     /// 400 InvalidArgument that a fabricated ID could trigger.
     #[tokio::test]
-    async fn get_object_annotation_nonexistent_version_id_exits_4() {
+    async fn get_object_annotation_version_id_from_other_object_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -388,6 +388,91 @@ mod tests {
             out.status.code(),
             Some(4),
             "nonexistent version must exit 4 (NoSuchVersion); stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// Object-version *truly* not-found. Unlike
+    /// `get_object_annotation_version_id_from_other_object_exits_4` — which borrows a
+    /// still-existing version ID from a *different* object — this test deletes a
+    /// real version of the *same* key, so the requested version ID no longer
+    /// refers to any existing version. The ID is guaranteed well-formed (S3
+    /// generated it), so S3 returns NoSuchVersion (→ HeadError::NotFound → exit
+    /// 4) rather than the 400 InvalidArgument a fabricated ID could trigger. The
+    /// annotation name is one that *does* exist on the current version, so the
+    /// exit 4 can only come from the missing version, not a missing annotation.
+    #[tokio::test]
+    async fn get_object_annotation_deleted_version_id_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "deleted-version-get-target.txt";
+        // v1 is deleted below; v2 stays current so the *key* still exists
+        // (isolating NoSuchVersion from NoSuchKey).
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"body v1".to_vec())
+            .await;
+        helper
+            .put_object_with_version(&bucket, key, b"body v2".to_vec())
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let payload = b"annotation on the current version";
+        let payload_file = TestHelper::create_test_file(&tmp_dir, "live-payload.txt", payload);
+        let payload_path = payload_file.to_str().unwrap();
+
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        // Annotate the current version so the annotation name genuinely exists;
+        // the get below can then only fail on the missing version.
+        let put_out = run_s3util(&[
+            "put-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "live-note",
+            "--annotation-payload",
+            payload_path,
+            &object_arg,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-object-annotation on the current version must succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // Permanently delete v1: its (well-formed) version ID now refers to no
+        // existing version of this key.
+        helper.delete_object(&bucket, key, Some(v1.clone())).await;
+
+        let out_file = tmp_dir.join("deleted-version-out.bin");
+        let out_path = out_file.to_str().unwrap();
+        let out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "live-note",
+            "--target-version-id",
+            &v1,
+            &object_arg,
+            out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            !out.status.success(),
+            "get-object-annotation on a deleted (truly nonexistent) version must not succeed"
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "deleted version must exit 4 (NoSuchVersion); stderr: {}",
             String::from_utf8_lossy(&out.stderr)
         );
     }
