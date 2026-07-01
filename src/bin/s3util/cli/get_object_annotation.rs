@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
-use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumType};
+use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumType, ServerSideEncryption};
 use tempfile::NamedTempFile;
 use tracing::{info, warn};
 
@@ -34,6 +34,63 @@ fn detect_checksum(out: &GetObjectAnnotationOutput) -> Option<(ChecksumAlgorithm
         return Some((ChecksumAlgorithm::Sha256, v.to_string()));
     }
     None
+}
+
+/// Result of running the available integrity checks against a byte buffer.
+#[derive(Debug)]
+enum IntegrityCheck {
+    /// At least one applicable check passed.
+    Verified,
+    /// No check applied (not AES256, and no additional checksum was present).
+    Unverifiable,
+}
+
+/// Run every available integrity check against `bytes`: content-length equality,
+/// the AES256 ETag/MD5, and the additional checksum (if any). Returns `Verified`
+/// when at least one check passed, `Unverifiable` when none applied, or `Err` on
+/// any mismatch. Used for both the pre-write (in-transit) and post-write
+/// (on-disk) verifications so both run identical logic.
+fn check_integrity(
+    bytes: &[u8],
+    content_length: Option<i64>,
+    e_tag: Option<&str>,
+    sse: Option<&ServerSideEncryption>,
+    checksum: Option<&(ChecksumAlgorithm, String)>,
+    bucket: &str,
+    key: &str,
+) -> Result<IntegrityCheck> {
+    // Content-length sanity check (always possible; mismatch is fatal).
+    if let Some(len) = content_length
+        && len != bytes.len() as i64
+    {
+        anyhow::bail!(
+            "content length mismatch for s3://{bucket}/{key}: response said {len} bytes, received {}",
+            bytes.len()
+        );
+    }
+
+    let mut verified = false;
+    match annotation::verify_etag_md5(bytes, e_tag, sse) {
+        Some(true) => verified = true,
+        Some(false) => anyhow::bail!("ETag (MD5) verification failed for s3://{bucket}/{key}"),
+        None => {}
+    }
+    if let Some((algo, expected)) = checksum {
+        if annotation::verify_additional_checksum(bytes, algo.clone(), expected) {
+            verified = true;
+        } else {
+            anyhow::bail!(
+                "{} checksum verification failed for s3://{bucket}/{key}",
+                algo.as_str()
+            );
+        }
+    }
+
+    Ok(if verified {
+        IntegrityCheck::Verified
+    } else {
+        IntegrityCheck::Unverifiable
+    })
 }
 
 /// Runtime entry for
@@ -124,40 +181,28 @@ pub async fn run_get_object_annotation(
         }
     }
 
-    // Content-length sanity check (always possible; mismatch is fatal).
-    if let Some(len) = content_length
-        && len != payload.len() as i64
-    {
-        anyhow::bail!(
-            "content length mismatch for s3://{bucket}/{key}: response said {len} bytes, received {}",
-            payload.len()
-        );
-    }
-
-    // Integrity verification.
-    let mut verified = false;
-    match annotation::verify_etag_md5(&payload, e_tag.as_deref(), sse.as_ref()) {
-        Some(true) => verified = true,
-        Some(false) => anyhow::bail!("ETag (MD5) verification failed for s3://{bucket}/{key}"),
-        None => {}
-    }
-    if let Some((algo, expected)) = &checksum {
-        if annotation::verify_additional_checksum(&payload, algo.clone(), expected) {
-            verified = true;
-        } else {
-            anyhow::bail!(
-                "{} checksum verification failed for s3://{bucket}/{key}",
-                algo.as_str()
+    // Integrity verification against the in-transit payload (pre-write). A
+    // mismatch is fatal and stops us writing known-bad data; when no check
+    // applies we warn but still write.
+    let verified = match check_integrity(
+        &payload,
+        content_length,
+        e_tag.as_deref(),
+        sse.as_ref(),
+        checksum.as_ref(),
+        &bucket,
+        &key,
+    )? {
+        IntegrityCheck::Verified => true,
+        IntegrityCheck::Unverifiable => {
+            warn!(
+                bucket = %bucket,
+                key = %key,
+                "payload integrity could not be verified (no AES256 ETag and no additional checksum)."
             );
+            false
         }
-    }
-    if !verified {
-        warn!(
-            bucket = %bucket,
-            key = %key,
-            "payload integrity could not be verified (no AES256 ETag and no additional checksum)."
-        );
-    }
+    };
 
     // Output.
     if outfile == "-" {
@@ -300,5 +345,78 @@ mod tests {
         let (algo, val) = detect_checksum(&out).expect("checksum present");
         assert_eq!(algo, ChecksumAlgorithm::Crc32);
         assert_eq!(val, "crc32val");
+    }
+
+    #[test]
+    fn check_integrity_verified_on_matching_checksum() {
+        let payload = b"hello world";
+        let checksum = (
+            ChecksumAlgorithm::Crc64Nvme,
+            annotation::compute_checksum_base64(payload, ChecksumAlgorithm::Crc64Nvme),
+        );
+        let res = check_integrity(
+            payload,
+            Some(payload.len() as i64),
+            None,
+            None,
+            Some(&checksum),
+            "b",
+            "k",
+        )
+        .unwrap();
+        assert!(matches!(res, IntegrityCheck::Verified));
+    }
+
+    #[test]
+    fn check_integrity_verified_on_matching_aes256_etag() {
+        let payload = b"hello";
+        let etag = format!("\"{:x}\"", md5::compute(payload));
+        let res = check_integrity(
+            payload,
+            None,
+            Some(&etag),
+            Some(&ServerSideEncryption::Aes256),
+            None,
+            "b",
+            "k",
+        )
+        .unwrap();
+        assert!(matches!(res, IntegrityCheck::Verified));
+    }
+
+    #[test]
+    fn check_integrity_unverifiable_when_nothing_applies() {
+        let res = check_integrity(b"hello", Some(5), None, None, None, "b", "k").unwrap();
+        assert!(matches!(res, IntegrityCheck::Unverifiable));
+    }
+
+    #[test]
+    fn check_integrity_err_on_content_length_mismatch() {
+        let err = check_integrity(b"hello", Some(999), None, None, None, "b", "k").unwrap_err();
+        assert!(format!("{err:#}").contains("content length mismatch"));
+    }
+
+    #[test]
+    fn check_integrity_err_on_etag_mismatch() {
+        // AES256 + a plain (non-multipart) ETag that does not match the payload.
+        let err = check_integrity(
+            b"hello",
+            None,
+            Some("\"00000000000000000000000000000000\""),
+            Some(&ServerSideEncryption::Aes256),
+            None,
+            "b",
+            "k",
+        )
+        .unwrap_err();
+        assert!(format!("{err:#}").contains("ETag (MD5) verification failed"));
+    }
+
+    #[test]
+    fn check_integrity_err_on_checksum_mismatch() {
+        let checksum = (ChecksumAlgorithm::Crc64Nvme, "AAAAAAAAAAA=".to_string());
+        let err = check_integrity(b"hello world", None, None, None, Some(&checksum), "b", "k")
+            .unwrap_err();
+        assert!(format!("{err:#}").contains("checksum verification failed"));
     }
 }
