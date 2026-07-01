@@ -502,4 +502,24 @@ mod tests {
         let msg = format!("{err:#}");
         assert!(msg.contains("may be corrupted"), "got: {msg}");
     }
+
+    #[test]
+    fn verify_saved_file_ok_when_nothing_verifiable() {
+        // No AES256 ETag and no additional checksum: nothing to recompute, so a
+        // correctly-written file must still pass (Unverifiable is treated as
+        // success, matching the pre-write path). Content-length still matches.
+        let payload = b"hello world";
+        let tmp = NamedTempFile::new().unwrap();
+        std::fs::write(tmp.path(), payload).unwrap();
+        let res = verify_saved_file(
+            tmp.path(),
+            Some(payload.len() as i64),
+            None,
+            None,
+            None,
+            "b",
+            "k",
+        );
+        assert!(res.is_ok(), "expected ok, got: {res:?}");
+    }
 }
