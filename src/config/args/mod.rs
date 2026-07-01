@@ -20,6 +20,7 @@ pub mod delete_bucket_policy;
 pub mod delete_bucket_replication;
 pub mod delete_bucket_tagging;
 pub mod delete_bucket_website;
+pub mod delete_object_annotation;
 pub mod delete_object_tagging;
 pub mod delete_public_access_block;
 pub mod get_bucket_accelerate_configuration;
@@ -35,10 +36,12 @@ pub mod get_bucket_request_payment;
 pub mod get_bucket_tagging;
 pub mod get_bucket_versioning;
 pub mod get_bucket_website;
+pub mod get_object_annotation;
 pub mod get_object_tagging;
 pub mod get_public_access_block;
 pub mod head_bucket;
 pub mod head_object;
+pub mod list_object_annotations;
 pub mod mv;
 pub mod presign;
 pub mod put_bucket_accelerate_configuration;
@@ -53,6 +56,7 @@ pub mod put_bucket_request_payment;
 pub mod put_bucket_tagging;
 pub mod put_bucket_versioning;
 pub mod put_bucket_website;
+pub mod put_object_annotation;
 pub mod put_object_tagging;
 pub mod put_public_access_block;
 pub mod rename;
@@ -73,6 +77,7 @@ pub use delete_bucket_policy::DeleteBucketPolicyArgs;
 pub use delete_bucket_replication::DeleteBucketReplicationArgs;
 pub use delete_bucket_tagging::DeleteBucketTaggingArgs;
 pub use delete_bucket_website::DeleteBucketWebsiteArgs;
+pub use delete_object_annotation::DeleteObjectAnnotationArgs;
 pub use delete_object_tagging::DeleteObjectTaggingArgs;
 pub use delete_public_access_block::DeletePublicAccessBlockArgs;
 pub use get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationArgs;
@@ -88,10 +93,12 @@ pub use get_bucket_request_payment::GetBucketRequestPaymentArgs;
 pub use get_bucket_tagging::GetBucketTaggingArgs;
 pub use get_bucket_versioning::GetBucketVersioningArgs;
 pub use get_bucket_website::GetBucketWebsiteArgs;
+pub use get_object_annotation::GetObjectAnnotationArgs;
 pub use get_object_tagging::GetObjectTaggingArgs;
 pub use get_public_access_block::GetPublicAccessBlockArgs;
 pub use head_bucket::HeadBucketArgs;
 pub use head_object::HeadObjectArgs;
+pub use list_object_annotations::ListObjectAnnotationsArgs;
 pub use mv::MvArgs;
 pub use presign::PresignArgs;
 pub use put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationArgs;
@@ -106,6 +113,7 @@ pub use put_bucket_request_payment::PutBucketRequestPaymentArgs;
 pub use put_bucket_tagging::PutBucketTaggingArgs;
 pub use put_bucket_versioning::PutBucketVersioningArgs;
 pub use put_bucket_website::PutBucketWebsiteArgs;
+pub use put_object_annotation::PutObjectAnnotationArgs;
 pub use put_object_tagging::PutObjectTaggingArgs;
 pub use put_public_access_block::PutPublicAccessBlockArgs;
 pub use rename::RenameArgs;
@@ -178,6 +186,9 @@ pub enum Commands {
     /// Delete the website configuration from an S3 bucket
     #[command(display_order = 33)]
     DeleteBucketWebsite(DeleteBucketWebsiteArgs),
+    /// Delete a named annotation from an S3 object
+    #[command(display_order = 51)]
+    DeleteObjectAnnotation(DeleteObjectAnnotationArgs),
     /// Delete all tags from an S3 object
     #[command(display_order = 7)]
     DeleteObjectTagging(DeleteObjectTaggingArgs),
@@ -223,6 +234,9 @@ pub enum Commands {
     /// Retrieve the website configuration of an S3 bucket and print it as JSON
     #[command(display_order = 32)]
     GetBucketWebsite(GetBucketWebsiteArgs),
+    /// Download a named annotation payload from an S3 object
+    #[command(display_order = 49)]
+    GetObjectAnnotation(GetObjectAnnotationArgs),
     /// Retrieve the tags of an S3 object and print them as JSON
     #[command(display_order = 6)]
     GetObjectTagging(GetObjectTaggingArgs),
@@ -235,6 +249,9 @@ pub enum Commands {
     /// Head an S3 object and print its metadata as JSON
     #[command(display_order = 4)]
     HeadObject(HeadObjectArgs),
+    /// List the annotations of an S3 object and print them as JSON
+    #[command(display_order = 50)]
+    ListObjectAnnotations(ListObjectAnnotationsArgs),
     /// Move objects from/to S3 (copy then delete source)
     #[command(display_order = 2)]
     Mv(MvArgs),
@@ -286,6 +303,9 @@ pub enum Commands {
     /// Set the website configuration on an S3 bucket
     #[command(display_order = 31)]
     PutBucketWebsite(PutBucketWebsiteArgs),
+    /// Attach a named annotation payload to an S3 object
+    #[command(display_order = 48)]
+    PutObjectAnnotation(PutObjectAnnotationArgs),
     /// Replace all tags on an S3 object
     #[command(display_order = 5)]
     PutObjectTagging(PutObjectTaggingArgs),
@@ -352,6 +372,10 @@ where
             "build_config_from_args is for cp/mv only; delete-bucket-website is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::DeleteObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; delete-object-annotation is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::DeleteObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; delete-object-tagging is dispatched in main.rs"
                 .to_string(),
@@ -412,6 +436,10 @@ where
             "build_config_from_args is for cp/mv only; get-bucket-website is dispatched in main.rs"
                 .to_string(),
         ),
+        Commands::GetObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; get-object-annotation is dispatched in main.rs"
+                .to_string(),
+        ),
         Commands::GetObjectTagging(_) => Err(
             "build_config_from_args is for cp/mv only; get-object-tagging is dispatched in main.rs"
                 .to_string(),
@@ -426,6 +454,10 @@ where
         ),
         Commands::HeadObject(_) => Err(
             "build_config_from_args is for cp/mv only; head-object is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::ListObjectAnnotations(_) => Err(
+            "build_config_from_args is for cp/mv only; list-object-annotations is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::Mv(mv_args) => Config::try_from(mv_args),
@@ -483,6 +515,10 @@ where
         ),
         Commands::PutBucketWebsite(_) => Err(
             "build_config_from_args is for cp/mv only; put-bucket-website is dispatched in main.rs"
+                .to_string(),
+        ),
+        Commands::PutObjectAnnotation(_) => Err(
+            "build_config_from_args is for cp/mv only; put-object-annotation is dispatched in main.rs"
                 .to_string(),
         ),
         Commands::PutObjectTagging(_) => Err(

@@ -18,10 +18,13 @@ use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOu
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
+use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
 
@@ -104,6 +107,239 @@ pub fn get_object_tagging_to_json(out: &GetObjectTaggingOutput) -> Value {
 
     if let Some(v) = out.version_id() {
         map.insert("VersionId".to_string(), Value::String(v.to_string()));
+    }
+
+    Value::Object(map)
+}
+
+/// Serialise a `PutObjectAnnotation` response to `aws s3api`-shape JSON.
+/// Absent fields are omitted. The ETag is echoed for information only; it is
+/// not used for verification.
+pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(v) = out.key() {
+        map.insert("Key".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.annotation_name() {
+        map.insert("AnnotationName".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.object_version_id() {
+        map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.e_tag() {
+        map.insert("ETag".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc64_nvme() {
+        map.insert(
+            "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_type() {
+        map.insert(
+            "ChecksumType".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.server_side_encryption() {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+/// Serialise a `GetObjectAnnotation` response to `aws s3api`-shape JSON.
+/// Absent fields are omitted. The annotation payload itself is never included
+/// (it is written to the output file / stdout, not to the JSON).
+pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
+    let mut map = Map::new();
+    if let Some(v) = out.last_modified() {
+        if let Ok(dt) = v.to_chrono_utc() {
+            map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
+        }
+    }
+    if let Some(v) = out.content_length() {
+        map.insert(
+            "ContentLength".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.e_tag() {
+        map.insert("ETag".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32() {
+        map.insert("ChecksumCRC32".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32_c() {
+        map.insert("ChecksumCRC32C".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc64_nvme() {
+        map.insert(
+            "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_sha1() {
+        map.insert("ChecksumSHA1".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_sha256() {
+        map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_type() {
+        map.insert(
+            "ChecksumType".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.server_side_encryption() {
+        map.insert(
+            "ServerSideEncryption".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.object_version_id() {
+        map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.request_charged() {
+        map.insert(
+            "RequestCharged".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.replication_status() {
+        map.insert(
+            "ReplicationStatus".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    Value::Object(map)
+}
+
+/// Build AWS-CLI-shape JSON for a `ListObjectAnnotations` response.
+///
+/// Unlike the sparse `get_*_to_json` serializers, this emits a stable key set:
+/// `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`, and
+/// `NextContinuationToken` are explicit `null` when absent, and `Bucket`, `Key`,
+/// `AnnotationCount`, `Annotations`, `IsTruncated` are always present.
+/// `IsTruncated`/`NextContinuationToken` reflect that the wrapper makes a single
+/// request and does not follow pagination, so callers can detect a partial listing.
+pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Value {
+    let mut map = Map::new();
+
+    let annotations: Vec<Value> = out
+        .annotations()
+        .iter()
+        .map(|a| {
+            let mut e = Map::new();
+            e.insert(
+                "AnnotationName".to_string(),
+                Value::String(a.annotation_name().to_string()),
+            );
+            if let Ok(dt) = a.last_modified().to_chrono_utc() {
+                e.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
+            }
+            match a.e_tag() {
+                Some(v) => {
+                    e.insert("ETag".to_string(), Value::String(v.to_string()));
+                }
+                None => {
+                    e.insert("ETag".to_string(), Value::Null);
+                }
+            }
+            let algos: Vec<Value> = a
+                .checksum_algorithm()
+                .iter()
+                .map(|c| Value::String(c.as_str().to_string()))
+                .collect();
+            e.insert("ChecksumAlgorithm".to_string(), Value::Array(algos));
+            e.insert(
+                "Size".to_string(),
+                Value::Number(serde_json::Number::from(a.size())),
+            );
+            Value::Object(e)
+        })
+        .collect();
+    map.insert("Annotations".to_string(), Value::Array(annotations));
+
+    match out.annotation_count() {
+        Some(v) => {
+            map.insert(
+                "AnnotationCount".to_string(),
+                Value::Number(serde_json::Number::from(v)),
+            );
+        }
+        None => {
+            map.insert("AnnotationCount".to_string(), Value::Null);
+        }
+    }
+    match out.annotation_prefix() {
+        Some(v) => {
+            map.insert("AnnotationPrefix".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("AnnotationPrefix".to_string(), Value::Null);
+        }
+    }
+    match out.bucket() {
+        Some(v) => {
+            map.insert("Bucket".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("Bucket".to_string(), Value::Null);
+        }
+    }
+    match out.key() {
+        Some(v) => {
+            map.insert("Key".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("Key".to_string(), Value::Null);
+        }
+    }
+    match out.object_version_id() {
+        Some(v) => {
+            map.insert("ObjectVersionId".to_string(), Value::String(v.to_string()));
+        }
+        None => {
+            map.insert("ObjectVersionId".to_string(), Value::Null);
+        }
+    }
+    match out.request_charged() {
+        Some(v) => {
+            map.insert(
+                "RequestCharged".to_string(),
+                Value::String(v.as_str().to_string()),
+            );
+        }
+        None => {
+            map.insert("RequestCharged".to_string(), Value::Null);
+        }
+    }
+    // Truncation signal: the wrapper issues a single request (max 1000 results)
+    // and does not follow pagination, so surface whether more annotations exist
+    // rather than silently presenting a partial listing as complete.
+    map.insert(
+        "IsTruncated".to_string(),
+        Value::Bool(out.next_continuation_token().is_some()),
+    );
+    match out.next_continuation_token() {
+        Some(v) => {
+            map.insert(
+                "NextContinuationToken".to_string(),
+                Value::String(v.to_string()),
+            );
+        }
+        None => {
+            map.insert("NextContinuationToken".to_string(), Value::Null);
+        }
     }
 
     Value::Object(map)
@@ -3978,5 +4214,102 @@ mod tests {
             .build();
         let json = get_bucket_logging_to_json(&out);
         assert!(json["LoggingEnabled"].get("TargetGrants").is_none());
+    }
+
+    #[test]
+    fn put_object_annotation_to_json_shape() {
+        use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+
+        let out = PutObjectAnnotationOutput::builder()
+            .key("dir/obj.txt")
+            .annotation_name("note")
+            .object_version_id("v1")
+            .e_tag("\"abc123\"")
+            .checksum_crc64_nvme("AAAAAAAAAAA=")
+            .build();
+
+        let json = put_object_annotation_to_json(&out);
+        assert_eq!(json["Key"], "dir/obj.txt");
+        assert_eq!(json["AnnotationName"], "note");
+        assert_eq!(json["ObjectVersionId"], "v1");
+        assert_eq!(json["ETag"], "\"abc123\"");
+        assert_eq!(json["ChecksumCRC64NVME"], "AAAAAAAAAAA=");
+        // Absent fields are omitted, per the file's convention.
+        assert!(json.get("ServerSideEncryption").is_none());
+        assert!(json.get("RequestCharged").is_none());
+    }
+
+    #[test]
+    fn get_object_annotation_to_json_shape() {
+        use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+        use aws_sdk_s3::primitives::{ByteStream, DateTime};
+        use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption};
+
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(ByteStream::from_static(b"payload"))
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .content_length(678260)
+            .e_tag("\"b373009fdd7e9a9a2b266c2044fb7948\"")
+            .checksum_crc64_nvme("hdWdywUmntQ=")
+            .checksum_type(ChecksumType::FullObject)
+            .server_side_encryption(ServerSideEncryption::Aes256)
+            .object_version_id("v1")
+            .build();
+
+        let json = get_object_annotation_to_json(&out);
+        assert_eq!(json["ContentLength"], 678260);
+        assert_eq!(json["ETag"], "\"b373009fdd7e9a9a2b266c2044fb7948\"");
+        assert_eq!(json["ChecksumCRC64NVME"], "hdWdywUmntQ=");
+        assert_eq!(json["ChecksumType"], "FULL_OBJECT");
+        assert_eq!(json["ServerSideEncryption"], "AES256");
+        assert_eq!(json["ObjectVersionId"], "v1");
+        assert!(json.get("LastModified").is_some());
+        // Payload bytes are never serialized.
+        assert!(json.get("AnnotationPayload").is_none());
+    }
+
+    #[test]
+    fn list_object_annotations_to_json_shape() {
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::{AnnotationEntry, ChecksumAlgorithm};
+
+        let entry = AnnotationEntry::builder()
+            .annotation_name("xs3util")
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .e_tag("\"8c234b3fb7e4a27f1364df17cb6b22c5\"")
+            .checksum_algorithm(ChecksumAlgorithm::Crc64Nvme)
+            .size(3191)
+            .build()
+            .unwrap();
+
+        let out = ListObjectAnnotationsOutput::builder()
+            .annotations(entry)
+            .annotation_count(1)
+            .bucket("data.cpp17.org")
+            .key("hosts")
+            .build();
+
+        let json = list_object_annotations_to_json(&out);
+        assert_eq!(json["AnnotationCount"], 1);
+        assert_eq!(json["Bucket"], "data.cpp17.org");
+        assert_eq!(json["Key"], "hosts");
+        // Absent optionals are explicit null.
+        assert!(json["AnnotationPrefix"].is_null());
+        assert!(json["ObjectVersionId"].is_null());
+        assert!(json["RequestCharged"].is_null());
+        // Single non-truncated page: IsTruncated false, NextContinuationToken null.
+        assert_eq!(json["IsTruncated"], Value::Bool(false));
+        assert!(json["NextContinuationToken"].is_null());
+        // Annotations array.
+        let arr = json["Annotations"]
+            .as_array()
+            .expect("Annotations is array");
+        assert_eq!(arr.len(), 1);
+        assert_eq!(arr[0]["AnnotationName"], "xs3util");
+        assert_eq!(arr[0]["ETag"], "\"8c234b3fb7e4a27f1364df17cb6b22c5\"");
+        assert_eq!(arr[0]["Size"], 3191);
+        assert_eq!(arr[0]["ChecksumAlgorithm"][0], "CRC64NVME");
+        assert!(arr[0].get("LastModified").is_some());
     }
 }

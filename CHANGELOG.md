@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `put-object-annotation` subcommand: attaches a named annotation payload
+  (file or stdin, 1 byte–1 MiB) to an S3 object via the `PutObjectAnnotation`
+  API. Sends `Content-MD5` for transit integrity and an explicit CRC64NVME
+  checksum, verifies the CRC64NVME returned by S3 against the locally computed
+  value, and prints the response as JSON. Supports `--target-version-id`,
+  `--target-request-payer`, and `--dry-run`.
+- Add `get-object-annotation` subcommand to retrieve a named annotation payload
+  from an S3 object (to a file or stdout), verifying the payload's integrity
+  before it is written. Supports `--target-version-id` and `--target-request-payer`.
+- Add `list-object-annotations` subcommand to list an object's annotations as JSON.
+- Add `delete-object-annotation` subcommand to delete a named annotation from an S3 object.
+
 ## [1.5.3] - 2026-06-27
 
 Monthly update.

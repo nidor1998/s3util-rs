@@ -21,6 +21,7 @@ use aws_sdk_s3::operation::delete_bucket_replication::DeleteBucketReplicationOut
 use aws_sdk_s3::operation::delete_bucket_tagging::DeleteBucketTaggingOutput;
 use aws_sdk_s3::operation::delete_bucket_website::DeleteBucketWebsiteOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
 use aws_sdk_s3::operation::delete_object_tagging::DeleteObjectTaggingOutput;
 use aws_sdk_s3::operation::delete_public_access_block::DeletePublicAccessBlockOutput;
 use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
@@ -36,10 +37,12 @@ use aws_sdk_s3::operation::get_bucket_request_payment::GetBucketRequestPaymentOu
 use aws_sdk_s3::operation::get_bucket_tagging::GetBucketTaggingOutput;
 use aws_sdk_s3::operation::get_bucket_versioning::GetBucketVersioningOutput;
 use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
+use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::get_public_access_block::GetPublicAccessBlockOutput;
 use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
 use aws_sdk_s3::operation::put_bucket_accelerate_configuration::PutBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::put_bucket_cors::PutBucketCorsOutput;
 use aws_sdk_s3::operation::put_bucket_encryption::PutBucketEncryptionOutput;
@@ -52,18 +55,20 @@ use aws_sdk_s3::operation::put_bucket_request_payment::PutBucketRequestPaymentOu
 use aws_sdk_s3::operation::put_bucket_tagging::PutBucketTaggingOutput;
 use aws_sdk_s3::operation::put_bucket_versioning::PutBucketVersioningOutput;
 use aws_sdk_s3::operation::put_bucket_website::PutBucketWebsiteOutput;
+use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::put_public_access_block::PutPublicAccessBlockOutput;
 use aws_sdk_s3::operation::rename_object::RenameObjectOutput;
 use aws_sdk_s3::operation::restore_object::RestoreObjectOutput;
 use aws_sdk_s3::presigning::PresigningConfig;
+use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     AccelerateConfiguration, BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint,
     BucketLoggingStatus, BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration,
     CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
     NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
-    RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration, Tagging,
-    VersioningConfiguration, WebsiteConfiguration,
+    RequestPayer, RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration,
+    Tagging, VersioningConfiguration, WebsiteConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
@@ -170,6 +175,31 @@ const GET_BUCKET_POLICY_STATUS_NOT_FOUND_CODES: &[&str] = &["NoSuchBucketPolicy"
 /// version when `--source-version-id` is set. `NoSuchBucket` is handled
 /// separately by `classify_not_found` and mapped to `BucketNotFound`.
 const RESTORE_OBJECT_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `delete-object-annotation` treats as a target NotFound.
+/// `NoSuchKey`/`NoSuchVersion` cover a missing object/version; `NoSuchAnnotation`
+/// covers deleting an annotation name that is not present. `NoSuchBucket` is
+/// handled separately and mapped to `BucketNotFound`.
+const DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] =
+    &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"];
+/// S3 error codes that `put-object-annotation` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--target-version-id` is set. `NoSuchBucket` is handled
+/// separately by `classify_not_found` and mapped to `BucketNotFound`.
+const PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
+/// S3 error codes that `get-object-annotation` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--target-version-id` is set; `NoSuchAnnotation` covers an
+/// object that exists but has no annotation under the requested name (S3
+/// returns this distinct code, e.g. after the annotation has been deleted).
+/// `NoSuchBucket` is handled separately by `classify_not_found` and mapped to
+/// `BucketNotFound`.
+const GET_OBJECT_ANNOTATION_NOT_FOUND_CODES: &[&str] =
+    &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"];
+/// S3 error codes that `list-object-annotations` treats as a target NotFound.
+/// `NoSuchKey` covers a missing object; `NoSuchVersion` covers a missing
+/// version when `--target-version-id` is set. `NoSuchBucket` is handled
+/// separately by `classify_not_found` and mapped to `BucketNotFound`.
+const LIST_OBJECT_ANNOTATIONS_NOT_FOUND_CODES: &[&str] = &["NoSuchKey", "NoSuchVersion"];
 
 /// Options controlling `head_object` behaviour.
 pub struct HeadObjectOpts {
@@ -317,6 +347,188 @@ pub async fn put_object_tagging(
     req.send()
         .await
         .with_context(|| format!("put-object-tagging on s3://{bucket}/{key}"))
+}
+
+/// Parameters for `put_object_annotation`. Checksums and Content-MD5 are
+/// computed by the caller (see `crate::storage::annotation`) so this wrapper
+/// stays free of hashing concerns.
+pub struct PutObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub content_md5: &'a str,
+    pub checksum_crc64_nvme: &'a str,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `PutObjectAnnotation`, attaching `payload` to the object under
+/// `params.annotation_name`. Sends `Content-MD5` and an explicit
+/// `x-amz-checksum-crc64nvme` value (no `checksum_algorithm`, so S3 validates
+/// the supplied checksum rather than recomputing). Maps `NoSuchBucket` to
+/// `BucketNotFound` and `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+pub async fn put_object_annotation(
+    client: &Client,
+    params: PutObjectAnnotationParams<'_>,
+    payload: ByteStream,
+) -> Result<PutObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .put_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name)
+        .annotation_payload(payload)
+        .content_md5(params.content_md5)
+        .checksum_crc64_nvme(params.checksum_crc64_nvme);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "put-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
+}
+
+/// Parameters for `delete_object_annotation`.
+pub struct DeleteObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `DeleteObjectAnnotation`, removing the annotation stored under
+/// `params.annotation_name`. Maps `NoSuchBucket` to `BucketNotFound` and
+/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
+pub async fn delete_object_annotation(
+    client: &Client,
+    params: DeleteObjectAnnotationParams<'_>,
+) -> Result<DeleteObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .delete_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "delete-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
+}
+
+/// Parameters for `get_object_annotation`. `checksum_mode` is always set to
+/// `ENABLED` by the wrapper so S3 returns the stored additional checksum.
+pub struct GetObjectAnnotationParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_name: &'a str,
+    pub version_id: Option<&'a str>,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `GetObjectAnnotation`, returning the annotation payload (as a
+/// `ByteStream` on the output) plus metadata. Always sends
+/// `checksum_mode=ENABLED`. Maps `NoSuchBucket` to `BucketNotFound` and
+/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
+pub async fn get_object_annotation(
+    client: &Client,
+    params: GetObjectAnnotationParams<'_>,
+) -> Result<GetObjectAnnotationOutput, HeadError> {
+    let mut req = client
+        .get_object_annotation()
+        .bucket(params.bucket)
+        .key(params.key)
+        .annotation_name(params.annotation_name)
+        .checksum_mode(ChecksumMode::Enabled);
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, GET_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "get-object-annotation on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
+}
+
+/// Parameters for `list_object_annotations`. `max_annotation_results` is
+/// hard-coded to 1000 by the wrapper; pagination is not followed.
+pub struct ListObjectAnnotationsParams<'a> {
+    pub bucket: &'a str,
+    pub key: &'a str,
+    pub annotation_prefix: Option<&'a str>,
+    pub version_id: Option<&'a str>,
+    pub request_payer: Option<RequestPayer>,
+}
+
+/// Issue `ListObjectAnnotations`, returning the listing metadata. Sets
+/// `max_annotation_results=1000` and makes a single request (the
+/// `NextContinuationToken` is ignored). Maps `NoSuchBucket` to
+/// `BucketNotFound` and `NoSuchKey`/`NoSuchVersion` to `NotFound`.
+pub async fn list_object_annotations(
+    client: &Client,
+    params: ListObjectAnnotationsParams<'_>,
+) -> Result<ListObjectAnnotationsOutput, HeadError> {
+    let mut req = client
+        .list_object_annotations()
+        .bucket(params.bucket)
+        .key(params.key)
+        .max_annotation_results(1000);
+    if let Some(p) = params.annotation_prefix {
+        req = req.annotation_prefix(p);
+    }
+    if let Some(v) = params.version_id {
+        req = req.version_id(v);
+    }
+    if let Some(rp) = params.request_payer {
+        req = req.request_payer(rp);
+    }
+    req.send().await.map_err(|e| {
+        let code = e
+            .as_service_error()
+            .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
+        match classify_not_found(code, LIST_OBJECT_ANNOTATIONS_NOT_FOUND_CODES) {
+            Some(he) => he,
+            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+                "list-object-annotations on s3://{}/{}",
+                params.bucket, params.key
+            ))),
+        }
+    })
 }
 
 /// Issue `DeleteObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
@@ -1459,6 +1671,45 @@ mod tests {
     fn restore_object_not_found_codes_pinned() {
         assert_eq!(
             RESTORE_OBJECT_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion"]
+        );
+    }
+
+    #[test]
+    fn delete_object_annotation_not_found_codes_pinned() {
+        // `NoSuchAnnotation` covers deleting an annotation name that is absent.
+        assert_eq!(
+            DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"]
+        );
+    }
+
+    #[test]
+    fn put_object_annotation_not_found_codes_pinned() {
+        // No `NoSuchAnnotation`: put creates/overwrites the annotation, so a
+        // missing-annotation code is never the relevant not-found condition.
+        assert_eq!(
+            PUT_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion"]
+        );
+    }
+
+    #[test]
+    fn get_object_annotation_not_found_codes_pinned() {
+        // `NoSuchAnnotation` covers an existing object whose annotation is absent
+        // (e.g. after delete) — S3 returns this distinct code, not `NoSuchKey`.
+        assert_eq!(
+            GET_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            &["NoSuchKey", "NoSuchVersion", "NoSuchAnnotation"]
+        );
+    }
+
+    #[test]
+    fn list_object_annotations_not_found_codes_pinned() {
+        // No `NoSuchAnnotation`: listing an annotation-less object returns an
+        // empty set, not a not-found error.
+        assert_eq!(
+            LIST_OBJECT_ANNOTATIONS_NOT_FOUND_CODES,
             &["NoSuchKey", "NoSuchVersion"]
         );
     }

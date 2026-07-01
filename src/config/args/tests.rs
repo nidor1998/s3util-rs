@@ -1530,4 +1530,171 @@ mod tests {
         .unwrap_err();
         assert!(!err.is_empty());
     }
+
+    // Remaining thin-wrapper subcommands not covered by the reject tests above.
+    // Same contract as `assert_rejects_with`: build_config_from_args must reject
+    // each with a message naming the subcommand and pointing at main.rs. Valid,
+    // parseable args are supplied so execution reaches the match arm (a clap
+    // parse failure would short-circuit before it and prove nothing). put-* /
+    // file positionals are not read at parse time, so placeholder paths are fine.
+
+    #[test]
+    fn build_config_rejects_delete_bucket_replication() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-replication", "s3://b"],
+            "delete-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "delete-object-annotation",
+                "s3://b/k",
+                "--annotation-name",
+                "note",
+            ],
+            "delete-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_accelerate_configuration() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-accelerate-configuration", "s3://b"],
+            "get-bucket-accelerate-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_policy_status() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-policy-status", "s3://b"],
+            "get-bucket-policy-status",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_replication() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-replication", "s3://b"],
+            "get-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_request_payment() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-request-payment", "s3://b"],
+            "get-bucket-request-payment",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "get-object-annotation",
+                "s3://b/k",
+                "/tmp/out.bin",
+                "--annotation-name",
+                "note",
+            ],
+            "get-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_list_object_annotations() {
+        assert_rejects_with(
+            &["s3util", "list-object-annotations", "s3://b/k"],
+            "list-object-annotations",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_rename() {
+        assert_rejects_with(&["s3util", "rename", "s3://b/k", "s3://b/k2"], "rename");
+    }
+
+    #[test]
+    fn build_config_rejects_presign() {
+        assert_rejects_with(&["s3util", "presign", "s3://b/k"], "presign");
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_accelerate_configuration() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-accelerate-configuration",
+                "--enabled",
+                "s3://b",
+            ],
+            "put-bucket-accelerate-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_replication() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-replication",
+                "s3://b",
+                "/tmp/replication.json",
+            ],
+            "put-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_request_payment() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-request-payment",
+                "--requester",
+                "s3://b",
+            ],
+            "put-bucket-request-payment",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-object-annotation",
+                "s3://b/k",
+                "--annotation-name",
+                "note",
+                "--annotation-payload",
+                "/tmp/payload.bin",
+            ],
+            "put-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_restore_object() {
+        assert_rejects_with(&["s3util", "restore-object", "s3://b/k"], "restore-object");
+    }
+
+    #[test]
+    fn build_config_accepts_mv() {
+        // The Mv arm is the only Ok arm besides Cp. Every other mv test calls
+        // `Config::try_from(mv_args)` directly, so this is the one case that
+        // exercises the Mv branch *inside* build_config_from_args.
+        let result = build_config_from_args(
+            ["s3util", "mv", "/tmp/a", "s3://b/k"]
+                .iter()
+                .map(|s| s.to_string()),
+        );
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
 }

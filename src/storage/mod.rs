@@ -33,6 +33,7 @@ use crate::types::token::PipelineCancellationToken;
 use crate::types::{ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics};
 
 pub mod additional_checksum_verify;
+pub mod annotation;
 pub mod checksum;
 pub mod e_tag_verify;
 pub mod local;
