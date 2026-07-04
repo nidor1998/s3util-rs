@@ -1,5 +1,5 @@
 use crate::config::args::common_client::CommonClientArgs;
-use crate::config::args::value_parser::storage_path;
+use crate::config::args::value_parser::{outfile_path, storage_path};
 use crate::types::StoragePath;
 use clap::Parser;
 
@@ -20,7 +20,10 @@ pub struct GetObjectAnnotationArgs {
     /// Output file path, or "-" to write the payload to stdout.
     // No `env`: a destination file path should not be silently sourced from a
     // generic `$OUTFILE` environment variable.
-    #[arg(required_unless_present = "auto_complete_shell")]
+    #[arg(
+        value_parser = outfile_path::check_outfile_path,
+        required_unless_present = "auto_complete_shell"
+    )]
     pub outfile: Option<String>,
 
     /// Name of the annotation to retrieve (1-512 bytes).
@@ -151,6 +154,36 @@ mod tests {
             "note",
         ]);
         assert!(res.is_err());
+    }
+
+    #[test]
+    fn rejects_directory_outfile() {
+        let res = try_parse(&[
+            "test",
+            "get-object-annotation",
+            "s3://my-bucket/my-key",
+            ".",
+            "--annotation-name",
+            "note",
+        ]);
+        let err = res.unwrap_err();
+        assert!(
+            err.to_string().contains("must not be a directory"),
+            "unexpected err: {err}"
+        );
+    }
+
+    #[test]
+    fn accepts_dash_outfile_via_value_parser() {
+        let a = parse(&[
+            "test",
+            "get-object-annotation",
+            "s3://my-bucket/my-key",
+            "-",
+            "--annotation-name",
+            "note",
+        ]);
+        assert_eq!(a.outfile.as_deref(), Some("-"));
     }
 
     #[test]
