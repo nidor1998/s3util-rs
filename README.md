@@ -25,6 +25,7 @@
     * [Express One Zone support](#express-one-zone-support)
     * [SSE and SSE-C](#sse-and-sse-c)
     * [Metadata and tagging preservation](#metadata-and-tagging-preservation)
+    * [Object annotation sync](#object-annotation-sync)
     * [Rate limiting](#rate-limiting)
     * [Observability](#observability)
     * [Dry-run](#dry-run)
@@ -35,6 +36,7 @@
     * [Upload a local file](#upload-a-local-file)
     * [Download to local](#download-to-local)
     * [S3 → S3 copy](#s3--s3-copy)
+    * [S3 → S3 copy with object annotations](#s3--s3-copy-with-object-annotations)
     * [stdin → S3](#stdin--s3)
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
@@ -253,6 +255,30 @@ S3→S3 copies preserve both system metadata (Content-Type, Cache-Control, Expir
 
 Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrides, `--disable-tagging` clears.
 
+### Object annotation sync
+
+For S3 → S3 copies, `cp` and `mv` can carry an object's annotations along
+with the object. Pass `--enable-sync-object-annotations` to copy the source
+object's annotations to the target after the object itself is written: only
+annotations that differ are updated, and target-only annotations are removed.
+Note that copying annotations requires additional API calls.
+
+Annotations are synced in parallel (`--max-parallel-uploads`). With
+`--server-side-copy`, Amazon S3 copies the annotations of single-part copies
+entirely within Amazon S3; however, S3's `UploadPartCopy` API (used for
+multipart server-side copies) does not copy annotations, so
+`--enable-sync-object-annotations` is still needed to carry the annotations
+of multipart objects.
+
+To detect changed annotations, s3util compares annotation ETags where
+possible and falls back to the annotation's Last-Modified timestamp; pass
+`--disable-check-annotation-etag` to skip the ETag comparison (for example,
+when SSE-KMS encryption makes ETags incomparable).
+
+If creating, updating, or deleting an annotation fails, the transfer is
+treated as a failure; `mv` then leaves the source object in place.
+Both storages must be S3, and S3 Express One Zone is not supported.
+
 ### Rate limiting
 
 `--rate-limit-bandwidth <BYTES_PER_SEC>` caps throughput using a leaky-bucket algorithm. Accepts unit-suffixed values like `50MB`, `100MiB`, `1GB`.
@@ -364,6 +390,17 @@ s3util cp \
 ```
 
 `--server-side-copy` is incompatible with this case (it requires source and target to be reachable from a single S3 endpoint); cross-endpoint copies always run client-side.
+
+### S3 → S3 copy with object annotations
+
+```bash
+# Copy an object together with its annotations
+s3util cp --enable-sync-object-annotations s3://source-bucket/key s3://target-bucket/key
+
+# Same, but don't use annotation ETags to detect changes
+s3util cp --enable-sync-object-annotations --disable-check-annotation-etag \
+  s3://source-bucket/key s3://target-bucket/key
+```
 
 ### stdin → S3
 
