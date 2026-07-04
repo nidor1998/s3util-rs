@@ -339,6 +339,15 @@ Example: key1=value1&key2=value2"#)]
     #[arg(long, env, help_heading = "Versioning")]
     pub source_version_id: Option<String>,
 
+    #[arg(long, env, default_value_t = DEFAULT_ENABLE_SYNC_OBJECT_ANNOTATION, help_heading = "Object Annotation",
+    long_help=r#"Copy object annotations from the source if necessary.
+If this option is enabled, extra API calls are required."#)]
+    pub enable_sync_object_annotations: bool,
+
+    #[arg(long, env, default_value_t = DEFAULT_DISABLE_CHECK_ANNOTATION_ETAG, help_heading = "Object Annotation",
+    long_help=r#"Don't use ETag for update annotation checking"#)]
+    pub disable_check_annotation_etag: bool,
+
     /// Server-side encryption. Valid choices: AES256 | aws:kms | aws:kms:dsse
     #[arg(long, env, value_parser = sse::parse_sse, help_heading = "Encryption")]
     pub sse: Option<String>,
@@ -486,15 +495,6 @@ Valid choices: bash, fish, zsh, powershell, elvish."#)]
     #[arg(long, env, default_value_t = DEFAULT_IF_NONE_MATCH, help_heading = "Advanced", long_help=r#"Uploads the object only if the object key name does not already exist in the specified bucket.
 This is for like an optimistic lock."#)]
     pub if_none_match: bool,
-
-    #[arg(long, env, default_value_t = DEFAULT_ENABLE_SYNC_OBJECT_ANNOTATION, help_heading = "Object Annotation",
-    long_help=r#"Copy object annotations from the source if necessary.
-If this option is enabled, extra API calls are required."#)]
-    pub enable_sync_object_annotations: bool,
-
-    #[arg(long, env, default_value_t = DEFAULT_DISABLE_CHECK_ANNOTATION_ETAG, help_heading = "Object Annotation",
-    long_help=r#"Don't use ETag for update annotation checking"#)]
-    pub disable_check_annotation_etag: bool,
 }
 
 // Free helpers — only depend on the source/target strings, not on the common flags.
