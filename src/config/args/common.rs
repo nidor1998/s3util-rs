@@ -52,6 +52,8 @@ pub(crate) const DEFAULT_SOURCE_NO_SIGN_REQUEST: bool = false;
 pub(crate) const DEFAULT_SHOW_PROGRESS: bool = false;
 pub(crate) const DEFAULT_IF_NONE_MATCH: bool = false;
 pub(crate) const DEFAULT_DRY_RUN: bool = false;
+pub(crate) const DEFAULT_ENABLE_SYNC_OBJECT_ANNOTATION: bool = false;
+pub(crate) const DEFAULT_DISABLE_CHECK_ANNOTATION_ETAG: bool = false;
 
 pub(crate) const NO_S3_STORAGE_SPECIFIED: &str = "either SOURCE or TARGET must be s3://\n";
 pub(crate) const BOTH_LOCAL_SPECIFIED: &str = "source and target cannot both be local paths\n";
@@ -103,6 +105,10 @@ pub(crate) const SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_ENABLE_ADDITIONAL_CHECKSUM:
     "with --enable-additional-checksum, source storage must be s3://\n";
 pub(crate) const TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX: &str =
     "target directory does not exist";
+pub(crate) const LOCAL_STORAGE_SPECIFIED_FOR_OBJECT_ANNOTATION: &str =
+    "with --enable-sync-object-annotations, both storage must be s3://\n";
+pub(crate) const EXPRESS_ONEZONE_SPECIFIED_FOR_OBJECT_ANNOTATION: &str =
+    "--enable-sync-object-annotations is not supported with express onezone storage class\n";
 
 #[derive(Parser, Clone, Debug)]
 pub struct CommonTransferArgs {
@@ -480,6 +486,15 @@ Valid choices: bash, fish, zsh, powershell, elvish."#)]
     #[arg(long, env, default_value_t = DEFAULT_IF_NONE_MATCH, help_heading = "Advanced", long_help=r#"Uploads the object only if the object key name does not already exist in the specified bucket.
 This is for like an optimistic lock."#)]
     pub if_none_match: bool,
+
+    #[arg(long, env, default_value_t = DEFAULT_ENABLE_SYNC_OBJECT_ANNOTATION, help_heading = "Object Annotation",
+    long_help=r#"Copy object annotations from the source if necessary.
+If this option is enabled, extra API calls are required."#)]
+    pub enable_sync_object_annotations: bool,
+
+    #[arg(long, env, default_value_t = DEFAULT_DISABLE_CHECK_ANNOTATION_ETAG, help_heading = "Object Annotation",
+    long_help=r#"Don't use ETag for update annotation checking"#)]
+    pub disable_check_annotation_etag: bool,
 }
 
 // Free helpers — only depend on the source/target strings, not on the common flags.
@@ -625,6 +640,7 @@ impl CommonTransferArgs {
         self.check_accelerate_conflict(source, target)?;
         self.check_request_payer_conflict(source, target)?;
         self.check_source_no_sign_request_conflict(source)?;
+        self.check_enable_sync_object_annotation_conflict(source, target)?;
         check_source_s3_key(source)?;
         check_target_local_directory_exists(target)?;
 
@@ -820,6 +836,34 @@ impl CommonTransferArgs {
         if self.source_no_sign_request && !is_source_s3(source) {
             return Err(SOURCE_LOCAL_STORAGE_SPECIFIED_WITH_NO_SIGN_REQUEST.to_string());
         }
+        Ok(())
+    }
+
+    fn check_enable_sync_object_annotation_conflict(
+        &self,
+        source: &str,
+        target: &str,
+    ) -> Result<(), String> {
+        if !self.enable_sync_object_annotations {
+            return Ok(());
+        }
+
+        if !is_source_s3(source) || !is_target_s3(target) {
+            return Err(LOCAL_STORAGE_SPECIFIED_FOR_OBJECT_ANNOTATION.to_string());
+        }
+
+        if let StoragePath::S3 { bucket, .. } = storage_path::parse_storage_path(source) {
+            if super::is_express_onezone_storage(&bucket) {
+                return Err(EXPRESS_ONEZONE_SPECIFIED_FOR_OBJECT_ANNOTATION.to_string());
+            }
+        }
+
+        if let StoragePath::S3 { bucket, .. } = storage_path::parse_storage_path(target) {
+            if super::is_express_onezone_storage(&bucket) {
+                return Err(EXPRESS_ONEZONE_SPECIFIED_FOR_OBJECT_ANNOTATION.to_string());
+            }
+        }
+
         Ok(())
     }
 
@@ -1126,5 +1170,7 @@ pub(crate) fn build_config_from_common(
         no_fail_on_verify_error: false,
         skip_existing: false,
         dry_run: common.dry_run,
+        enable_sync_object_annotations: common.enable_sync_object_annotations,
+        disable_check_annotation_etag: common.disable_check_annotation_etag,
     })
 }

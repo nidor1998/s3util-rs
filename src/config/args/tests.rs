@@ -1697,4 +1697,161 @@ mod tests {
         );
         assert!(result.is_ok(), "{:?}", result.err());
     }
+
+    #[test]
+    fn annotation_flags_default_to_false() {
+        let config = build_config_from_args(args_with("s3://src/k", "s3://dst/k")).unwrap();
+        assert!(!config.enable_sync_object_annotations);
+        assert!(!config.disable_check_annotation_etag);
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_parses_true() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn disable_check_annotation_etag_parses_true_standalone() {
+        // No `requires` coupling: accepted without the enable flag (s3sync parity).
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--disable-check-annotation-etag"],
+        ))
+        .unwrap();
+        assert!(config.disable_check_annotation_etag);
+        assert!(!config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn annotation_flags_together_accepted() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &[
+                "--enable-sync-object-annotations",
+                "--disable-check-annotation-etag",
+            ],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+        assert!(config.disable_check_annotation_etag);
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_local_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/source_file",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_local_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "/tmp/",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_stdio_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "-",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_stdio_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "-",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_express_onezone_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://bucket--usw2-az1--x-s3/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("not supported with express onezone")
+        );
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_express_onezone_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://bucket--usw2-az1--x-s3/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("not supported with express onezone")
+        );
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_both_s3_accepted() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn mv_enable_sync_object_annotations_both_s3_accepted() {
+        let config = build_config_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "--enable-sync-object-annotations".to_string(),
+            "s3://src/k".to_string(),
+            "s3://dst/k".to_string(),
+        ])
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn mv_enable_sync_object_annotations_local_source_rejected() {
+        let result = build_config_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "--enable-sync-object-annotations".to_string(),
+            "/tmp/source_file".to_string(),
+            "s3://dst/k".to_string(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
 }

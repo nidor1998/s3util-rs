@@ -714,6 +714,8 @@ mod tests {
             no_fail_on_verify_error: false,
             skip_existing: false,
             dry_run: false,
+            enable_sync_object_annotations: false,
+            disable_check_annotation_etag: false,
         };
         let (sender, _receiver) = async_channel::unbounded();
         S3Storage {
