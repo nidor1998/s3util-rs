@@ -24,10 +24,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `list-object-annotations` subcommand to list an object's annotations as JSON.
 - Add `delete-object-annotation` subcommand to delete a named annotation from an S3 object.
 - `cp`/`mv`: `--enable-sync-object-annotations` copies the source object's
-  annotations to the target after an S3 → S3 copy (only changed annotations
-  are updated; target-only annotations are deleted; synced in parallel under
-  `--max-parallel-uploads`). `--disable-check-annotation-etag` skips the
-  annotation ETag comparison when deciding what changed. Ported from s3sync
+  annotations to the target after an S3 → S3 copy (the just-written target
+  object has no annotations yet, so every source annotation is copied;
+  synced in parallel under `--max-parallel-uploads`).
+  `--disable-check-annotation-etag` skips the annotation ETag comparison
+  when the source and target annotation lists are diffed. Ported from s3sync
   v1.59.0 (s3sync PR #243). Single-part `--server-side-copy` copies skip the
   manual sync because S3's `CopyObject` carries annotations; multipart
   server-side copies still sync manually. Annotation failures fail the

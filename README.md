@@ -259,8 +259,9 @@ Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrid
 
 For S3 → S3 copies, `cp` and `mv` can carry an object's annotations along
 with the object. Pass `--enable-sync-object-annotations` to copy the source
-object's annotations to the target after the object itself is written: only
-annotations that differ are updated, and target-only annotations are removed.
+object's annotations to the target after the object itself is written.
+Because the sync runs against the just-written target object, which has no
+annotations yet, every annotation on the source object is copied.
 Note that copying annotations requires additional API calls.
 
 Annotations are synced in parallel (`--max-parallel-uploads`). With
@@ -270,10 +271,13 @@ multipart server-side copies) does not copy annotations, so
 `--enable-sync-object-annotations` is still needed to carry the annotations
 of multipart objects.
 
-To detect changed annotations, s3util compares annotation ETags where
-possible and falls back to the annotation's Last-Modified timestamp; pass
-`--disable-check-annotation-etag` to skip the ETag comparison (for example,
-when SSE-KMS encryption makes ETags incomparable).
+Before copying, s3util compares the source and target annotation lists with
+the same logic as s3sync (annotation ETags where possible, falling back to
+the annotation's Last-Modified timestamp); `--disable-check-annotation-etag`
+skips the ETag comparison (for example, when SSE-KMS encryption makes ETags
+incomparable). Against a freshly written target object this comparison
+classifies every source annotation as new, so the flag is provided for
+s3sync compatibility.
 
 If creating, updating, or deleting an annotation fails, the transfer is
 treated as a failure; `mv` then leaves the source object in place.
