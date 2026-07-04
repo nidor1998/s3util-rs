@@ -12,11 +12,11 @@ use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
-    BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumMode,
-    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object, ObjectOwnership,
-    PublicAccessBlockConfiguration, ServerSideEncryption, ServerSideEncryptionByDefault,
-    ServerSideEncryptionConfiguration, ServerSideEncryptionRule, Tag, Tagging,
-    VersioningConfiguration,
+    BucketInfo, BucketLocationConstraint, BucketType, BucketVersioningStatus, ChecksumAlgorithm,
+    ChecksumMode, CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType, Object,
+    ObjectOwnership, PublicAccessBlockConfiguration, ServerSideEncryption,
+    ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
+    Tag, Tagging, VersioningConfiguration,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired;
 use aws_types::SdkConfig;
@@ -27,6 +27,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use tokio::io::AsyncReadExt;
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
@@ -131,6 +132,10 @@ pub const TEST_SSE_C_KEY_1: &str = "MDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDAwMDA=
 pub const TEST_SSE_C_KEY_1_MD5: &str = "zZ5FnqcIqUjVwvWmyog4zw==";
 pub const TEST_SSE_C_KEY_2: &str = "MTExMTExMTExMTExMTExMTExMTExMTExMTExMTExMTE=";
 pub const TEST_SSE_C_KEY_2_MD5: &str = "GoDL8oWeAZVZNl1r5Hh5Tg==";
+
+pub const TEST_ANNOTATION_NAME: &str = "test_annotation_name";
+pub const TEST_ANNOTATION_VALUE: &str = "test_annotation_value";
+pub const TEST_ANNOTATION_VALUE_SHA2: &str = "IwJ14SmNbnE0GVLVoIDS9ZFeNQsG5sWW6D7lGNoRo7M=";
 
 const PROFILE_NAME: &str = "s3util-e2e-test";
 
@@ -524,6 +529,135 @@ impl TestHelper {
             .bucket(bucket)
             .key(key)
             .body(stream)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    pub async fn put_object_kms(&self, bucket: &str, key: &str, body: Vec<u8>) {
+        let stream = ByteStream::from(body);
+        self.client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(stream)
+            .server_side_encryption(ServerSideEncryption::AwsKms)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    pub async fn put_object_with_version_id(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: Vec<u8>,
+    ) -> Option<String> {
+        let stream = ByteStream::from(body);
+        let result = self
+            .client
+            .put_object()
+            .bucket(bucket)
+            .key(key)
+            .body(stream)
+            .send()
+            .await
+            .unwrap();
+        result.version_id().map(|s| s.to_string())
+    }
+
+    pub async fn put_object_annotation(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+        annotation_payload: &str,
+        checksum_sha256: Option<String>,
+    ) {
+        let buffer_stream = ByteStream::from(annotation_payload.as_bytes().to_vec());
+
+        let checksum_algorithm = if checksum_sha256.is_some() {
+            Some(ChecksumAlgorithm::Sha256)
+        } else {
+            None
+        };
+
+        let _result = self
+            .client
+            .put_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
+            .annotation_payload(buffer_stream)
+            .set_checksum_algorithm(checksum_algorithm)
+            .set_checksum_sha256(checksum_sha256)
+            .send()
+            .await
+            .unwrap();
+    }
+
+    pub async fn get_object_annotation(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+    ) -> String {
+        let result = self
+            .client
+            .get_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
+            .send()
+            .await
+            .unwrap();
+
+        let content_length = result.content_length().unwrap();
+        let mut buffer = Vec::<u8>::with_capacity(content_length as usize);
+        buffer.resize_with(content_length as usize, Default::default);
+
+        let mut body = result.annotation_payload.into_async_read();
+        body.read_exact(buffer.as_mut_slice()).await.unwrap();
+        String::from_utf8(buffer).unwrap()
+    }
+
+    pub async fn is_object_annotation_exist(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+    ) -> bool {
+        let result = self
+            .client
+            .get_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
+            .send()
+            .await;
+        result.is_ok()
+    }
+
+    pub async fn delete_object_annotation(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+    ) {
+        let _result = self
+            .client
+            .delete_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
             .send()
             .await
             .unwrap();
