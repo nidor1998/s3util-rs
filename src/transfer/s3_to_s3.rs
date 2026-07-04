@@ -4,7 +4,7 @@ use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use tokio::task;
 use tokio::task::JoinHandle;
-use tracing::{debug, warn};
+use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::storage::e_tag_verify::is_multipart_upload_e_tag;
@@ -271,6 +271,49 @@ pub async fn transfer(
 /// s3sync default is fixed. The pagination loop in `list_object_annotations`
 /// handles objects with more annotations than one page.
 const MAX_ANNOTATION_RESULTS: i32 = 1000;
+
+/// [dry-run] List the source object's annotations and log each one that a
+/// real run would copy, mirroring s3sync's per-annotation dry-run output.
+/// cp/mv always write a fresh target object, so every source annotation is
+/// copied (with single-part `--server-side-copy`, CopyObject carries them
+/// inside Amazon S3 — either way they end up on the target). Only a
+/// read-only ListObjectAnnotations call is made. Called from the CLI's
+/// dry-run branch, which never reaches `transfer()`.
+pub async fn log_dry_run_annotation_sync(
+    config: &Config,
+    source: &Storage,
+    source_key: &str,
+) -> Result<()> {
+    if !config.enable_sync_object_annotations {
+        return Ok(());
+    }
+
+    let source_annotation_map = source
+        .list_object_annotations(
+            source_key,
+            config.version_id.clone(),
+            MAX_ANNOTATION_RESULTS,
+        )
+        .await?;
+
+    // Sorted for deterministic output (AnnotationMap is a HashMap).
+    let mut annotation_names = source_annotation_map.keys().collect::<Vec<_>>();
+    annotation_names.sort();
+
+    let source_version_id_str = config.version_id.clone().unwrap_or_default();
+    for annotation_name in annotation_names {
+        let annotation = &source_annotation_map[annotation_name];
+        info!(
+            key = source_key,
+            source_version_id = source_version_id_str.as_str(),
+            annotation_name = annotation_name.as_str(),
+            annotation_size = annotation.size,
+            "[dry-run] would copy object annotation.",
+        );
+    }
+
+    Ok(())
+}
 
 /// Bring the target object's annotations in line with the source object's.
 /// Ported from s3sync/src/pipeline/syncer.rs `sync_object_annotations`, with
@@ -1458,6 +1501,60 @@ mod tests {
             copy_calls: Arc::new(Mutex::new(Vec::new())),
             delete_calls: Arc::new(Mutex::new(Vec::new())),
         }
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_noop_when_flag_off() {
+        let config = minimal_config(false);
+        let source = recording_source(crate::types::AnnotationMap::new());
+        let source_lists = source.list_calls.clone();
+
+        let source: Storage = Box::new(source);
+        log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap();
+
+        assert!(source_lists.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_lists_source_with_version() {
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.version_id = Some("V1".to_string());
+
+        let source_map: crate::types::AnnotationMap = [
+            ("a1".to_string(), annotation_entry("a1", "\"e1\"", 100)),
+            ("a2".to_string(), annotation_entry("a2", "\"e2\"", 100)),
+        ]
+        .into_iter()
+        .collect();
+        let source = recording_source(source_map);
+        let source_lists = source.list_calls.clone();
+
+        let source: Storage = Box::new(source);
+        log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            source_lists.lock().unwrap().clone(),
+            vec![("src/key".to_string(), Some("V1".to_string()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_propagates_list_error() {
+        // MockSource does not override the annotation trait methods, so the
+        // default "not supported" Err body stands in for a listing failure.
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let err = log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported"));
     }
 
     #[tokio::test]

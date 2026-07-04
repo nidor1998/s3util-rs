@@ -388,7 +388,15 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
                     target = %target_str,
                     "[dry-run] would copy object."
                 );
-                Ok(s3util_rs::transfer::TransferOutcome::default())
+                // Mirrors s3sync's dry-run: list the source annotations and
+                // log each one a real run would copy (read-only call).
+                s3util_rs::transfer::s3_to_s3::log_dry_run_annotation_sync(
+                    &config,
+                    &source,
+                    &source_key,
+                )
+                .await
+                .map(|()| s3util_rs::transfer::TransferOutcome::default())
             } else {
                 s3util_rs::transfer::s3_to_s3::transfer(
                     &config,

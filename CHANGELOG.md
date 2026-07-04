@@ -28,7 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   object has no annotations yet, so every source annotation is copied;
   synced in parallel under `--max-parallel-uploads`).
   `--disable-check-annotation-etag` skips the annotation ETag comparison
-  when the source and target annotation lists are diffed. Ported from s3sync
+  when the source and target annotation lists are diffed. With `--dry-run`,
+  the annotations that would be copied are displayed. Ported from s3sync
   v1.59.0 (s3sync PR #243). Single-part `--server-side-copy` copies skip the
   manual sync because S3's `CopyObject` carries annotations; multipart
   server-side copies still sync manually. Annotation failures fail the

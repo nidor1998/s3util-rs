@@ -240,6 +240,18 @@ mod tests {
             String::from_utf8_lossy(&output.stderr)
         );
 
+        // Like s3sync, dry-run must display the annotations a real run
+        // would copy.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("[dry-run] would copy object annotation."),
+            "dry-run must list annotations to copy; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("test_annotation_name1"),
+            "dry-run must name the annotation; stderr: {stderr}"
+        );
+
         assert!(!helper.is_object_exist(&bucket2, "test_object", None).await);
         assert!(
             !helper
@@ -295,6 +307,18 @@ mod tests {
             Some(EXIT_CODE_SUCCESS),
             "stderr: {}",
             String::from_utf8_lossy(&output.stderr)
+        );
+
+        // Annotations reach the target on a real server-side copy too (via
+        // CopyObject), so dry-run displays them here as well — like s3sync.
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("[dry-run] would copy object annotation."),
+            "dry-run must list annotations to copy; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("test_annotation_name1"),
+            "dry-run must name the annotation; stderr: {stderr}"
         );
 
         assert!(!helper.is_object_exist(&bucket2, "test_object", None).await);

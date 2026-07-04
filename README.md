@@ -263,6 +263,9 @@ object's annotations to the target after the object itself is written.
 Because the sync runs against the just-written target object, which has no
 annotations yet, every annotation on the source object is copied.
 Note that copying annotations requires additional API calls.
+With `--dry-run`, each annotation that a real run would copy is displayed
+(`[dry-run] would copy object annotation.`) using a read-only
+`ListObjectAnnotations` call on the source object.
 
 Annotations are synced in parallel (`--max-parallel-uploads`). With
 `--server-side-copy`, Amazon S3 copies the annotations of single-part copies
