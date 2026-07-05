@@ -5,35 +5,15 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.6.0] - 2026-07-05
 
 ### Added
-
-- `put-object-annotation` subcommand: attaches a named annotation payload
-  (file or stdin, 1 byte–1 MiB) to an S3 object via the `PutObjectAnnotation`
-  API. Sends `Content-MD5` for transit integrity and an explicit CRC64NVME
-  checksum, verifies the CRC64NVME returned by S3 against the locally computed
-  value, and prints the response as JSON. Supports `--target-version-id`,
-  `--target-request-payer`, and `--dry-run`.
-- Add `get-object-annotation` subcommand to retrieve a named annotation payload
-  from an S3 object (to a file or stdout), verifying the payload's integrity
-  before it is written and, for file output, re-reading the saved file to
-  recompute and re-verify its ETag / additional checksum from disk (like `cp`);
-  a post-write mismatch leaves the file in place and exits 1. Supports
-  `--target-version-id` and `--target-request-payer`.
-- Add `list-object-annotations` subcommand to list an object's annotations as JSON.
-- Add `delete-object-annotation` subcommand to delete a named annotation from an S3 object.
-- `cp`/`mv`: `--enable-sync-object-annotations` copies the source object's
-  annotations to the target after an S3 → S3 copy (the just-written target
-  object has no annotations yet, so every source annotation is copied;
-  synced in parallel under `--max-parallel-uploads`).
-  `--disable-check-annotation-etag` skips the annotation ETag comparison
-  when the source and target annotation lists are diffed. With `--dry-run`,
-  the annotations that would be copied are displayed. Ported from s3sync
-  v1.59.0 (s3sync PR #243). Single-part `--server-side-copy` copies skip the
-  manual sync because S3's `CopyObject` carries annotations; multipart
-  server-side copies still sync manually. Annotation failures fail the
-  transfer, so `mv` keeps the source object.
+- Object annotation support
+  - `get-object-annotation`
+  - `put-object-annotation`
+  - `delete-object-annotation`
+  - `list-object-annotations`
+- Object annotation copying in the `cp` and `mv` subcommands
 
 ## [1.5.3] - 2026-06-27
 
