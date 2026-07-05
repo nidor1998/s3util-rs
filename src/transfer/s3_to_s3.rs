@@ -240,7 +240,11 @@ pub async fn transfer(
     // mirroring s3sync's syncer. A single-part server-side copy is skipped:
     // S3's CopyObject carries annotations to the target entirely within
     // Amazon S3. Multipart server-side copy (UploadPartCopy) does not, so it
-    // still needs a manual sync.
+    // still needs a manual sync. Source annotations are read at the HEAD-time
+    // version pin (not config.version_id, which is None without
+    // --source-version-id): the object bytes above were copied at that pin,
+    // so reading "latest" here would attach a concurrent overwrite's
+    // annotations to this copy.
     let target_etag = put_object_output.e_tag().map(|e| e.to_string());
     let need_sync_annotations = !config.server_side_copy || is_multipart_upload_e_tag(&target_etag);
     if config.enable_sync_object_annotations && need_sync_annotations {
@@ -251,7 +255,7 @@ pub async fn transfer(
             &target,
             source_key,
             target_key,
-            config.version_id.clone(),
+            source_version_id.clone(),
             target_version_id,
         )
         .await?;
@@ -1146,6 +1150,9 @@ mod tests {
     #[derive(Clone)]
     struct AnnotationRecordingSource {
         annotations: crate::types::AnnotationMap,
+        /// Version id surfaced by head_object — the HEAD-time pin `transfer()`
+        /// captures. None models an unversioned source bucket.
+        head_version_id: Option<String>,
         list_calls: Arc<Mutex<Vec<ListCall>>>,
         get_calls: Arc<Mutex<Vec<AnnotationCall>>>,
     }
@@ -1196,6 +1203,7 @@ mod tests {
                 .content_length(4)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
+                .set_version_id(self.head_version_id.clone())
                 .build())
         }
         async fn head_object_first_part(
@@ -1483,6 +1491,7 @@ mod tests {
     fn recording_source(annotations: crate::types::AnnotationMap) -> AnnotationRecordingSource {
         AnnotationRecordingSource {
             annotations,
+            head_version_id: None,
             list_calls: Arc::new(Mutex::new(Vec::new())),
             get_calls: Arc::new(Mutex::new(Vec::new())),
         }
@@ -1655,6 +1664,53 @@ mod tests {
                 "dst/key".to_string(),
                 Some("TV1".to_string()),
                 "a3".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_reads_source_at_head_pinned_version() {
+        // The object bytes are copied at the HEAD-time version; the annotation
+        // reads must use the same pin, or a concurrent overwrite between HEAD
+        // and sync would attach the newer version's annotations to this copy.
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        let source_map: crate::types::AnnotationMap =
+            [("a1".to_string(), annotation_entry("a1", "\"e1\"", 100))]
+                .into_iter()
+                .collect();
+        let mut source = recording_source(source_map);
+        source.head_version_id = Some("V-HEAD".to_string());
+        let source_lists = source.list_calls.clone();
+        let source_gets = source.get_calls.clone();
+        let target = recording_target("\"target-etag\"", None, crate::types::AnnotationMap::new());
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            source_lists.lock().unwrap().clone(),
+            vec![("src/key".to_string(), Some("V-HEAD".to_string()))]
+        );
+        assert_eq!(
+            source_gets.lock().unwrap().clone(),
+            vec![(
+                "src/key".to_string(),
+                Some("V-HEAD".to_string()),
+                "a1".to_string()
             )]
         );
     }
