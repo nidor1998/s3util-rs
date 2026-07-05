@@ -25,8 +25,8 @@ mod tests {
     /// get-object-annotation for the same name and asserting exit 4.
     ///
     /// Note: after deletion the get command returns exit 4 because the annotation
-    /// is absent and S3 classifies that as NoSuchAnnotation (mapped by
-    /// GET_OBJECT_ANNOTATION_NOT_FOUND_CODES → HeadError::NotFound → exit 4).
+    /// is absent and S3 classifies that as NoSuchAnnotation (mapped to
+    /// ObjectAnnotationError::AnnotationNotFound → exit 4).
     #[tokio::test]
     async fn delete_object_annotation_happy_path_exits_0_and_annotation_is_gone() {
         TestHelper::init_dummy_tracing_subscriber();
@@ -116,7 +116,7 @@ mod tests {
 
     /// Missing object: delete-object-annotation on a key that does not exist
     /// must exit 4 (S3 returns NoSuchKey, mapped by
-    /// DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES → HeadError::NotFound → exit 4).
+    /// DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES → ObjectAnnotationError::NotFound → exit 4).
     #[tokio::test]
     async fn delete_object_annotation_missing_key_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();
@@ -150,7 +150,7 @@ mod tests {
     }
 
     /// Missing bucket: delete-object-annotation on a nonexistent bucket must
-    /// exit 4 (S3 returns NoSuchBucket → HeadError::BucketNotFound → exit 4).
+    /// exit 4 (S3 returns NoSuchBucket → ObjectAnnotationError::BucketNotFound → exit 4).
     #[tokio::test]
     async fn delete_object_annotation_missing_bucket_exits_4() {
         let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
@@ -361,7 +361,7 @@ mod tests {
 
     /// Object-version not-found: the object exists, but we target a *real,
     /// well-formed* version ID belonging to a different object, so it is absent
-    /// for this key. S3 returns NoSuchVersion (mapped to HeadError::NotFound →
+    /// for this key. S3 returns NoSuchVersion (mapped to ObjectAnnotationError::NotFound →
     /// exit 4). A real version ID avoids the 400 InvalidArgument a fabricated
     /// ID could trigger.
     #[tokio::test]

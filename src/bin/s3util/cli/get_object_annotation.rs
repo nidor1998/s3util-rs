@@ -11,7 +11,7 @@ use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::get_object_annotation::GetObjectAnnotationArgs;
 use s3util_rs::output::json::get_object_annotation_to_json;
 use s3util_rs::storage::annotation;
-use s3util_rs::storage::s3::api::{self, GetObjectAnnotationParams, HeadError};
+use s3util_rs::storage::s3::api::{self, GetObjectAnnotationParams, ObjectAnnotationError};
 
 use super::ExitStatus;
 
@@ -134,7 +134,9 @@ fn verify_saved_file(
 /// caught; a post-write mismatch leaves the file in place and returns `Err`.
 /// Finally it prints AWS-CLI-shape JSON metadata (file mode only). Returns
 /// `ExitStatus::NotFound` (exit 4) when the bucket, object, or version does not
-/// exist; a verification mismatch returns `Err` (exit 1).
+/// exist, or when the object exists but has no annotation under the requested
+/// name (`NoSuchAnnotation`, logged as "annotation … not found"); a
+/// verification mismatch returns `Err` (exit 1).
 pub async fn run_get_object_annotation(
     args: GetObjectAnnotationArgs,
     client_config: ClientConfig,
@@ -166,18 +168,31 @@ pub async fn run_get_object_annotation(
 
     let out = match api::get_object_annotation(&client, params).await {
         Ok(out) => out,
-        Err(HeadError::BucketNotFound) => {
+        Err(ObjectAnnotationError::BucketNotFound) => {
             tracing::error!("bucket s3://{bucket} not found");
             return Ok(ExitStatus::NotFound);
         }
-        Err(HeadError::NotFound) => {
+        Err(ObjectAnnotationError::NotFound) => {
             match args.target_version_id.as_deref() {
                 Some(v) => tracing::error!("s3://{bucket}/{key} (versionId={v}) not found"),
                 None => tracing::error!("object s3://{bucket}/{key} not found"),
             }
             return Ok(ExitStatus::NotFound);
         }
-        Err(HeadError::Other(e)) => return Err(e),
+        Err(ObjectAnnotationError::AnnotationNotFound) => {
+            match args.target_version_id.as_deref() {
+                Some(v) => tracing::error!(
+                    "annotation {annotation_name} not found for s3://{bucket}/{key} (versionId={v})"
+                ),
+                None => {
+                    tracing::error!(
+                        "annotation {annotation_name} not found for s3://{bucket}/{key}"
+                    )
+                }
+            }
+            return Ok(ExitStatus::NotFound);
+        }
+        Err(ObjectAnnotationError::Other(e)) => return Err(e),
     };
 
     // Gather everything we need from `out` before consuming its payload body.

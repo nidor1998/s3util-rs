@@ -4,7 +4,7 @@ use tracing::info;
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::delete_object_annotation::DeleteObjectAnnotationArgs;
 use s3util_rs::storage::annotation;
-use s3util_rs::storage::s3::api::{self, DeleteObjectAnnotationParams, HeadError};
+use s3util_rs::storage::s3::api::{self, DeleteObjectAnnotationParams, ObjectAnnotationError};
 
 use super::ExitStatus;
 
@@ -13,8 +13,9 @@ use super::ExitStatus;
 ///
 /// Sends `DeleteObjectAnnotation`. Prints nothing to stdout on success (emits a
 /// single `info!` line on stderr). Returns `ExitStatus::NotFound` (exit 4) when
-/// the bucket, object, or version does not exist; any other S3 error returns
-/// `Err` (exit 1).
+/// the bucket, object, or version does not exist, or when the object exists but
+/// has no annotation under the requested name (`NoSuchAnnotation`, logged as
+/// "annotation … not found"); any other S3 error returns `Err` (exit 1).
 pub async fn run_delete_object_annotation(
     args: DeleteObjectAnnotationArgs,
     client_config: ClientConfig,
@@ -61,17 +62,30 @@ pub async fn run_delete_object_annotation(
             );
             Ok(ExitStatus::Success)
         }
-        Err(HeadError::BucketNotFound) => {
+        Err(ObjectAnnotationError::BucketNotFound) => {
             tracing::error!("bucket s3://{bucket} not found");
             Ok(ExitStatus::NotFound)
         }
-        Err(HeadError::NotFound) => {
+        Err(ObjectAnnotationError::NotFound) => {
             match args.target_version_id.as_deref() {
                 Some(v) => tracing::error!("s3://{bucket}/{key} (versionId={v}) not found"),
                 None => tracing::error!("object s3://{bucket}/{key} not found"),
             }
             Ok(ExitStatus::NotFound)
         }
-        Err(HeadError::Other(e)) => Err(e),
+        Err(ObjectAnnotationError::AnnotationNotFound) => {
+            match args.target_version_id.as_deref() {
+                Some(v) => tracing::error!(
+                    "annotation {annotation_name} not found for s3://{bucket}/{key} (versionId={v})"
+                ),
+                None => {
+                    tracing::error!(
+                        "annotation {annotation_name} not found for s3://{bucket}/{key}"
+                    )
+                }
+            }
+            Ok(ExitStatus::NotFound)
+        }
+        Err(ObjectAnnotationError::Other(e)) => Err(e),
     }
 }

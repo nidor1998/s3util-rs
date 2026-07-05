@@ -307,7 +307,7 @@ mod tests {
     }
 
     /// Not-found: get-object-annotation on a bucket that does not exist must exit
-    /// 4 (S3 returns NoSuchBucket → `HeadError::BucketNotFound`).
+    /// 4 (S3 returns NoSuchBucket → `ObjectAnnotationError::BucketNotFound`).
     #[tokio::test]
     async fn get_object_annotation_missing_bucket_exits_4() {
         let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
@@ -342,7 +342,7 @@ mod tests {
     /// Object-version not-found: the object exists, but we request a *real,
     /// well-formed* version ID that belongs to a different object, so it is
     /// absent for this key. S3 returns NoSuchVersion (mapped to
-    /// HeadError::NotFound → exit 4). Using a real version ID avoids the
+    /// ObjectAnnotationError::NotFound → exit 4). Using a real version ID avoids the
     /// 400 InvalidArgument that a fabricated ID could trigger.
     #[tokio::test]
     async fn get_object_annotation_version_id_from_other_object_exits_4() {
@@ -397,7 +397,7 @@ mod tests {
     /// still-existing version ID from a *different* object — this test deletes a
     /// real version of the *same* key, so the requested version ID no longer
     /// refers to any existing version. The ID is guaranteed well-formed (S3
-    /// generated it), so S3 returns NoSuchVersion (→ HeadError::NotFound → exit
+    /// generated it), so S3 returns NoSuchVersion (→ ObjectAnnotationError::NotFound → exit
     /// 4) rather than the 400 InvalidArgument a fabricated ID could trigger. The
     /// annotation name is one that *does* exist on the current version, so the
     /// exit 4 can only come from the missing version, not a missing annotation.

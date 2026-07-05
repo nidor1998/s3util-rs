@@ -97,6 +97,29 @@ pub enum HeadError {
     Other(#[from] anyhow::Error),
 }
 
+/// Error classification for the annotation get/delete wrappers
+/// (`get_object_annotation`, `delete_object_annotation`). Unlike the shared
+/// `HeadError`, this splits `NoSuchAnnotation` (the object exists but carries
+/// no annotation under the requested name) out from a missing object/version,
+/// so the CLI can print "annotation … not found" rather than the misleading
+/// "object … not found".
+#[derive(Debug, thiserror::Error)]
+pub enum ObjectAnnotationError {
+    /// S3 reported the bucket itself does not exist (`NoSuchBucket`).
+    #[error("bucket does not exist")]
+    BucketNotFound,
+    /// The object, or the requested version, does not exist
+    /// (`NoSuchKey`/`NoSuchVersion`).
+    #[error("object does not exist")]
+    NotFound,
+    /// The object exists but has no annotation under the requested name
+    /// (`NoSuchAnnotation`, e.g. after the annotation has been deleted).
+    #[error("annotation does not exist")]
+    AnnotationNotFound,
+    #[error(transparent)]
+    Other(#[from] anyhow::Error),
+}
+
 /// S3 error codes that `get-object-tagging` treats as a subresource
 /// NotFound. `NoSuchBucket` is handled separately by `classify_not_found`
 /// and mapped to `HeadError::BucketNotFound`.
@@ -326,6 +349,29 @@ fn classify_not_found(code: Option<&str>, subresource_codes: &[&str]) -> Option<
     None
 }
 
+/// Classify an SDK error code for the annotation get/delete wrappers. Like
+/// `classify_not_found`, but `NoSuchAnnotation` maps to a dedicated
+/// `AnnotationNotFound` variant (rather than being folded into `NotFound`)
+/// so the CLI can distinguish "annotation not found" from "object not found".
+/// Any other code in `subresource_codes` (`NoSuchKey`/`NoSuchVersion`) maps to
+/// `NotFound`; anything else returns `None`, signalling the caller should wrap
+/// the error as `Other`.
+fn classify_object_annotation_not_found(
+    code: Option<&str>,
+    subresource_codes: &[&str],
+) -> Option<ObjectAnnotationError> {
+    if code == Some("NoSuchBucket") {
+        return Some(ObjectAnnotationError::BucketNotFound);
+    }
+    if code == Some("NoSuchAnnotation") {
+        return Some(ObjectAnnotationError::AnnotationNotFound);
+    }
+    if matches_not_found_code(code, subresource_codes) {
+        return Some(ObjectAnnotationError::NotFound);
+    }
+    None
+}
+
 /// Issue `PutObjectTagging` against `bucket`/`key`. Returns the SDK response on success.
 ///
 /// Replaces all existing tags on the object with the provided `tagging`.
@@ -410,12 +456,14 @@ pub struct DeleteObjectAnnotationParams<'a> {
 }
 
 /// Issue `DeleteObjectAnnotation`, removing the annotation stored under
-/// `params.annotation_name`. Maps `NoSuchBucket` to `BucketNotFound` and
-/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
+/// `params.annotation_name`. Maps `NoSuchBucket` to `BucketNotFound`,
+/// `NoSuchKey`/`NoSuchVersion` to `NotFound`, and `NoSuchAnnotation` to the
+/// dedicated `AnnotationNotFound` so the CLI can tell a missing annotation
+/// apart from a missing object.
 pub async fn delete_object_annotation(
     client: &Client,
     params: DeleteObjectAnnotationParams<'_>,
-) -> Result<DeleteObjectAnnotationOutput, HeadError> {
+) -> Result<DeleteObjectAnnotationOutput, ObjectAnnotationError> {
     let mut req = client
         .delete_object_annotation()
         .bucket(params.bucket)
@@ -431,9 +479,9 @@ pub async fn delete_object_annotation(
         let code = e
             .as_service_error()
             .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
-        match classify_not_found(code, DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+        match classify_object_annotation_not_found(code, DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
             Some(he) => he,
-            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+            None => ObjectAnnotationError::Other(anyhow::Error::new(e).context(format!(
                 "delete-object-annotation on s3://{}/{}",
                 params.bucket, params.key
             ))),
@@ -453,12 +501,14 @@ pub struct GetObjectAnnotationParams<'a> {
 
 /// Issue `GetObjectAnnotation`, returning the annotation payload (as a
 /// `ByteStream` on the output) plus metadata. Always sends
-/// `checksum_mode=ENABLED`. Maps `NoSuchBucket` to `BucketNotFound` and
-/// `NoSuchKey`/`NoSuchVersion`/`NoSuchAnnotation` to `NotFound`.
+/// `checksum_mode=ENABLED`. Maps `NoSuchBucket` to `BucketNotFound`,
+/// `NoSuchKey`/`NoSuchVersion` to `NotFound`, and `NoSuchAnnotation` to the
+/// dedicated `AnnotationNotFound` so the CLI can tell a missing annotation
+/// apart from a missing object.
 pub async fn get_object_annotation(
     client: &Client,
     params: GetObjectAnnotationParams<'_>,
-) -> Result<GetObjectAnnotationOutput, HeadError> {
+) -> Result<GetObjectAnnotationOutput, ObjectAnnotationError> {
     let mut req = client
         .get_object_annotation()
         .bucket(params.bucket)
@@ -475,9 +525,9 @@ pub async fn get_object_annotation(
         let code = e
             .as_service_error()
             .and_then(aws_smithy_types::error::metadata::ProvideErrorMetadata::code);
-        match classify_not_found(code, GET_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
+        match classify_object_annotation_not_found(code, GET_OBJECT_ANNOTATION_NOT_FOUND_CODES) {
             Some(he) => he,
-            None => HeadError::Other(anyhow::Error::new(e).context(format!(
+            None => ObjectAnnotationError::Other(anyhow::Error::new(e).context(format!(
                 "get-object-annotation on s3://{}/{}",
                 params.bucket, params.key
             ))),
@@ -1738,6 +1788,37 @@ mod tests {
         // caller mistakenly leaves it in the subresource list.
         let got = classify_not_found(Some("NoSuchBucket"), &["NoSuchBucket", "NoSuchTagSet"]);
         assert!(matches!(got, Some(HeadError::BucketNotFound)));
+    }
+
+    #[test]
+    fn classify_object_annotation_splits_annotation_from_object() {
+        // The whole point of the dedicated classifier: `NoSuchAnnotation` is a
+        // distinct variant, while a missing object/version stays `NotFound`.
+        // Exercised with both the get and delete subresource-code lists, which
+        // is what the get/delete wrappers pass.
+        for codes in [
+            GET_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+            DELETE_OBJECT_ANNOTATION_NOT_FOUND_CODES,
+        ] {
+            assert!(matches!(
+                classify_object_annotation_not_found(Some("NoSuchAnnotation"), codes),
+                Some(ObjectAnnotationError::AnnotationNotFound)
+            ));
+            assert!(matches!(
+                classify_object_annotation_not_found(Some("NoSuchKey"), codes),
+                Some(ObjectAnnotationError::NotFound)
+            ));
+            assert!(matches!(
+                classify_object_annotation_not_found(Some("NoSuchVersion"), codes),
+                Some(ObjectAnnotationError::NotFound)
+            ));
+            assert!(matches!(
+                classify_object_annotation_not_found(Some("NoSuchBucket"), codes),
+                Some(ObjectAnnotationError::BucketNotFound)
+            ));
+            assert!(classify_object_annotation_not_found(Some("AccessDenied"), codes).is_none());
+            assert!(classify_object_annotation_not_found(None, codes).is_none());
+        }
     }
 
     #[test]
