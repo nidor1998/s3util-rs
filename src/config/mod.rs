@@ -68,6 +68,8 @@ pub struct Config {
     pub no_fail_on_verify_error: bool,
     pub skip_existing: bool,
     pub dry_run: bool,
+    pub enable_sync_object_annotations: bool,
+    pub disable_check_annotation_etag: bool,
 }
 
 #[derive(Debug, Clone)]

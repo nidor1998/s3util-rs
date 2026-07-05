@@ -30,6 +30,15 @@ const CATEGORIES: &[(&str, &[&str])] = &[
         ],
     ),
     (
+        "Object Annotation",
+        &[
+            "get-object-annotation",
+            "put-object-annotation",
+            "delete-object-annotation",
+            "list-object-annotations",
+        ],
+    ),
+    (
         "Bucket Operations",
         &["create-bucket", "head-bucket", "delete-bucket"],
     ),

@@ -1530,4 +1530,328 @@ mod tests {
         .unwrap_err();
         assert!(!err.is_empty());
     }
+
+    // Remaining thin-wrapper subcommands not covered by the reject tests above.
+    // Same contract as `assert_rejects_with`: build_config_from_args must reject
+    // each with a message naming the subcommand and pointing at main.rs. Valid,
+    // parseable args are supplied so execution reaches the match arm (a clap
+    // parse failure would short-circuit before it and prove nothing). put-* /
+    // file positionals are not read at parse time, so placeholder paths are fine.
+
+    #[test]
+    fn build_config_rejects_delete_bucket_replication() {
+        assert_rejects_with(
+            &["s3util", "delete-bucket-replication", "s3://b"],
+            "delete-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_delete_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "delete-object-annotation",
+                "s3://b/k",
+                "--annotation-name",
+                "note",
+            ],
+            "delete-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_accelerate_configuration() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-accelerate-configuration", "s3://b"],
+            "get-bucket-accelerate-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_policy_status() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-policy-status", "s3://b"],
+            "get-bucket-policy-status",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_replication() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-replication", "s3://b"],
+            "get-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_bucket_request_payment() {
+        assert_rejects_with(
+            &["s3util", "get-bucket-request-payment", "s3://b"],
+            "get-bucket-request-payment",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_get_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "get-object-annotation",
+                "s3://b/k",
+                "/tmp/out.bin",
+                "--annotation-name",
+                "note",
+            ],
+            "get-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_list_object_annotations() {
+        assert_rejects_with(
+            &["s3util", "list-object-annotations", "s3://b/k"],
+            "list-object-annotations",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_rename() {
+        assert_rejects_with(&["s3util", "rename", "s3://b/k", "s3://b/k2"], "rename");
+    }
+
+    #[test]
+    fn build_config_rejects_presign() {
+        assert_rejects_with(&["s3util", "presign", "s3://b/k"], "presign");
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_accelerate_configuration() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-accelerate-configuration",
+                "--enabled",
+                "s3://b",
+            ],
+            "put-bucket-accelerate-configuration",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_replication() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-replication",
+                "s3://b",
+                "/tmp/replication.json",
+            ],
+            "put-bucket-replication",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_bucket_request_payment() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-bucket-request-payment",
+                "--requester",
+                "s3://b",
+            ],
+            "put-bucket-request-payment",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_put_object_annotation() {
+        assert_rejects_with(
+            &[
+                "s3util",
+                "put-object-annotation",
+                "s3://b/k",
+                "--annotation-name",
+                "note",
+                "--annotation-payload",
+                "/tmp/payload.bin",
+            ],
+            "put-object-annotation",
+        );
+    }
+
+    #[test]
+    fn build_config_rejects_restore_object() {
+        assert_rejects_with(&["s3util", "restore-object", "s3://b/k"], "restore-object");
+    }
+
+    #[test]
+    fn build_config_accepts_mv() {
+        // The Mv arm is the only Ok arm besides Cp. Every other mv test calls
+        // `Config::try_from(mv_args)` directly, so this is the one case that
+        // exercises the Mv branch *inside* build_config_from_args.
+        let result = build_config_from_args(
+            ["s3util", "mv", "/tmp/a", "s3://b/k"]
+                .iter()
+                .map(|s| s.to_string()),
+        );
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn annotation_flags_default_to_false() {
+        let config = build_config_from_args(args_with("s3://src/k", "s3://dst/k")).unwrap();
+        assert!(!config.enable_sync_object_annotations);
+        assert!(!config.disable_check_annotation_etag);
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_parses_true() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn disable_check_annotation_etag_parses_true_standalone() {
+        // No `requires` coupling: accepted without the enable flag (s3sync parity).
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--disable-check-annotation-etag"],
+        ))
+        .unwrap();
+        assert!(config.disable_check_annotation_etag);
+        assert!(!config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn annotation_flags_together_accepted() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &[
+                "--enable-sync-object-annotations",
+                "--disable-check-annotation-etag",
+            ],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+        assert!(config.disable_check_annotation_etag);
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_local_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/source_file",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_local_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "/tmp/",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_stdio_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "-",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_stdio_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "-",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_express_onezone_source_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://bucket--usw2-az1--x-s3/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("not supported with express onezone")
+        );
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_express_onezone_target_rejected() {
+        let result = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://bucket--usw2-az1--x-s3/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_err());
+        assert!(
+            result
+                .unwrap_err()
+                .contains("not supported with express onezone")
+        );
+    }
+
+    #[test]
+    fn enable_sync_object_annotations_both_s3_accepted() {
+        let config = build_config_from_args(args_with_extra(
+            "s3://src/k",
+            "s3://dst/k",
+            &["--enable-sync-object-annotations"],
+        ))
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn mv_enable_sync_object_annotations_both_s3_accepted() {
+        let config = build_config_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "--enable-sync-object-annotations".to_string(),
+            "s3://src/k".to_string(),
+            "s3://dst/k".to_string(),
+        ])
+        .unwrap();
+        assert!(config.enable_sync_object_annotations);
+    }
+
+    #[test]
+    fn mv_enable_sync_object_annotations_local_source_rejected() {
+        let result = build_config_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "--enable-sync-object-annotations".to_string(),
+            "/tmp/source_file".to_string(),
+            "s3://dst/k".to_string(),
+        ]);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
 }

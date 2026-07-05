@@ -1,12 +1,17 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
-use tracing::{debug, warn};
+use futures_util::StreamExt;
+use futures_util::stream::FuturesUnordered;
+use tokio::task;
+use tokio::task::JoinHandle;
+use tracing::{debug, info, warn};
 
 use crate::Config;
+use crate::storage::e_tag_verify::is_multipart_upload_e_tag;
 use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
 use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{SyncStatistics, get_additional_checksum};
+use crate::types::{SyncStatistics, generate_annotation_differences, get_additional_checksum};
 
 /// Transfer an S3 object from one S3 location to another.
 ///
@@ -231,6 +236,31 @@ pub async fn transfer(
         );
     }
 
+    // Sync object annotations after the object itself has been written,
+    // mirroring s3sync's syncer. A single-part server-side copy is skipped:
+    // S3's CopyObject carries annotations to the target entirely within
+    // Amazon S3. Multipart server-side copy (UploadPartCopy) does not, so it
+    // still needs a manual sync. Source annotations are read at the HEAD-time
+    // version pin (not config.version_id, which is None without
+    // --source-version-id): the object bytes above were copied at that pin,
+    // so reading "latest" here would attach a concurrent overwrite's
+    // annotations to this copy.
+    let target_etag = put_object_output.e_tag().map(|e| e.to_string());
+    let need_sync_annotations = !config.server_side_copy || is_multipart_upload_e_tag(&target_etag);
+    if config.enable_sync_object_annotations && need_sync_annotations {
+        let target_version_id = put_object_output.version_id().map(|v| v.to_string());
+        sync_object_annotations(
+            config,
+            &source,
+            &target,
+            source_key,
+            target_key,
+            source_version_id.clone(),
+            target_version_id,
+        )
+        .await?;
+    }
+
     let _ = stats_sender
         .send(SyncStatistics::SyncComplete {
             key: target_key.to_string(),
@@ -238,6 +268,193 @@ pub async fn transfer(
         .await;
 
     Ok(TransferOutcome { source_version_id })
+}
+
+/// Annotation names fetched per ListObjectAnnotations page. s3sync passes its
+/// `--max-keys` value here (default 1000); s3util has no such flag, so the
+/// s3sync default is fixed. The pagination loop in `list_object_annotations`
+/// handles objects with more annotations than one page.
+const MAX_ANNOTATION_RESULTS: i32 = 1000;
+
+/// [dry-run] List the source object's annotations and log each one that a
+/// real run would copy, mirroring s3sync's per-annotation dry-run output.
+/// cp/mv always write a fresh target object, so every source annotation is
+/// copied (with single-part `--server-side-copy`, CopyObject carries them
+/// inside Amazon S3 — either way they end up on the target). Only a
+/// read-only ListObjectAnnotations call is made. Called from the CLI's
+/// dry-run branch, which never reaches `transfer()`.
+pub async fn log_dry_run_annotation_sync(
+    config: &Config,
+    source: &Storage,
+    source_key: &str,
+) -> Result<()> {
+    if !config.enable_sync_object_annotations {
+        return Ok(());
+    }
+
+    let source_annotation_map = source
+        .list_object_annotations(
+            source_key,
+            config.version_id.clone(),
+            MAX_ANNOTATION_RESULTS,
+        )
+        .await?;
+
+    // Sorted for deterministic output (AnnotationMap is a HashMap).
+    let mut annotation_names = source_annotation_map.keys().collect::<Vec<_>>();
+    annotation_names.sort();
+
+    let source_version_id_str = config.version_id.clone().unwrap_or_default();
+    for annotation_name in annotation_names {
+        let annotation = &source_annotation_map[annotation_name];
+        info!(
+            key = source_key,
+            source_version_id = source_version_id_str.as_str(),
+            annotation_name = annotation_name.as_str(),
+            annotation_size = annotation.size,
+            "[dry-run] would copy object annotation.",
+        );
+    }
+
+    Ok(())
+}
+
+/// Bring the target object's annotations in line with the source object's.
+/// Ported from s3sync/src/pipeline/syncer.rs `sync_object_annotations`, with
+/// two adaptations: distinct source/target keys (cp/mv can rename), and no
+/// dry-run 404 tolerance on the target listing — the target object provably
+/// exists here (its put just succeeded) and s3util's dry-run never reaches
+/// the transfer layer.
+///
+/// Returns whether any annotation was added, re-copied, or deleted. cp/mv
+/// callers ignore the value; it is kept for parity with s3sync.
+async fn sync_object_annotations(
+    config: &Config,
+    source: &Storage,
+    target: &Storage,
+    source_key: &str,
+    target_key: &str,
+    source_version_id: Option<String>,
+    target_version_id: Option<String>,
+) -> Result<bool> {
+    let source_annotation_map = source
+        .list_object_annotations(
+            source_key,
+            source_version_id.clone(),
+            MAX_ANNOTATION_RESULTS,
+        )
+        .await?;
+    let target_annotation_map = target
+        .list_object_annotations(
+            target_key,
+            target_version_id.clone(),
+            MAX_ANNOTATION_RESULTS,
+        )
+        .await?;
+
+    let annotation_differences = generate_annotation_differences(
+        target_key,
+        &source_annotation_map,
+        &target_annotation_map,
+        config.disable_check_annotation_etag,
+    );
+    let need_modify = !(annotation_differences.added.is_empty()
+        && annotation_differences.modified.is_empty()
+        && annotation_differences.deleted.is_empty());
+    let mut annotations_to_be_copied = annotation_differences.added.clone();
+    annotations_to_be_copied.extend(annotation_differences.modified.clone());
+
+    debug!(
+        source_key = source_key,
+        target_key = target_key,
+        source_version_id = source_version_id.as_deref().unwrap_or("None"),
+        target_version_id = target_version_id.as_deref().unwrap_or("None"),
+        "Annotations to be copied: {:?}",
+        annotations_to_be_copied
+    );
+
+    let mut annotation_copy_tasks = FuturesUnordered::new();
+    let semaphore = config
+        .target_client_config
+        .as_ref()
+        .unwrap()
+        .parallel_upload_semaphore
+        .clone();
+    for added_annotation_name in annotations_to_be_copied {
+        let source = dyn_clone::clone_box(&**source);
+        let target = dyn_clone::clone_box(&**target);
+        let source_version_id = source_version_id.clone();
+        let target_version_id = target_version_id.clone();
+        let source_key = source_key.to_string();
+        let target_key = target_key.to_string();
+        let checksum_mode = config.additional_checksum_mode.clone();
+        let permit = semaphore.clone().acquire_owned().await;
+
+        let task: JoinHandle<Result<()>> = task::spawn(async move {
+            let _permit = permit; // Keep the semaphore permit in scope
+            let annotation_data = source
+                .get_object_annotation(
+                    &source_key,
+                    source_version_id.clone(),
+                    &added_annotation_name,
+                    checksum_mode,
+                )
+                .await?;
+
+            target
+                .copy_object_annotation(
+                    &target_key,
+                    target_version_id.clone(),
+                    &added_annotation_name,
+                    annotation_data,
+                )
+                .await?;
+
+            Ok(())
+        });
+        annotation_copy_tasks.push(task);
+    }
+
+    while let Some(result) = annotation_copy_tasks.next().await {
+        result??;
+    }
+
+    debug!(
+        source_key = source_key,
+        target_key = target_key,
+        source_version_id = source_version_id.as_deref().unwrap_or("None"),
+        target_version_id = target_version_id.as_deref().unwrap_or("None"),
+        "Annotations to be deleted: {:?}",
+        annotation_differences.deleted
+    );
+
+    let mut annotation_delete_tasks = FuturesUnordered::new();
+    for annotation_name_to_be_deleted in annotation_differences.deleted {
+        let target = dyn_clone::clone_box(&**target);
+        let target_version_id = target_version_id.clone();
+        let target_key = target_key.to_string();
+        let permit = semaphore.clone().acquire_owned().await;
+
+        let task: JoinHandle<Result<()>> = task::spawn(async move {
+            let _permit = permit; // Keep the semaphore permit in scope
+            target
+                .delete_object_annotation(
+                    &target_key,
+                    target_version_id.clone(),
+                    &annotation_name_to_be_deleted,
+                )
+                .await?;
+            Ok(())
+        });
+
+        annotation_delete_tasks.push(task);
+    }
+
+    while let Some(result) = annotation_delete_tasks.next().await {
+        result??;
+    }
+
+    Ok(need_modify)
 }
 
 #[cfg(test)]
@@ -600,6 +817,8 @@ mod tests {
             no_fail_on_verify_error: false,
             skip_existing: false,
             dry_run: false,
+            enable_sync_object_annotations: false,
+            disable_check_annotation_etag: false,
         }
     }
 
@@ -870,5 +1089,704 @@ mod tests {
         assert_future_panics(target.delete_object("k", None)).await;
 
         assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
+
+    use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
+    use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+    use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+    use std::sync::Mutex;
+
+    fn test_client_config() -> crate::config::ClientConfig {
+        crate::config::ClientConfig {
+            client_config_location: crate::types::ClientConfigLocation {
+                aws_config_file: None,
+                aws_shared_credentials_file: None,
+            },
+            credential: crate::types::S3Credentials::FromEnvironment,
+            region: None,
+            endpoint_url: None,
+            force_path_style: false,
+            accelerate: false,
+            request_payer: None,
+            retry_config: crate::config::RetryConfig {
+                aws_max_attempts: 1,
+                initial_backoff_milliseconds: 1,
+            },
+            cli_timeout_config: crate::config::CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: false,
+            request_checksum_calculation:
+                aws_smithy_types::checksum_config::RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(tokio::sync::Semaphore::new(4)),
+        }
+    }
+
+    fn annotation_entry(
+        name: &str,
+        e_tag: &str,
+        last_modified_secs: i64,
+    ) -> aws_sdk_s3::types::AnnotationEntry {
+        aws_sdk_s3::types::AnnotationEntry::builder()
+            .annotation_name(name)
+            .e_tag(e_tag)
+            .last_modified(DateTime::from_secs(last_modified_secs))
+            .size(1)
+            .build()
+            .unwrap()
+    }
+
+    /// (key, version_id, annotation_name) triple recorded by the mocks.
+    type AnnotationCall = (String, Option<String>, String);
+
+    /// (key, version_id) pair recorded for annotation listings.
+    type ListCall = (String, Option<String>);
+
+    /// Source mock: same head/get behavior as MockSource, plus configurable
+    /// annotation listing and recording of annotation reads.
+    #[derive(Clone)]
+    struct AnnotationRecordingSource {
+        annotations: crate::types::AnnotationMap,
+        /// Version id surfaced by head_object — the HEAD-time pin `transfer()`
+        /// captures. None models an unversioned source bucket.
+        head_version_id: Option<String>,
+        list_calls: Arc<Mutex<Vec<ListCall>>>,
+        get_calls: Arc<Mutex<Vec<AnnotationCall>>>,
+    }
+
+    #[async_trait]
+    impl StorageTrait for AnnotationRecordingSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            Ok(GetObjectOutput::builder()
+                .body(ByteStream::from(b"data".to_vec()))
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            Ok(HeadObjectOutput::builder()
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .set_version_id(self.head_version_id.clone())
+                .build())
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            Err(anyhow!("source put_object must not be invoked"))
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        async fn list_object_annotations(
+            &self,
+            key: &str,
+            version_id: Option<String>,
+            _max_annotation_results: i32,
+        ) -> Result<crate::types::AnnotationMap> {
+            self.list_calls
+                .lock()
+                .unwrap()
+                .push((key.to_string(), version_id));
+            Ok(self.annotations.clone())
+        }
+        async fn get_object_annotation(
+            &self,
+            key: &str,
+            version_id: Option<String>,
+            annotation_name: &str,
+            _checksum_mode: Option<ChecksumMode>,
+        ) -> Result<GetObjectAnnotationOutput> {
+            self.get_calls.lock().unwrap().push((
+                key.to_string(),
+                version_id,
+                annotation_name.to_string(),
+            ));
+            Ok(GetObjectAnnotationOutput::builder()
+                .annotation_payload(ByteStream::from(b"v".to_vec()))
+                .content_length(1)
+                .build())
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Target mock: put_object returns a configurable etag/version-id;
+    /// annotation listing is configurable; copy/delete calls are recorded.
+    #[derive(Clone)]
+    struct AnnotationRecordingTarget {
+        put_e_tag: String,
+        put_version_id: Option<String>,
+        annotations: crate::types::AnnotationMap,
+        list_calls: Arc<Mutex<Vec<ListCall>>>,
+        copy_calls: Arc<Mutex<Vec<AnnotationCall>>>,
+        delete_calls: Arc<Mutex<Vec<AnnotationCall>>>,
+    }
+
+    #[async_trait]
+    impl StorageTrait for AnnotationRecordingTarget {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            Ok(PutObjectOutput::builder()
+                .e_tag(self.put_e_tag.clone())
+                .set_version_id(self.put_version_id.clone())
+                .build())
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        async fn list_object_annotations(
+            &self,
+            key: &str,
+            version_id: Option<String>,
+            _max_annotation_results: i32,
+        ) -> Result<crate::types::AnnotationMap> {
+            self.list_calls
+                .lock()
+                .unwrap()
+                .push((key.to_string(), version_id));
+            Ok(self.annotations.clone())
+        }
+        async fn copy_object_annotation(
+            &self,
+            key: &str,
+            target_version_id: Option<String>,
+            annotation_name: &str,
+            _source_annotation: GetObjectAnnotationOutput,
+        ) -> Result<PutObjectAnnotationOutput> {
+            self.copy_calls.lock().unwrap().push((
+                key.to_string(),
+                target_version_id,
+                annotation_name.to_string(),
+            ));
+            Ok(PutObjectAnnotationOutput::builder().build())
+        }
+        async fn delete_object_annotation(
+            &self,
+            key: &str,
+            target_version_id: Option<String>,
+            annotation_name: &str,
+        ) -> Result<DeleteObjectAnnotationOutput> {
+            self.delete_calls.lock().unwrap().push((
+                key.to_string(),
+                target_version_id,
+                annotation_name.to_string(),
+            ));
+            Ok(DeleteObjectAnnotationOutput::builder().build())
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn recording_source(annotations: crate::types::AnnotationMap) -> AnnotationRecordingSource {
+        AnnotationRecordingSource {
+            annotations,
+            head_version_id: None,
+            list_calls: Arc::new(Mutex::new(Vec::new())),
+            get_calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    fn recording_target(
+        put_e_tag: &str,
+        put_version_id: Option<&str>,
+        annotations: crate::types::AnnotationMap,
+    ) -> AnnotationRecordingTarget {
+        AnnotationRecordingTarget {
+            put_e_tag: put_e_tag.to_string(),
+            put_version_id: put_version_id.map(|s| s.to_string()),
+            annotations,
+            list_calls: Arc::new(Mutex::new(Vec::new())),
+            copy_calls: Arc::new(Mutex::new(Vec::new())),
+            delete_calls: Arc::new(Mutex::new(Vec::new())),
+        }
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_noop_when_flag_off() {
+        let config = minimal_config(false);
+        let source = recording_source(crate::types::AnnotationMap::new());
+        let source_lists = source.list_calls.clone();
+
+        let source: Storage = Box::new(source);
+        log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap();
+
+        assert!(source_lists.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_lists_source_with_version() {
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.version_id = Some("V1".to_string());
+
+        let source_map: crate::types::AnnotationMap = [
+            ("a1".to_string(), annotation_entry("a1", "\"e1\"", 100)),
+            ("a2".to_string(), annotation_entry("a2", "\"e2\"", 100)),
+        ]
+        .into_iter()
+        .collect();
+        let source = recording_source(source_map);
+        let source_lists = source.list_calls.clone();
+
+        let source: Storage = Box::new(source);
+        log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap();
+
+        assert_eq!(
+            source_lists.lock().unwrap().clone(),
+            vec![("src/key".to_string(), Some("V1".to_string()))]
+        );
+    }
+
+    #[tokio::test]
+    async fn dry_run_annotation_log_propagates_list_error() {
+        // MockSource does not override the annotation trait methods, so the
+        // default "not supported" Err body stands in for a listing failure.
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let err = log_dry_run_annotation_sync(&config, &source, "src/key")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_not_invoked_when_flag_off() {
+        let config = minimal_config(false);
+        let source = recording_source(crate::types::AnnotationMap::new());
+        let target = recording_target("\"target-etag\"", None, crate::types::AnnotationMap::new());
+        let source_lists = source.list_calls.clone();
+        let target_lists = target.list_calls.clone();
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert!(source_lists.lock().unwrap().is_empty());
+        assert!(target_lists.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_copies_added_and_deletes_removed() {
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        // Source has a1 (new) and a2 (same etag/lm as target). Target has a3
+        // that no longer exists on the source.
+        let source_map: crate::types::AnnotationMap = [
+            ("a1".to_string(), annotation_entry("a1", "\"e1\"", 100)),
+            ("a2".to_string(), annotation_entry("a2", "\"e2\"", 100)),
+        ]
+        .into_iter()
+        .collect();
+        let target_map: crate::types::AnnotationMap = [
+            ("a2".to_string(), annotation_entry("a2", "\"e2\"", 100)),
+            ("a3".to_string(), annotation_entry("a3", "\"e3\"", 100)),
+        ]
+        .into_iter()
+        .collect();
+
+        let source = recording_source(source_map);
+        let target = recording_target("\"target-etag\"", Some("TV1"), target_map);
+        let source_lists = source.list_calls.clone();
+        let source_gets = source.get_calls.clone();
+        let target_lists = target.list_calls.clone();
+        let copies = target.copy_calls.clone();
+        let deletes = target.delete_calls.clone();
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        // Listings hit the right side with the right key/version.
+        assert_eq!(
+            source_lists.lock().unwrap().clone(),
+            vec![("src/key".to_string(), None)]
+        );
+        assert_eq!(
+            target_lists.lock().unwrap().clone(),
+            vec![("dst/key".to_string(), Some("TV1".to_string()))]
+        );
+        // a1 was read from the source and copied to the target; a2 untouched.
+        assert_eq!(
+            source_gets.lock().unwrap().clone(),
+            vec![("src/key".to_string(), None, "a1".to_string())]
+        );
+        assert_eq!(
+            copies.lock().unwrap().clone(),
+            vec![(
+                "dst/key".to_string(),
+                Some("TV1".to_string()),
+                "a1".to_string()
+            )]
+        );
+        // a3 was deleted from the target.
+        assert_eq!(
+            deletes.lock().unwrap().clone(),
+            vec![(
+                "dst/key".to_string(),
+                Some("TV1".to_string()),
+                "a3".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_reads_source_at_head_pinned_version() {
+        // The object bytes are copied at the HEAD-time version; the annotation
+        // reads must use the same pin, or a concurrent overwrite between HEAD
+        // and sync would attach the newer version's annotations to this copy.
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        let source_map: crate::types::AnnotationMap =
+            [("a1".to_string(), annotation_entry("a1", "\"e1\"", 100))]
+                .into_iter()
+                .collect();
+        let mut source = recording_source(source_map);
+        source.head_version_id = Some("V-HEAD".to_string());
+        let source_lists = source.list_calls.clone();
+        let source_gets = source.get_calls.clone();
+        let target = recording_target("\"target-etag\"", None, crate::types::AnnotationMap::new());
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            source_lists.lock().unwrap().clone(),
+            vec![("src/key".to_string(), Some("V-HEAD".to_string()))]
+        );
+        assert_eq!(
+            source_gets.lock().unwrap().clone(),
+            vec![(
+                "src/key".to_string(),
+                Some("V-HEAD".to_string()),
+                "a1".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_skipped_for_single_part_server_side_copy() {
+        // CopyObject carries annotations inside S3 for single-part copies;
+        // the target etag has no "-N" suffix so sync must be skipped.
+        let mut config = minimal_config(true);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        let source_map: crate::types::AnnotationMap =
+            [("a1".to_string(), annotation_entry("a1", "\"e1\"", 100))]
+                .into_iter()
+                .collect();
+        let source = recording_source(source_map);
+        // A single-part CopyObject preserves the source's MD5-style etag —
+        // crucially hyphen-free: is_multipart_upload_e_tag treats any '-' as
+        // the multipart marker, so a fixture like "target-etag" would be
+        // misclassified as multipart and defeat the skip under test.
+        let target = recording_target("\"abc\"", None, crate::types::AnnotationMap::new());
+        let source_lists = source.list_calls.clone();
+        let target_lists = target.list_calls.clone();
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert!(source_lists.lock().unwrap().is_empty());
+        assert!(target_lists.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_runs_for_multipart_server_side_copy() {
+        // UploadPartCopy does NOT carry annotations: a multipart-style target
+        // etag ("...-2") with server_side_copy must still sync.
+        let mut config = minimal_config(true);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        let source_map: crate::types::AnnotationMap =
+            [("a1".to_string(), annotation_entry("a1", "\"e1\"", 100))]
+                .into_iter()
+                .collect();
+        let source = recording_source(source_map);
+        let target = recording_target("\"abc-2\"", None, crate::types::AnnotationMap::new());
+        let copies = target.copy_calls.clone();
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            copies.lock().unwrap().clone(),
+            vec![("dst/key".to_string(), None, "a1".to_string())]
+        );
     }
 }

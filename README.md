@@ -25,6 +25,7 @@
     * [Express One Zone support](#express-one-zone-support)
     * [SSE and SSE-C](#sse-and-sse-c)
     * [Metadata and tagging preservation](#metadata-and-tagging-preservation)
+    * [Object annotation sync](#object-annotation-sync)
     * [Rate limiting](#rate-limiting)
     * [Observability](#observability)
     * [Dry-run](#dry-run)
@@ -35,10 +36,16 @@
     * [Upload a local file](#upload-a-local-file)
     * [Download to local](#download-to-local)
     * [S3 → S3 copy](#s3--s3-copy)
+    * [S3 → S3 copy with object annotations](#s3--s3-copy-with-object-annotations)
     * [stdin → S3](#stdin--s3)
     * [S3 → stdout](#s3--stdout)
     * [Move with mv](#move-with-mv)
     * [Rename within Express One Zone](#rename-within-express-one-zone)
+    * [presign](#presign)
+    * [put-object-annotation](#put-object-annotation)
+    * [get-object-annotation](#get-object-annotation)
+    * [list-object-annotations](#list-object-annotations)
+    * [delete-object-annotation](#delete-object-annotation)
     * [Additional checksum verification](#additional-checksum-verification)
     * [Multipart tuning](#multipart-tuning)
     * [Specify credentials](#specify-credentials)
@@ -171,6 +178,11 @@ machinery.
 | `get-bucket-request-payment`             | Prints request-payment configuration as JSON (`{"Payer": "BucketOwner"}`)          |
 | `get-bucket-policy-status`               | Prints policy status as JSON (`{"PolicyStatus": {"IsPublic": …}}`); exits 4 if no policy is attached |
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
+| `presign`                                | Generates a pre-signed `GetObject` URL (GET only) and prints it to stdout; signed locally with no S3 API call, so bucket/object existence is not verified; `--expires-in <SECONDS>` sets validity (default 3600, max 604800 = 7 days) |
+| `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
+| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename), then re-reads the saved file and recomputes its ETag/additional checksum from disk (like `cp`) — a post-write mismatch leaves the file in place and exits 1; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
+| `list-object-annotations`                | Lists annotations on an S3 object via `ListObjectAnnotations`; makes a single request (up to 1000 results, pagination is not followed); supports `--annotation-prefix`, `--target-version-id`; outputs AWS-CLI-shape JSON on stdout; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
+| `delete-object-annotation`               | Removes a named annotation from an S3 object via `DeleteObjectAnnotation`; supports `--annotation-name` (required), `--target-version-id`, `--target-request-payer`, `--dry-run`; produces no output on success; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 
 ## Features
 
@@ -242,6 +254,37 @@ stdin uploads compute the ETag and additional checksum on the fly and verify aga
 S3→S3 copies preserve both system metadata (Content-Type, Cache-Control, Expires, Content-Disposition, Content-Encoding, Content-Language, website-redirect) and user-defined metadata by default. Use `--no-sync-system-metadata` / `--no-sync-user-defined-metadata` to opt out, or override individual headers explicitly.
 
 Object tags are preserved on S3→S3 by default. `--tagging "k=v&k2=v2"` overrides, `--disable-tagging` clears.
+
+### Object annotation sync
+
+For S3 → S3 copies, `cp` and `mv` can carry an object's annotations along
+with the object. Pass `--enable-sync-object-annotations` to copy the source
+object's annotations to the target after the object itself is written.
+Because the sync runs against the just-written target object, which has no
+annotations yet, every annotation on the source object is copied.
+Note that copying annotations requires additional API calls.
+With `--dry-run`, each annotation that a real run would copy is displayed
+(`[dry-run] would copy object annotation.`) using a read-only
+`ListObjectAnnotations` call on the source object.
+
+Annotations are synced in parallel (`--max-parallel-uploads`). With
+`--server-side-copy`, Amazon S3 copies the annotations of single-part copies
+entirely within Amazon S3; however, S3's `UploadPartCopy` API (used for
+multipart server-side copies) does not copy annotations, so
+`--enable-sync-object-annotations` is still needed to carry the annotations
+of multipart objects.
+
+Before copying, s3util compares the source and target annotation lists with
+the same logic as s3sync (annotation ETags where possible, falling back to
+the annotation's Last-Modified timestamp); `--disable-check-annotation-etag`
+skips the ETag comparison (for example, when SSE-KMS encryption makes ETags
+incomparable). Against a freshly written target object this comparison
+classifies every source annotation as new, so the flag is provided for
+s3sync compatibility.
+
+If creating, updating, or deleting an annotation fails, the transfer is
+treated as a failure; `mv` then leaves the source object in place.
+Both storages must be S3, and S3 Express One Zone is not supported.
 
 ### Rate limiting
 
@@ -355,6 +398,17 @@ s3util cp \
 
 `--server-side-copy` is incompatible with this case (it requires source and target to be reachable from a single S3 endpoint); cross-endpoint copies always run client-side.
 
+### S3 → S3 copy with object annotations
+
+```bash
+# Copy an object together with its annotations
+s3util cp --enable-sync-object-annotations s3://source-bucket/key s3://target-bucket/key
+
+# Same, but don't use annotation ETags to detect changes
+s3util cp --enable-sync-object-annotations --disable-check-annotation-etag \
+  s3://source-bucket/key s3://target-bucket/key
+```
+
 ### stdin → S3
 
 ```bash
@@ -434,6 +488,210 @@ Conditional check flags:
 | `--target-if-none-match <ETAG>` | String | Proceed only if the destination ETag does not match the given value |
 
 Exit codes: `0` on success, `1` on error (including source/bucket not found), `2` on argument-parse failure, `130` on SIGINT. Note that `rename` always exits `1` (not `4`) when the source object or bucket is not found — unlike `restore-object` and the `get-*` / `head-*` subcommands.
+
+### presign
+
+`presign` generates a [pre-signed URL](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html) for a `GetObject` request and prints it to stdout. The URL grants temporary, credential-free read access to a single object: anyone holding it can download that object until it expires. The URL is signed locally from the resolved credentials — **no S3 API call is made** — so the bucket and key are not checked for existence, and signing succeeds even if the object does not exist.
+
+```bash
+# Pre-sign with the default 1-hour expiry (3600 seconds)
+s3util presign s3://my-bucket/report.pdf
+
+# Pre-sign with a custom expiry (seconds; max 604800 = 7 days)
+s3util presign s3://my-bucket/report.pdf --expires-in 86400
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--expires-in <SECONDS>` | Integer | Seconds until the URL expires. Default `3600`; must be greater than `0` and at most `604800` (7 days, S3's maximum for a SigV4 pre-signed URL) |
+
+Common options (e.g. `--target-region`, `--target-access-key`, `--target-profile`) apply the same way as for other subcommands. `presign` covers `GetObject` only — it does not pre-sign uploads or any other operation. If the signing credentials are temporary (for example STS or SSO session credentials), the URL stops working once those credentials expire, even if `--expires-in` has not elapsed. Because no request is sent to S3, `presign` has no `--dry-run` and never returns the not-found exit code `4`: it exits `0` once the URL is printed, or `1` / `2` on a signing or argument error.
+
+### put-object-annotation
+
+`put-object-annotation` attaches a named annotation payload to an S3 object via the `PutObjectAnnotation` API. The payload is read from a file path, or from stdin when `--annotation-payload -` is given.
+
+```bash
+# Attach an annotation from a file
+s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json
+
+# Attach an annotation from stdin
+echo '{"note": "approved"}' | s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name review \
+  --annotation-payload -
+
+# Target a specific object version
+s3util put-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json \
+  --target-version-id <VERSION_ID>
+
+# Preview without making the API call
+s3util put-object-annotation --dry-run s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --annotation-payload ./annotation.json
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <NAME>` | String | Name of the annotation to attach |
+| `--annotation-payload <PATH\|->` | Path\|- | File to read the payload from; `-` reads from stdin |
+| `--target-version-id <ID>` | String | Attach the annotation to a specific object version |
+| `--target-request-payer` | Flag | Send `x-amz-request-payer: requester` on the API call |
+| `--dry-run` | Flag | Log what would be sent and exit 0 without calling the API |
+
+**Payload constraints:** The payload must be between 1 byte and 1 MiB (inclusive) and valid UTF-8; S3 enforces UTF-8 server-side and the size limit is enforced locally before any network call. Binary payloads must be Base64-encoded by the caller before passing them as the annotation payload.
+
+**Verification:** `s3util` sends a `Content-MD5` header for transit integrity and an explicit CRC64NVME checksum on every `PutObjectAnnotation` call. After the call it compares the CRC64NVME value returned by S3 against the locally computed value; a mismatch is treated as an error (exit 1). The ETag is echoed in the JSON output but is not used for verification.
+
+**SSE inheritance:** Annotation encryption inherits the parent object's server-side encryption. Objects with no SSE are annotated under SSE-S3. Objects encrypted with SSE-C cannot have annotations — `put-object-annotation` does not support SSE-C-encrypted objects.
+
+**Output:** Prints the `PutObjectAnnotation` response as JSON on success. Fields present in the response are included; absent fields are omitted. Example fields: `Key`, `AnnotationName`, `ObjectVersionId`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `RequestCharged`.
+
+Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` verification mismatch or other error.
+
+### get-object-annotation
+
+`get-object-annotation` retrieves a named annotation payload from an S3 object via the `GetObjectAnnotation` API and writes it to a file or stdout.
+
+```bash
+# Retrieve an annotation to a file
+s3util get-object-annotation s3://my-bucket/my-object output.json \
+  --annotation-name my-annotation
+
+# Stream annotation payload to stdout
+s3util get-object-annotation s3://my-bucket/my-object - \
+  --annotation-name my-annotation
+
+# Retrieve a specific object version's annotation
+s3util get-object-annotation s3://my-bucket/my-object output.json \
+  --annotation-name my-annotation \
+  --target-version-id <VERSION_ID>
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <NAME>` | String | Name of the annotation to retrieve |
+| `--target-version-id <ID>` | String | Retrieve the annotation from a specific object version |
+| `--target-request-payer` | Flag | Send `x-amz-request-payer: requester` on the API call |
+
+**Output modes:** When `<OUTFILE>` is a file path, `s3util` writes the annotation payload to a temporary file, verifies it, and atomically renames it to the target location (overwriting any existing file). Only after verification passes does the file materialize on disk. When `<OUTFILE>` is `-`, the raw payload is written to stdout and JSON output is suppressed (integrity verification still runs).
+
+**Verification:** `checksum-mode` is always `ENABLED`. The payload is integrity-checked as follows:
+- If `content-length` is present and differs from the received byte count → error (exit 1).
+- If the object is encrypted with `AES256`, the ETag (MD5) is verified against the payload.
+- If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload.
+- If neither ETag nor additional checksum verification is applicable → a warning is logged but exit code remains 0.
+
+**Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `ObjectVersionId`, `RequestCharged`.
+
+Example JSON output:
+
+```json
+{
+    "LastModified": "2026-06-18T23:04:08+00:00",
+    "ContentLength": 678260,
+    "ETag": "\"b373009fdd7e9a9a2b266c2044fb7948\"",
+    "ChecksumCRC64NVME": "hdWdywUmntQ=",
+    "ChecksumType": "FULL_OBJECT",
+    "ServerSideEncryption": "AES256"
+}
+```
+
+Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` verification mismatch or other error.
+
+### list-object-annotations
+
+`list-object-annotations` lists the annotations attached to an S3 object via the `ListObjectAnnotations` API and prints the result as JSON on stdout.
+
+```bash
+# List all annotations on an object
+s3util list-object-annotations s3://my-bucket/my-object
+
+# List annotations whose name starts with a given prefix
+s3util list-object-annotations s3://my-bucket/my-object \
+  --annotation-prefix my-prefix
+
+# List annotations for a specific object version
+s3util list-object-annotations s3://my-bucket/my-object \
+  --target-version-id <VERSION_ID>
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-prefix <VALUE>` | String | Only list annotations whose name starts with this prefix |
+| `--target-version-id <VALUE>` | String | List annotations for a specific object version |
+
+Common options (e.g. `--target-region`, `--target-access-key`, `--target-request-payer`, `--verbose`) apply the same way as for other subcommands.
+
+**Behavior:** A single `ListObjectAnnotations` request is made with `max-annotation-results` fixed at 1000. Pagination (`NextContinuationToken`) is not followed. Output is written to stdout as AWS-CLI-shape JSON (there is no `<OUTFILE>` argument for this subcommand).
+
+Example JSON output:
+
+```json
+{
+    "Annotations": [
+        {
+            "AnnotationName": "myname",
+            "LastModified": "2026-06-18T23:04:08+00:00",
+            "ETag": "\"b373009fdd7e9a9a2b266c2044fb7948\"",
+            "ChecksumAlgorithm": ["CRC64NVME"],
+            "Size": 678260
+        }
+    ],
+    "AnnotationCount": 1,
+    "AnnotationPrefix": null,
+    "Bucket": "data.cpp17.org",
+    "Key": "hosts",
+    "ObjectVersionId": null,
+    "RequestCharged": null
+}
+```
+
+Exit codes: `0` success; `4` bucket/object/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` other error; `2` argument/usage error.
+
+### delete-object-annotation
+
+`delete-object-annotation` removes a named annotation from an S3 object via the `DeleteObjectAnnotation` API. On success, nothing is written to stdout.
+
+```bash
+# Delete an annotation by name
+s3util delete-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation
+
+# Delete an annotation on a specific object version
+s3util delete-object-annotation s3://my-bucket/my-object \
+  --annotation-name my-annotation \
+  --target-version-id <VERSION_ID>
+
+# Preview what would be deleted without making any changes
+s3util delete-object-annotation --dry-run s3://my-bucket/my-object \
+  --annotation-name my-annotation
+```
+
+Options:
+
+| Flag | Type | Description |
+|------|------|-------------|
+| `--annotation-name <VALUE>` | String (required) | Name of the annotation to delete |
+| `--target-version-id <VALUE>` | String | Delete the annotation for a specific object version |
+| `--dry-run` | Flag | Log what would be sent and exit 0 without calling the API |
+
+Common options (e.g. `--target-region`, `--target-access-key`, `--target-request-payer`, `--verbose`) apply the same way as for other subcommands.
+
+**Behavior:** A single `DeleteObjectAnnotation` request is made. Nothing is written to stdout on success.
+
+Exit codes: `0` success; `4` object/bucket/version not found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`); `1` other error.
 
 ### Additional checksum verification
 
@@ -567,7 +825,7 @@ SSE-C (`--source-sse-c*` / `--target-sse-c*`) requires no additional IAM permiss
 | 1    | Error — transfer failed or configuration rejected                                                                   |
 | 2    | Argument-parsing error — an argument is unknown, missing, or has an invalid value                                   |
 | 3    | Warning — transfer completed but a non-fatal issue was logged (e.g. S3→S3 ETag mismatch explained by chunksize)     |
-| 4    | Not found — `head-bucket` / `head-object` / `restore-object` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
+| 4    | Not found — `head-bucket` / `head-object` / `restore-object` / `put-object-annotation` / `get-object-annotation` / `list-object-annotations` / `delete-object-annotation` (404 NoSuchBucket / NoSuchKey / NoSuchVersion); `get-object-tagging` / `get-bucket-policy` / `get-bucket-policy-status` / `get-bucket-tagging` / `get-bucket-lifecycle-configuration` / `get-bucket-encryption` / `get-bucket-cors` / `get-public-access-block` / `get-bucket-website` / `get-bucket-replication` when the addressed resource is missing (incl. NoSuchBucketPolicy / NoSuchTagSet / NoSuchLifecycleConfiguration / ServerSideEncryptionConfigurationNotFoundError / NoSuchCORSConfiguration / NoSuchPublicAccessBlockConfiguration / NoSuchWebsiteConfiguration / ReplicationConfigurationNotFoundError); `get-bucket-versioning` / `get-bucket-logging` / `get-bucket-notification-configuration` / `get-bucket-accelerate-configuration` / `get-bucket-request-payment` only on `NoSuchBucket` — for these five, an unconfigured subresource is reported by S3 as a successful empty body (or, for request payment, a default value), which exits 0, not 4 |
 | 101  | Abnormal termination (internal panic)                                                                               |
 | 130  | User cancellation via SIGINT/ctrl-c (standard Unix SIGINT convention, 128 + 2)                                      |
 
@@ -621,7 +879,7 @@ Skip the destructive S3 Web API call and emit a `[dry-run]`-prefixed info-level 
 
 `s3util` uses [tracing-subscriber](https://docs.rs/tracing-subscriber) for tracing. More occurrences of `-v` increase verbosity (`-v`: `info`, `-vv`: `debug`, `-vvv`: `trace`). Use `-q`, `-qq` to reduce verbosity. Default: warning and error messages.
 
-With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `restore-object`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, `get-bucket-notification-configuration`, and `get-bucket-accelerate-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these four).
+With `-v`, subcommands that are otherwise silent on success (`rm`, `create-bucket`, `restore-object`, `delete-bucket`, the `put-*` and `delete-*` bucket/object subcommands (except `put-object-annotation`, which always prints JSON on success)) emit a structured info-level event to stderr describing what was changed (e.g. `Object deleted. bucket=… key=… version_id=…`). `get-bucket-versioning`, `get-bucket-logging`, `get-bucket-notification-configuration`, and `get-bucket-accelerate-configuration` likewise log `Bucket … not configured.` when the bucket has no such configuration (each prints nothing on stdout in that case, matching `aws s3api`, since the underlying S3 API returns success with an empty body for these four).
 
 ### --aws-sdk-tracing
 

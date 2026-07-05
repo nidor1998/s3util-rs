@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::fmt::{Debug, Formatter};
 use std::path::PathBuf;
@@ -7,8 +7,9 @@ use std::sync::{Arc, Mutex};
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::primitives::DateTime;
-use aws_sdk_s3::types::{ChecksumAlgorithm, ChecksumType, ObjectPart, Tag};
+use aws_sdk_s3::types::{AnnotationEntry, ChecksumAlgorithm, ChecksumType, ObjectPart, Tag};
 use sha1::{Digest, Sha1};
+use tracing::debug;
 use zeroize_derive::{Zeroize, ZeroizeOnDrop};
 
 pub mod async_callback;
@@ -153,6 +154,97 @@ pub fn format_tags(tags: &[Tag]) -> String {
         })
         .collect::<Vec<String>>()
         .join("&")
+}
+
+pub type AnnotationMap = HashMap<String, AnnotationEntry>;
+
+#[derive(Clone, Default)]
+pub struct AnnotationDifferences {
+    pub added: Vec<String>,
+    pub deleted: Vec<String>,
+    pub modified: Vec<String>,
+    pub unmodified: Vec<String>,
+}
+
+pub fn generate_annotation_differences(
+    key: &str,
+    source_annotation_map: &AnnotationMap,
+    target_annotation_map: &AnnotationMap,
+    disable_check_annotation_etag: bool,
+) -> AnnotationDifferences {
+    let mut annotation_differences = AnnotationDifferences {
+        added: vec![],
+        deleted: vec![],
+        modified: vec![],
+        unmodified: vec![],
+    };
+
+    let source_annotation_name_set = source_annotation_map
+        .keys()
+        .cloned()
+        .collect::<HashSet<String>>();
+    let target_annotation_name_set = target_annotation_map
+        .keys()
+        .cloned()
+        .collect::<HashSet<String>>();
+
+    annotation_differences.added.extend(
+        source_annotation_name_set
+            .difference(&target_annotation_name_set)
+            .cloned()
+            .collect::<Vec<String>>(),
+    );
+    annotation_differences.deleted.extend(
+        target_annotation_name_set
+            .difference(&source_annotation_name_set)
+            .cloned()
+            .collect::<Vec<String>>(),
+    );
+    let common_annotation_name_set = source_annotation_name_set
+        .intersection(&target_annotation_name_set)
+        .cloned()
+        .collect::<HashSet<String>>();
+
+    for annotation_name in common_annotation_name_set {
+        let source_annotation = source_annotation_map.get(&annotation_name).unwrap();
+        let target_annotation = target_annotation_map.get(&annotation_name).unwrap();
+
+        let etag_match = if disable_check_annotation_etag {
+            true
+        } else {
+            source_annotation.e_tag() == target_annotation.e_tag()
+        };
+
+        if etag_match && source_annotation.last_modified <= target_annotation.last_modified {
+            debug!(
+                key = key,
+                annotation_name = annotation_name,
+                source_annotation_etag = source_annotation.e_tag(),
+                target_annotation_etag = target_annotation.e_tag(),
+                source_annotation_size = source_annotation.size,
+                target_annotation_size = target_annotation.size,
+                source_last_modified = source_annotation.last_modified.to_string(),
+                target_last_modified = target_annotation.last_modified.to_string(),
+                "object annotation unmodified"
+            );
+            annotation_differences.unmodified.push(annotation_name);
+        } else {
+            debug!(
+                key = key,
+                annotation_name = annotation_name,
+                source_annotation_etag = source_annotation.e_tag(),
+                target_annotation_etag = target_annotation.e_tag(),
+                source_annotation_size = source_annotation.size,
+                target_annotation_size = target_annotation.size,
+                source_last_modified = source_annotation.last_modified.to_string(),
+                target_last_modified = target_annotation.last_modified.to_string(),
+                "object annotation modified"
+            );
+            annotation_differences.modified.push(annotation_name);
+        }
+    }
+
+    annotation_differences
 }
 
 // sha1 uses generic-array v0.x internally, which is deprecated.
@@ -869,5 +961,136 @@ mod tests {
         let debug_string = format!("{secret:?}");
         assert!(debug_string.contains("None"));
         assert!(!debug_string.contains("redacted"));
+    }
+
+    fn annotation_entry(
+        name: &str,
+        e_tag: Option<&str>,
+        last_modified_secs: i64,
+        size: i64,
+    ) -> aws_sdk_s3::types::AnnotationEntry {
+        let mut builder = aws_sdk_s3::types::AnnotationEntry::builder()
+            .annotation_name(name)
+            .last_modified(DateTime::from_secs(last_modified_secs))
+            .size(size);
+        if let Some(t) = e_tag {
+            builder = builder.e_tag(t);
+        }
+        builder.build().unwrap()
+    }
+
+    fn annotation_map(entries: Vec<aws_sdk_s3::types::AnnotationEntry>) -> AnnotationMap {
+        entries
+            .into_iter()
+            .map(|e| (e.annotation_name.clone(), e))
+            .collect()
+    }
+
+    #[test]
+    fn annotation_differences_all_added_when_target_empty() {
+        let source = annotation_map(vec![
+            annotation_entry("a1", Some("\"e1\""), 100, 5),
+            annotation_entry("a2", Some("\"e2\""), 100, 5),
+        ]);
+        let target = AnnotationMap::new();
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        let mut added = diff.added.clone();
+        added.sort();
+        assert_eq!(added, vec!["a1".to_string(), "a2".to_string()]);
+        assert!(diff.deleted.is_empty());
+        assert!(diff.modified.is_empty());
+        assert!(diff.unmodified.is_empty());
+    }
+
+    #[test]
+    fn annotation_differences_all_deleted_when_source_empty() {
+        let source = AnnotationMap::new();
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 100, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        assert!(diff.added.is_empty());
+        assert_eq!(diff.deleted, vec!["a1".to_string()]);
+        assert!(diff.modified.is_empty());
+        assert!(diff.unmodified.is_empty());
+    }
+
+    #[test]
+    fn annotation_differences_unmodified_on_equal_etag_and_older_source() {
+        // Equal ETag and source last_modified <= target last_modified → unmodified.
+        let source = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 100, 5)]);
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 100, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        assert_eq!(diff.unmodified, vec!["a1".to_string()]);
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn annotation_differences_modified_on_etag_mismatch() {
+        let source = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 100, 5)]);
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"eX\""), 200, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        assert_eq!(diff.modified, vec!["a1".to_string()]);
+        assert!(diff.unmodified.is_empty());
+    }
+
+    #[test]
+    fn annotation_differences_etag_mismatch_unmodified_when_check_disabled() {
+        // disable_check_annotation_etag forces the etag comparison to "match";
+        // source is not newer than target, so the entry is unmodified.
+        let source = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 100, 5)]);
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"eX\""), 200, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, true);
+
+        assert_eq!(diff.unmodified, vec!["a1".to_string()]);
+        assert!(diff.modified.is_empty());
+    }
+
+    #[test]
+    fn annotation_differences_modified_when_source_newer_even_with_equal_etag() {
+        let source = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 300, 5)]);
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 200, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        assert_eq!(diff.modified, vec!["a1".to_string()]);
+    }
+
+    #[test]
+    fn annotation_differences_modified_when_source_newer_and_check_disabled() {
+        let source = annotation_map(vec![annotation_entry("a1", Some("\"e1\""), 300, 5)]);
+        let target = annotation_map(vec![annotation_entry("a1", Some("\"eX\""), 200, 5)]);
+
+        let diff = generate_annotation_differences("key", &source, &target, true);
+
+        assert_eq!(diff.modified, vec!["a1".to_string()]);
+    }
+
+    #[test]
+    fn annotation_differences_mixed_scenario_covers_all_buckets() {
+        let source = annotation_map(vec![
+            annotation_entry("added", Some("\"e1\""), 100, 5),
+            annotation_entry("same", Some("\"e2\""), 100, 5),
+            annotation_entry("changed", Some("\"e3\""), 100, 5),
+        ]);
+        let target = annotation_map(vec![
+            annotation_entry("same", Some("\"e2\""), 100, 5),
+            annotation_entry("changed", Some("\"other\""), 100, 5),
+            annotation_entry("gone", Some("\"e4\""), 100, 5),
+        ]);
+
+        let diff = generate_annotation_differences("key", &source, &target, false);
+
+        assert_eq!(diff.added, vec!["added".to_string()]);
+        assert_eq!(diff.deleted, vec!["gone".to_string()]);
+        assert_eq!(diff.modified, vec!["changed".to_string()]);
+        assert_eq!(diff.unmodified, vec!["same".to_string()]);
     }
 }

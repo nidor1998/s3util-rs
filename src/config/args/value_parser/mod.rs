@@ -3,6 +3,7 @@ pub mod checksum_algorithm;
 pub mod file_exist;
 pub mod human_bytes;
 pub mod metadata;
+pub mod outfile_path;
 pub mod sse;
 pub mod storage_class;
 pub mod storage_path;

@@ -4,10 +4,13 @@ use async_trait::async_trait;
 use aws_sdk_s3::Client;
 use aws_sdk_s3::operation::copy_object::CopyObjectOutput;
 use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
+use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
 use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
+use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
 use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
 use aws_sdk_s3::operation::upload_part::UploadPartOutput;
 use aws_sdk_s3::operation::upload_part_copy::UploadPartCopyOutput;
@@ -30,9 +33,10 @@ use crate::config::ClientConfig;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::types::async_callback::AsyncReadWithCallback;
 use crate::types::token::PipelineCancellationToken;
-use crate::types::{ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics};
+use crate::types::{AnnotationMap, ObjectChecksum, SseCustomerKey, StoragePath, SyncStatistics};
 
 pub mod additional_checksum_verify;
+pub mod annotation;
 pub mod checksum;
 pub mod e_tag_verify;
 pub mod local;
@@ -148,6 +152,48 @@ pub trait StorageTrait: DynClone {
     ) -> Result<PutObjectOutput> {
         Err(anyhow!(
             "put_object_stream is not supported on this storage"
+        ))
+    }
+    async fn list_object_annotations(
+        &self,
+        _key: &str,
+        _version_id: Option<String>,
+        _max_annotation_results: i32,
+    ) -> Result<AnnotationMap> {
+        Err(anyhow!(
+            "list_object_annotations is not supported on this storage"
+        ))
+    }
+    async fn get_object_annotation(
+        &self,
+        _key: &str,
+        _version_id: Option<String>,
+        _annotation_name: &str,
+        _checksum_mode: Option<ChecksumMode>,
+    ) -> Result<GetObjectAnnotationOutput> {
+        Err(anyhow!(
+            "get_object_annotation is not supported on this storage"
+        ))
+    }
+    async fn copy_object_annotation(
+        &self,
+        _key: &str,
+        _target_version_id: Option<String>,
+        _annotation_name: &str,
+        _source_annotation: GetObjectAnnotationOutput,
+    ) -> Result<PutObjectAnnotationOutput> {
+        Err(anyhow!(
+            "copy_object_annotation is not supported on this storage"
+        ))
+    }
+    async fn delete_object_annotation(
+        &self,
+        _key: &str,
+        _target_version_id: Option<String>,
+        _annotation_name: &str,
+    ) -> Result<DeleteObjectAnnotationOutput> {
+        Err(anyhow!(
+            "delete_object_annotation is not supported on this storage"
         ))
     }
     async fn delete_object(
@@ -737,6 +783,41 @@ mod tests {
             .put_object_stream("key", reader, None, None, None)
             .await;
         let err = result.unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+    }
+
+    #[tokio::test]
+    async fn annotation_default_impls_return_unsupported_error() {
+        // The four annotation methods have default bodies (like
+        // put_object_stream): any storage that doesn't override them must
+        // surface "not supported" instead of silently succeeding.
+        let storage: Box<dyn StorageTrait + Send + Sync> = Box::new(StubStorage);
+
+        let err = storage
+            .list_object_annotations("key", None, 1000)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+
+        let err = storage
+            .get_object_annotation("key", None, "name", None)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+
+        let source_annotation =
+            aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput::builder()
+                .build();
+        let err = storage
+            .copy_object_annotation("key", None, "name", source_annotation)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("not supported"));
+
+        let err = storage
+            .delete_object_annotation("key", None, "name")
+            .await
+            .unwrap_err();
         assert!(err.to_string().contains("not supported"));
     }
 
