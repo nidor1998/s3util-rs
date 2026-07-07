@@ -142,6 +142,21 @@ mod tests {
     }
 
     #[test]
+    fn try_parse_returns_ok_for_valid_args() {
+        // The other try_parse tests only exercise the error path; this drives
+        // the success arm (parse succeeds and the subcommand destructures).
+        let res = try_parse(&[
+            "test",
+            "put-bucket-policy",
+            "s3://my-bucket",
+            "/tmp/policy.json",
+        ]);
+        let a = res.expect("valid args must parse");
+        assert_eq!(a.bucket_name().unwrap(), "my-bucket");
+        assert_eq!(a.policy.as_deref(), Some("/tmp/policy.json"));
+    }
+
+    #[test]
     fn missing_positional_with_auto_complete_shell_is_ok() {
         let a = parse(&["test", "put-bucket-policy", "--auto-complete-shell", "bash"]);
         assert!(a.target.is_none());

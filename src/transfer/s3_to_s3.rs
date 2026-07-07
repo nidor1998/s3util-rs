@@ -1091,6 +1091,77 @@ mod tests {
         assert_call_panics(|| target.generate_copy_source_key("k", None));
     }
 
+    #[tokio::test]
+    async fn annotation_recording_source_unimplemented_methods_panic() {
+        // The annotation source mock implements only the methods the annotation
+        // `transfer()` path exercises; every other `StorageTrait` method is an
+        // `unimplemented!()` stub that must panic if the production code ever
+        // starts calling it unexpectedly.
+        let source = recording_source(crate::types::AnnotationMap::new());
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn annotation_recording_target_unimplemented_methods_panic() {
+        // As above for the target mock: only put/list/copy/delete-annotation are
+        // implemented; the read-side and tagging/delete-object methods are
+        // `unimplemented!()` stubs that must panic.
+        let target = recording_target("\"etag\"", None, crate::types::AnnotationMap::new());
+
+        assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.get_object_tagging("k", None)).await;
+        assert_future_panics(target.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(target.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(target.delete_object("k", None)).await;
+
+        assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
+
     use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
     use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
     use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
@@ -1788,5 +1859,595 @@ mod tests {
             copies.lock().unwrap().clone(),
             vec![("dst/key".to_string(), None, "a1".to_string())]
         );
+    }
+
+    #[tokio::test]
+    async fn annotation_sync_deletes_only_when_source_has_no_annotations() {
+        // Source carries no annotations while the target still has one. This
+        // makes `added` and `modified` empty but `deleted` non-empty, which is
+        // the only shape that evaluates the `modified`/`deleted` arms of the
+        // `need_modify` short-circuit (a non-empty `added` would stop at the
+        // first term).
+        let mut config = minimal_config(false);
+        config.enable_sync_object_annotations = true;
+        config.target_client_config = Some(test_client_config());
+
+        let target_map: crate::types::AnnotationMap =
+            [("a3".to_string(), annotation_entry("a3", "\"e3\"", 100))]
+                .into_iter()
+                .collect();
+
+        let source = recording_source(crate::types::AnnotationMap::new());
+        let target = recording_target("\"target-etag\"", Some("TV1"), target_map);
+        let copies = target.copy_calls.clone();
+        let deletes = target.delete_calls.clone();
+
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        // Nothing to copy, exactly a3 to delete.
+        assert!(copies.lock().unwrap().is_empty());
+        assert_eq!(
+            deletes.lock().unwrap().clone(),
+            vec![(
+                "dst/key".to_string(),
+                Some("TV1".to_string()),
+                "a3".to_string()
+            )]
+        );
+    }
+
+    #[tokio::test]
+    async fn annotation_recording_source_real_return_methods_behave_as_expected() {
+        // The annotation source mock's non-panicking helper methods are not
+        // touched by the annotation `transfer()` path (they only exercise
+        // head/get/list/get-annotation). Pin their trivial contracts directly.
+        let source = recording_source(crate::types::AnnotationMap::new());
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+
+        // put_object is a guard that must reject being called on the source.
+        let put_err = source
+            .put_object(
+                "k",
+                Box::new(MockSource { version_id: None }),
+                "src",
+                0,
+                None,
+                dummy_get_object_output(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(put_err.to_string().contains("must not be invoked"));
+    }
+
+    #[tokio::test]
+    async fn annotation_recording_target_real_return_methods_behave_as_expected() {
+        let target = recording_target("\"etag\"", None, crate::types::AnnotationMap::new());
+
+        assert!(!target.is_local_storage());
+        assert!(!target.is_express_onezone_storage());
+        assert!(target.get_client().is_none());
+        assert!(target.get_rate_limit_bandwidth().is_none());
+        assert_eq!(target.get_local_path(), PathBuf::new());
+        let _tx = target.get_stats_sender();
+        target
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        target.set_warning();
+    }
+
+    /// Source whose HEAD advertises a positive tag count but whose
+    /// GetObjectTagging comes back empty — drives the "tags per HEAD but the
+    /// tag set is actually empty ⇒ tagging is None" branch of `transfer()`.
+    #[derive(Clone)]
+    struct EmptyTaggingSource;
+
+    #[async_trait]
+    impl StorageTrait for EmptyTaggingSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            Ok(GetObjectOutput::builder()
+                .body(ByteStream::from(b"data".to_vec()))
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            // Empty tag set ⇒ the caller resolves tagging to None.
+            Ok(GetObjectTaggingOutput::builder()
+                .set_tag_set(Some(Vec::new()))
+                .build()
+                .unwrap())
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            // Positive tag_count so the tagging path does NOT short-circuit and
+            // actually calls get_object_tagging.
+            Ok(HeadObjectOutput::builder()
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .tag_count(2)
+                .build())
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Target whose put_object returns a PutObjectOutput with no ETag — drives
+    /// the "no ETag returned" warn branch of `transfer()`.
+    #[derive(Clone)]
+    struct NoEtagTarget;
+
+    #[async_trait]
+    impl StorageTrait for NoEtagTarget {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            // No ETag ⇒ the warn branch fires.
+            Ok(PutObjectOutput::builder().build())
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Source that cancels the pipeline token from inside head_object — lets a
+    /// test drive `transfer()` past the entry-time cancellation check and into
+    /// the post-download check, which is otherwise unreachable with a token
+    /// that was already cancelled before the call.
+    #[derive(Clone)]
+    struct CancelOnHeadSource {
+        token: PipelineCancellationToken,
+    }
+
+    #[async_trait]
+    impl StorageTrait for CancelOnHeadSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            Ok(GetObjectOutput::builder()
+                .body(ByteStream::from(b"data".to_vec()))
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            // Cancel AFTER the entry check has already passed, so the next
+            // cancellation check (post-download) is the one that trips.
+            self.token.cancel();
+            Ok(HeadObjectOutput::builder()
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    #[tokio::test]
+    async fn transfer_resolves_tagging_to_none_when_tag_set_is_empty() {
+        // HEAD reports a positive tag_count, GetObjectTagging returns nothing ⇒
+        // tagging is None and the transfer still completes.
+        let config = minimal_config(false);
+        let source: Storage = Box::new(EmptyTaggingSource);
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id, None);
+    }
+
+    #[tokio::test]
+    async fn transfer_skips_tagging_when_disabled() {
+        // disable_tagging short-circuits tagging to None before any
+        // GetObjectTagging call. MockSource's get_object_tagging is an
+        // unimplemented!() stub, so reaching this branch cleanly proves the
+        // call was skipped.
+        let mut config = minimal_config(false);
+        config.disable_tagging = true;
+        let source: Storage = Box::new(MockSource {
+            version_id: Some("V1".to_string()),
+        });
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id.as_deref(), Some("V1"));
+    }
+
+    #[tokio::test]
+    async fn transfer_warns_but_succeeds_when_target_returns_no_etag() {
+        let config = minimal_config(false);
+        let source: Storage = Box::new(MockSource { version_id: None });
+        let target: Storage = Box::new(NoEtagTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(outcome.source_version_id, None);
+    }
+
+    #[tokio::test]
+    async fn transfer_returns_default_when_cancelled_after_download() {
+        // The token starts uncancelled (entry check passes) and is cancelled
+        // from inside head_object, so the post-download cancellation check is
+        // the one that returns the default outcome.
+        let config = minimal_config(false);
+        let token = create_pipeline_cancellation_token();
+        let source: Storage = Box::new(CancelOnHeadSource {
+            token: token.clone(),
+        });
+        let target: Storage = Box::new(MockTarget);
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        // Post-download cancellation ⇒ default outcome, no put_object ran
+        // (MockTarget::put_object would have succeeded, but the version-id is
+        // still None because the outcome is the default).
+        assert_eq!(outcome.source_version_id, None);
     }
 }

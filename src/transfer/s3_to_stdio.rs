@@ -1641,6 +1641,61 @@ mod tests {
         }
     }
 
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    #[tokio::test]
+    async fn mock_source_unimplemented_methods_panic() {
+        // The stdout-transfer source mock only implements the read-side methods
+        // the transfer path uses; the write/tagging/delete methods are
+        // `unimplemented!()` stubs that must panic if ever called.
+        let mock = MockSource::new(b"data".to_vec());
+
+        assert_future_panics(mock.get_object_tagging("k", None)).await;
+        assert_future_panics(
+            mock.put_object_tagging(
+                "k",
+                None,
+                Tagging::builder()
+                    .set_tag_set(Some(vec![]))
+                    .build()
+                    .unwrap(),
+            ),
+        )
+        .await;
+        assert_future_panics(mock.delete_object("k", None)).await;
+        assert_future_panics(mock.put_object(
+            "k",
+            Box::new(MockSource::new(Vec::new())),
+            "src",
+            0,
+            None,
+            GetObjectOutput::builder().build(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+
+        assert_call_panics(|| mock.generate_copy_source_key("k", None));
+    }
+
     /// Build a Config tuned for tests. `parallel` and `chunksize` and
     /// `threshold` are the knobs each test exercises. Tests that need
     /// other fields (additional_checksum_mode, etc.) call `.modify()`
@@ -2551,5 +2606,151 @@ mod tests {
             "captured bytes for an empty source must be empty, got {} byte(s)",
             captured.len()
         );
+    }
+
+    // ------------------------------------------------------------------
+    // Serial-path additional-checksum coverage. The parallel checksum
+    // tests above only exercise transfer_parallel; the serial loop has its
+    // own inline multipart/full-object checksum handling (max_parallel=1).
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn serial_emits_checksum_verified_for_multipart_composite() {
+        // max_parallel=1 ⇒ serial path. A composite ("…-N") source checksum
+        // drives the multipart branch: per-8MiB-part finalize inside the read
+        // loop, the trailing-part finalize after it, and finalize_all at verify.
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..3 * chunksize).map(|i| (i % 191) as u8).collect();
+        let parts: Vec<&[u8]> = body.chunks(chunksize).collect();
+        let composite = compute_composite_sha256(&parts);
+
+        let mock = MockSource::new(body.clone()).with_sha256(&composite);
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+        let (result, captured, events) = run_transfer(config, mock).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")),
+            "expected a ChecksumVerified event; got: {events:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn serial_returns_err_on_full_object_checksum_mismatch() {
+        // Serial path, full-object mode: a wrong (non-composite) checksum is a
+        // hard error — a full-object mismatch cannot be a chunksize artifact.
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = vec![0x01; 3 * chunksize];
+
+        let mock =
+            MockSource::new(body).with_sha256("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        config.full_object_checksum = true;
+
+        let (result, _captured, _events) = run_transfer(config, mock).await;
+
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string().contains("additional checksum mismatch"),
+            "expected hard error on serial full-object mismatch, got: {err:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn serial_warns_on_multipart_checksum_mismatch() {
+        // Serial path, multipart mode: a wrong composite ("…-N") checksum is a
+        // soft warning (could be a chunksize difference), not a hard error. The
+        // ChecksumMismatch event is emitted and the source warning flag is set.
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..3 * chunksize).map(|i| (i % 97) as u8).collect();
+
+        // Composite-shaped ("…-3") but deliberately wrong value.
+        let mock = MockSource::new(body.clone())
+            .with_sha256("AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=-3");
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        // A soft mismatch does not fail the transfer; all bytes still flow.
+        assert!(
+            result.is_ok(),
+            "multipart mismatch must not hard-error: {result:?}"
+        );
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ChecksumMismatch { key } if key == "k")),
+            "expected a ChecksumMismatch event; got: {events:?}"
+        );
+        assert!(
+            mock.warning_set(),
+            "checksum mismatch must set the warning flag"
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_serial_returns_default_when_cancelled_before_start() {
+        // Direct call into transfer_serial with a pre-cancelled token exercises
+        // its own entry-time cancellation guard. (The public dispatcher has an
+        // identical earlier guard, so this branch is otherwise unreachable.)
+        let config = test_config(1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        let mock = MockSource::new(vec![0x11; 64]);
+        let source: Storage = Box::new(mock.clone());
+        let writer = VecWriter::new();
+        let buf = writer.buf();
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let result = transfer_serial(&config, source, "k", writer, token, stats_tx).await;
+
+        assert!(
+            result.is_ok(),
+            "cancelled serial transfer must yield Ok(default)"
+        );
+        assert!(buf.lock().unwrap().is_empty(), "nothing must be written");
+        assert_eq!(mock.get_calls(), 0, "no GET must be issued");
+    }
+
+    #[tokio::test]
+    async fn mock_source_real_return_methods_behave_as_expected() {
+        // The stdout-transfer source mock's trivial helper methods and the
+        // first-part HEAD path are not touched by every transfer test; pin
+        // their contracts directly.
+        use tokio::io::AsyncWriteExt;
+
+        // VecWriter::poll_shutdown is never driven by transfer() (it only
+        // flushes); exercise it directly.
+        let mut writer = VecWriter::new();
+        writer.shutdown().await.unwrap();
+
+        let mock = MockSource::new(b"hello".to_vec()).with_first_part_size(3);
+        assert!(!mock.is_local_storage());
+        assert!(mock.get_client().is_none());
+        assert!(mock.get_rate_limit_bandwidth().is_none());
+        assert_eq!(mock.get_local_path(), PathBuf::new());
+        let _tx = mock.get_stats_sender();
+        mock.send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+
+        // head_object_first_part honors the configured first-part size and
+        // records the call.
+        let head = mock
+            .head_object_first_part("k", None, None, None, SseCustomerKey { key: None }, None)
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(3));
+        assert_eq!(mock.head_first_part_calls(), 1);
     }
 }
