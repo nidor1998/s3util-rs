@@ -144,6 +144,73 @@ mod tests {
         std::fs::remove_dir_all(&tmp_dir).ok();
     }
 
+    /// `get-bucket-policy --policy-only` prints the inner policy JSON directly
+    /// (parsed and re-pretty-printed) rather than the `{"Policy": "..."}`
+    /// wrapper the default output uses.
+    #[tokio::test]
+    async fn get_policy_only_renders_inner_policy_json() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let policy_json = sample_policy(&bucket);
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let policy_file =
+            TestHelper::create_test_file(&tmp_dir, "policy.json", policy_json.as_bytes());
+
+        let put_out = run_s3util(&[
+            "put-bucket-policy",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            policy_file.to_str().unwrap(),
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put-bucket-policy should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        // get-bucket-policy --policy-only should emit the raw policy document,
+        // NOT the {"Policy": "<escaped-json-string>"} wrapper.
+        let get_out = run_s3util(&[
+            "get-bucket-policy",
+            "--policy-only",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(
+            get_out.status.success(),
+            "get-bucket-policy --policy-only should succeed; stderr: {}",
+            String::from_utf8_lossy(&get_out.stderr)
+        );
+        let json: serde_json::Value = serde_json::from_slice(&get_out.stdout)
+            .expect("get-bucket-policy --policy-only stdout must be JSON");
+        // The document itself is emitted (has Version/Statement), and it is NOT
+        // wrapped under a "Policy" key.
+        assert!(
+            json.get("Policy").is_none(),
+            "--policy-only must not wrap output under a Policy key; got: {json}"
+        );
+        assert_eq!(
+            json.get("Version").and_then(|v| v.as_str()),
+            Some("2012-10-17"),
+            "expected the inner policy document; got: {json}"
+        );
+        assert!(
+            json.get("Statement").is_some(),
+            "expected a Statement array in the inner policy; got: {json}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
     /// Round-trip: put (stdin) → get — verifies stdin path.
     #[tokio::test]
     async fn put_via_stdin_and_get_round_trip() {
@@ -223,6 +290,36 @@ mod tests {
             out.status.code(),
             Some(4),
             "get-bucket-policy on bucket without policy must exit 4 (NoSuchBucketPolicy)"
+        );
+    }
+
+    /// get-bucket-policy on a non-existent bucket should exit 4. S3 answers
+    /// `NoSuchBucket`, which `api::get_bucket_policy` classifies as
+    /// `HeadError::BucketNotFound` — a distinct arm from the `NoSuchBucketPolicy`
+    /// (bucket exists, no policy) case above, logged as "bucket … not found".
+    #[tokio::test]
+    async fn get_policy_on_missing_bucket_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let nonexistent = format!("s3util-nonexistent-{}", uuid::Uuid::new_v4());
+        let bucket_arg = format!("s3://{nonexistent}");
+
+        let out = run_s3util(&[
+            "get-bucket-policy",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+
+        assert!(
+            !out.status.success(),
+            "get-bucket-policy on a non-existent bucket should fail; stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            out.status.code(),
+            Some(4),
+            "get-bucket-policy on a non-existent bucket must exit 4 (NoSuchBucket → BucketNotFound)"
         );
     }
 

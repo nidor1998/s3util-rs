@@ -4312,4 +4312,185 @@ mod tests {
         assert_eq!(arr[0]["ChecksumAlgorithm"][0], "CRC64NVME");
         assert!(arr[0].get("LastModified").is_some());
     }
+
+    #[test]
+    fn put_object_annotation_to_json_emits_request_charged() {
+        // The `RequestCharged` branch fires only when the response carries the
+        // header (Requester-Pays buckets), which the shape test above omits.
+        use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+        use aws_sdk_s3::types::RequestCharged;
+
+        let out = PutObjectAnnotationOutput::builder()
+            .key("k")
+            .request_charged(RequestCharged::Requester)
+            .build();
+        let json = put_object_annotation_to_json(&out);
+        assert_eq!(
+            json["RequestCharged"],
+            Value::String(RequestCharged::Requester.as_str().to_string())
+        );
+    }
+
+    #[test]
+    fn get_object_annotation_to_json_emits_all_checksum_and_status_fields() {
+        // Exercises the CRC32/CRC32C/SHA1/SHA256 checksum branches plus the
+        // RequestCharged and ReplicationStatus branches, none of which the
+        // CRC64NVME-only shape test above reaches.
+        use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+        use aws_sdk_s3::primitives::ByteStream;
+        use aws_sdk_s3::types::{ReplicationStatus, RequestCharged};
+
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(ByteStream::from_static(b""))
+            .checksum_crc32("crc32val")
+            .checksum_crc32_c("crc32cval")
+            .checksum_sha1("sha1val")
+            .checksum_sha256("sha256val")
+            .request_charged(RequestCharged::Requester)
+            .replication_status(ReplicationStatus::Complete)
+            .build();
+        let json = get_object_annotation_to_json(&out);
+        assert_eq!(json["ChecksumCRC32"], Value::String("crc32val".into()));
+        assert_eq!(json["ChecksumCRC32C"], Value::String("crc32cval".into()));
+        assert_eq!(json["ChecksumSHA1"], Value::String("sha1val".into()));
+        assert_eq!(json["ChecksumSHA256"], Value::String("sha256val".into()));
+        assert_eq!(
+            json["RequestCharged"],
+            Value::String(RequestCharged::Requester.as_str().to_string())
+        );
+        assert_eq!(
+            json["ReplicationStatus"],
+            Value::String(ReplicationStatus::Complete.as_str().to_string())
+        );
+    }
+
+    #[test]
+    fn list_object_annotations_to_json_emits_explicit_null_branches() {
+        // With every top-level optional absent AND an annotation entry that has
+        // no ETag, the serializer must emit explicit `null`s (both the
+        // entry-level ETag and the top-level Count/Bucket/Key fields).
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::AnnotationEntry;
+
+        let entry = AnnotationEntry::builder()
+            .annotation_name("n")
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .size(10)
+            .build()
+            .unwrap();
+        let out = ListObjectAnnotationsOutput::builder()
+            .annotations(entry)
+            .build();
+        let json = list_object_annotations_to_json(&out);
+
+        assert!(json["AnnotationCount"].is_null());
+        assert!(json["Bucket"].is_null());
+        assert!(json["Key"].is_null());
+        assert!(json["RequestCharged"].is_null());
+        assert!(json["NextContinuationToken"].is_null());
+        assert_eq!(json["IsTruncated"], Value::Bool(false));
+
+        let arr = json["Annotations"]
+            .as_array()
+            .expect("Annotations is array");
+        assert_eq!(arr.len(), 1);
+        assert!(arr[0]["ETag"].is_null());
+    }
+
+    #[test]
+    fn list_object_annotations_to_json_emits_request_charged_and_truncation() {
+        // A present RequestCharged header and a NextContinuationToken exercise
+        // the `Some` arms; the token also flips IsTruncated to true.
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+        use aws_sdk_s3::types::RequestCharged;
+
+        let out = ListObjectAnnotationsOutput::builder()
+            .request_charged(RequestCharged::Requester)
+            .next_continuation_token("tok-123")
+            .build();
+        let json = list_object_annotations_to_json(&out);
+
+        assert_eq!(
+            json["RequestCharged"],
+            Value::String(RequestCharged::Requester.as_str().to_string())
+        );
+        assert_eq!(
+            json["NextContinuationToken"],
+            Value::String("tok-123".into())
+        );
+        assert_eq!(json["IsTruncated"], Value::Bool(true));
+        // No annotations set → empty array (not null).
+        assert_eq!(json["Annotations"], Value::Array(vec![]));
+    }
+
+    #[test]
+    fn get_bucket_logging_with_target_grant_email_address() {
+        // The AmazonCustomerByEmail grantee type populates `email_address`,
+        // which the CanonicalUser/Group grant tests never set.
+        use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+        use aws_sdk_s3::types::{
+            BucketLogsPermission, Grantee, LoggingEnabled, TargetGrant, Type as GranteeType,
+        };
+
+        let grantee = Grantee::builder()
+            .r#type(GranteeType::AmazonCustomerByEmail)
+            .email_address("logs@example.com")
+            .build()
+            .unwrap();
+        let grant = TargetGrant::builder()
+            .grantee(grantee)
+            .permission(BucketLogsPermission::Read)
+            .build();
+        let le = LoggingEnabled::builder()
+            .target_bucket("log-bucket")
+            .target_prefix("logs/")
+            .target_grants(grant)
+            .build()
+            .unwrap();
+        let out = GetBucketLoggingOutput::builder()
+            .logging_enabled(le)
+            .build();
+        let json = get_bucket_logging_to_json(&out);
+        let grantee_json = &json["LoggingEnabled"]["TargetGrants"][0]["Grantee"];
+        assert_eq!(
+            grantee_json["EmailAddress"],
+            Value::String("logs@example.com".into())
+        );
+        assert_eq!(
+            grantee_json["Type"],
+            Value::String(GranteeType::AmazonCustomerByEmail.as_str().to_string())
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_rule_with_deprecated_prefix_emits_it() {
+        // The rule-level `Prefix` field is the deprecated pre-filter form; it is
+        // distinct from `Filter.Prefix` and is only emitted when set directly on
+        // the rule.
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::dest-bucket")
+            .build()
+            .unwrap();
+        #[allow(deprecated)]
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .prefix("legacy/")
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/replication")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        assert_eq!(
+            json["ReplicationConfiguration"]["Rules"][0]["Prefix"],
+            Value::String("legacy/".into())
+        );
+    }
 }
