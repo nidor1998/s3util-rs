@@ -197,7 +197,7 @@ mod tests {
         let a = parse(&[
             "test",
             "create-bucket",
-            "s3://mybucket2-477378187151-ap-northeast-1-an",
+            "s3://mybucket2-11111111111-ap-northeast-1-an",
             "--bucket-namespace",
             "account-regional",
             "--create-bucket-configuration",

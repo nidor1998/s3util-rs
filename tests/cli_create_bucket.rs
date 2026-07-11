@@ -74,7 +74,7 @@ fn bucket_namespace_and_configuration_parse_together() {
     // credentials — not with the exit-2 clap usage error).
     let (ok, _stdout, _stderr, code) = run(s3util().args([
         "create-bucket",
-        "s3://mybucket2-477378187151-ap-northeast-1-an",
+        "s3://mybucket2-111111111-ap-northeast-1-an",
         "--bucket-namespace",
         "account-regional",
         "--create-bucket-configuration",

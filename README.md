@@ -795,7 +795,7 @@ s3util create-bucket \
     --bucket-namespace account-regional \
     --create-bucket-configuration LocationConstraint=ap-northeast-1 \
     --target-region ap-northeast-1 \
-    s3://mybucket2-477378187151-ap-northeast-1-an
+    s3://mybucket2-11111111-ap-northeast-1-an
 ```
 
 When `--bucket-namespace` is omitted, nothing new is sent and `create-bucket` behaves exactly as before.
