@@ -624,12 +624,14 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
 
 /// Issue `CreateBucket` for `bucket`.
 ///
-/// **Explicit configuration (account-regional buckets)**: when
-/// `bucket_namespace` and/or `location_constraint` are supplied (from
-/// `--bucket-namespace` / `--create-bucket-configuration`), they are sent
-/// verbatim and the region/name-derived configuration below is bypassed
-/// entirely. This is the path for account-level regional buckets, whose
-/// `LocationConstraint` must be given explicitly rather than inferred.
+/// **Explicit configuration (account-regional buckets)**: `bucket_namespace`
+/// and `location_constraint` (from `--bucket-namespace` /
+/// `--create-bucket-configuration`) are a both-or-neither pair. When both are
+/// supplied they are sent verbatim and the region/name-derived configuration
+/// below is bypassed entirely — this is the path for account-level regional
+/// buckets, whose `LocationConstraint` must be given explicitly rather than
+/// inferred. Supplying only one is an error (the CLI already enforces the
+/// pairing; this guards direct library callers).
 ///
 /// **Directory buckets (S3 Express One Zone, `--x-s3` suffix)** require a
 /// different `CreateBucketConfiguration` (`Location` + `Bucket`) than
@@ -649,20 +651,21 @@ pub async fn create_bucket(
     bucket_namespace: Option<BucketNamespace>,
     location_constraint: Option<&str>,
 ) -> Result<CreateBucketOutput> {
+    // `bucket_namespace` and `location_constraint` are a both-or-neither pair;
+    // reject a partial config so it can't silently bypass the derived paths.
+    validate_explicit_config_pairing(bucket_namespace.as_ref(), location_constraint)?;
+
     let mut req = client.create_bucket().bucket(bucket);
 
-    if bucket_namespace.is_some() || location_constraint.is_some() {
+    if let (Some(namespace), Some(location)) = (bucket_namespace, location_constraint) {
         // Explicit account-regional configuration takes precedence over the
         // directory-bucket and region-derived paths below.
-        if let Some(namespace) = bucket_namespace {
-            req = req.bucket_namespace(namespace);
-        }
-        if let Some(location) = location_constraint {
-            let cfg = CreateBucketConfiguration::builder()
-                .location_constraint(BucketLocationConstraint::from(location))
-                .build();
-            req = req.create_bucket_configuration(cfg);
-        }
+        let cfg = CreateBucketConfiguration::builder()
+            .location_constraint(BucketLocationConstraint::from(location))
+            .build();
+        req = req
+            .bucket_namespace(namespace)
+            .create_bucket_configuration(cfg);
     } else if let Some(loc) = parse_directory_bucket_zone(bucket) {
         let location = LocationInfo::builder()
             .r#type(loc.location_type)
@@ -691,6 +694,24 @@ pub async fn create_bucket(
     req.send()
         .await
         .with_context(|| format!("create-bucket on s3://{bucket}"))
+}
+
+/// `--bucket-namespace` / `--create-bucket-configuration` (account-regional
+/// buckets) form a both-or-neither pair. Returns an error when exactly one is
+/// supplied, so a partial configuration cannot silently bypass the
+/// directory-bucket / region-derived paths in [`create_bucket`]. The CLI
+/// already enforces this pairing; this guards direct library callers.
+fn validate_explicit_config_pairing(
+    bucket_namespace: Option<&BucketNamespace>,
+    location_constraint: Option<&str>,
+) -> Result<()> {
+    if bucket_namespace.is_some() != location_constraint.is_some() {
+        return Err(anyhow::anyhow!(
+            "create-bucket: bucket_namespace and location_constraint must be supplied \
+             together (account-regional buckets require both); received only one"
+        ));
+    }
+    Ok(())
 }
 
 /// Parsed zone information for an S3 Express One Zone directory bucket
@@ -1648,6 +1669,31 @@ mod tests {
     #[test]
     fn get_bucket_policy_not_found_codes_pinned() {
         assert_eq!(GET_BUCKET_POLICY_NOT_FOUND_CODES, &["NoSuchBucketPolicy"]);
+    }
+
+    #[test]
+    fn validate_explicit_config_pairing_accepts_both_or_neither() {
+        // Neither supplied → derived path is used.
+        assert!(validate_explicit_config_pairing(None, None).is_ok());
+        // Both supplied → explicit account-regional path is used.
+        assert!(
+            validate_explicit_config_pairing(
+                Some(&BucketNamespace::AccountRegional),
+                Some("ap-northeast-1"),
+            )
+            .is_ok()
+        );
+    }
+
+    #[test]
+    fn validate_explicit_config_pairing_rejects_only_one() {
+        // A partial config must be rejected rather than silently bypass the
+        // directory/region-derived paths.
+        assert!(
+            validate_explicit_config_pairing(Some(&BucketNamespace::AccountRegional), None)
+                .is_err()
+        );
+        assert!(validate_explicit_config_pairing(None, Some("ap-northeast-1")).is_err());
     }
 
     #[test]
