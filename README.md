@@ -139,7 +139,7 @@ machinery.
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
 | `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
 | `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
-| `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; exit 3 if tagging step fails after create |
+| `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; `--bucket-namespace account-regional` + `--create-bucket-configuration LocationConstraint=<region>` for account-level regional buckets; exit 3 if tagging step fails after create |
 | `head-bucket`            | Prints `HeadBucket` response as JSON                                                          |
 | `delete-bucket`          | Deletes an empty bucket; silent on success                                                    |
 | `put-bucket-policy`      | Sets bucket policy from a file path or `-` (stdin); body sent verbatim, no client-side validation; silent |
@@ -180,7 +180,7 @@ machinery.
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
 | `presign`                                | Generates a pre-signed `GetObject` URL (GET only) and prints it to stdout; signed locally with no S3 API call, so bucket/object existence is not verified; `--expires-in <SECONDS>` sets validity (default 3600, max 604800 = 7 days) |
 | `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
-| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename), then re-reads the saved file and recomputes its ETag/additional checksum from disk (like `cp`) — a post-write mismatch leaves the file in place and exits 1; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
+| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum it can recompute — an unsupported algorithm such as SHA512 is treated as an error; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename), then re-reads the saved file and recomputes its ETag/additional checksum from disk (like `cp`) — a post-write mismatch leaves the file in place and exits 1; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `list-object-annotations`                | Lists annotations on an S3 object via `ListObjectAnnotations`; makes a single request (up to 1000 results, pagination is not followed); supports `--annotation-prefix`, `--target-version-id`; outputs AWS-CLI-shape JSON on stdout; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 | `delete-object-annotation`               | Removes a named annotation from an S3 object via `DeleteObjectAnnotation`; supports `--annotation-name` (required), `--target-version-id`, `--target-request-payer`, `--dry-run`; produces no output on success; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 
@@ -589,6 +589,7 @@ Options:
 - If `content-length` is present and differs from the received byte count → error (exit 1).
 - If the object is encrypted with `AES256`, the ETag (MD5) is verified against the payload.
 - If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload.
+- If S3 returns a checksum whose algorithm `s3util` cannot recompute (e.g. `SHA512`, `MD5`, `XXHASH*`), it is treated as an integrity error (exit 1) rather than being skipped.
 - If neither ETag nor additional checksum verification is applicable → a warning is logged but exit code remains 0.
 
 **Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `ObjectVersionId`, `RequestCharged`.
@@ -784,6 +785,20 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
 
 `create-bucket` also accepts directory-bucket names. The zone ID is parsed from the name (`<base>--<zone-id>--x-s3`) and the appropriate `Location`/`Bucket` configuration is sent. The zone type is inferred from the zone-ID shape — at most one hyphen is treated as an Availability Zone (e.g. `apne1-az4`), two or more as a Local Zone (e.g. `usw2-lax1-az1`). The active region (`--target-region` / `AWS_REGION` / profile) must match the zone's region; otherwise S3 will reject the request.
+
+### Account-level regional buckets
+
+To create an account-level regional bucket, pass `--bucket-namespace account-regional` together with `--create-bucket-configuration LocationConstraint=<region>`. `account-regional` is the only accepted `--bucket-namespace` value, and `LocationConstraint=<region>` is the only accepted `--create-bucket-configuration` shorthand. The two options are used together — specifying one without the other is rejected. When both are given they are sent to `CreateBucket` verbatim, bypassing the region-derived and directory-bucket configuration described above; align the `LocationConstraint` region with the client's resolved region (`--target-region` / `AWS_REGION` / profile).
+
+```bash
+s3util create-bucket \
+    --bucket-namespace account-regional \
+    --create-bucket-configuration LocationConstraint=ap-northeast-1 \
+    --target-region ap-northeast-1 \
+    s3://mybucket2-477378187151-ap-northeast-1-an
+```
+
+When `--bucket-namespace` is omitted, nothing new is sent and `create-bucket` behaves exactly as before.
 
 ### S3 Permissions
 
