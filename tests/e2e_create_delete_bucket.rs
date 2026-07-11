@@ -93,6 +93,110 @@ mod tests {
         );
     }
 
+    /// create-bucket + delete-bucket round-trip for an account-level regional
+    /// bucket (`--bucket-namespace account-regional`).
+    ///
+    /// Account-regional buckets are named `<prefix>-<accountid>-<region>-an`
+    /// and require the account to be enrolled in the account-regional
+    /// namespace. The account id and the location constraint are read from the
+    /// environment so the test can target any enrolled account/region without
+    /// hardcoding them:
+    ///
+    ///   * `S3UTIL_E2E_ACCOUNT_ID`          — 12-digit AWS account id (required;
+    ///     the test is skipped when unset).
+    ///   * `S3UTIL_E2E_LOCATION_CONSTRAINT` — region for the LocationConstraint
+    ///     and the client (optional; defaults to `REGION`).
+    ///
+    /// Exercises the explicit-configuration branch of `api::create_bucket`
+    /// end-to-end: `--bucket-namespace account-regional` together with
+    /// `--create-bucket-configuration LocationConstraint=<region>`.
+    #[tokio::test]
+    async fn create_and_delete_account_regional_bucket_round_trip() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let Ok(account_id) = std::env::var("S3UTIL_E2E_ACCOUNT_ID") else {
+            eprintln!(
+                "skipping create_and_delete_account_regional_bucket_round_trip: \
+                 S3UTIL_E2E_ACCOUNT_ID is not set"
+            );
+            return;
+        };
+        let region =
+            std::env::var("S3UTIL_E2E_LOCATION_CONSTRAINT").unwrap_or_else(|_| REGION.to_string());
+
+        // Account-regional name: <prefix>-<accountid>-<region>-an. Keep the
+        // prefix short so the full name stays within the 63-char limit.
+        let prefix = format!(
+            "s3util-e2e-{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
+        let bucket = format!("{prefix}-{account_id}-{region}-an");
+        let bucket_arg = format!("s3://{bucket}");
+        let create_bucket_configuration = format!("LocationConstraint={region}");
+
+        let create_output = run_s3util(&[
+            "create-bucket",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            &region,
+            "--bucket-namespace",
+            "account-regional",
+            "--create-bucket-configuration",
+            &create_bucket_configuration,
+            &bucket_arg,
+        ]);
+
+        if !create_output.status.success() {
+            // Best-effort cleanup in case the bucket was partially created.
+            let _ = run_s3util(&[
+                "delete-bucket",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-region",
+                &region,
+                &bucket_arg,
+            ]);
+            panic!(
+                "create-bucket (account-regional) should succeed; stderr: {}",
+                String::from_utf8_lossy(&create_output.stderr)
+            );
+        }
+
+        // The bucket is addressed by its full account-regional name; head-bucket
+        // in the same region must report it as existing.
+        let head_output = run_s3util(&[
+            "head-bucket",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            &region,
+            &bucket_arg,
+        ]);
+
+        // Delete before asserting on head so the bucket is cleaned up even if
+        // the head assertion fails.
+        let delete_output = run_s3util(&[
+            "delete-bucket",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--target-region",
+            &region,
+            &bucket_arg,
+        ]);
+
+        assert!(
+            head_output.status.success(),
+            "head-bucket on the account-regional bucket should succeed; stderr: {}",
+            String::from_utf8_lossy(&head_output.stderr)
+        );
+        assert!(
+            delete_output.status.success(),
+            "delete-bucket (account-regional) should succeed; stderr: {}",
+            String::from_utf8_lossy(&delete_output.stderr)
+        );
+    }
+
     /// create-bucket with --tagging applies tags on success.
     #[tokio::test]
     async fn create_bucket_with_tagging_applies_tags() {

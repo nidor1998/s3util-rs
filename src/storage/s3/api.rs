@@ -64,8 +64,8 @@ use aws_sdk_s3::presigning::PresigningConfig;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::types::{
     AccelerateConfiguration, BucketInfo, BucketLifecycleConfiguration, BucketLocationConstraint,
-    BucketLoggingStatus, BucketType, BucketVersioningStatus, ChecksumMode, CorsConfiguration,
-    CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
+    BucketLoggingStatus, BucketNamespace, BucketType, BucketVersioningStatus, ChecksumMode,
+    CorsConfiguration, CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
     NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
     RequestPayer, RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration,
     Tagging, VersioningConfiguration, WebsiteConfiguration,
@@ -624,6 +624,13 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
 
 /// Issue `CreateBucket` for `bucket`.
 ///
+/// **Explicit configuration (account-regional buckets)**: when
+/// `bucket_namespace` and/or `location_constraint` are supplied (from
+/// `--bucket-namespace` / `--create-bucket-configuration`), they are sent
+/// verbatim and the region/name-derived configuration below is bypassed
+/// entirely. This is the path for account-level regional buckets, whose
+/// `LocationConstraint` must be given explicitly rather than inferred.
+///
 /// **Directory buckets (S3 Express One Zone, `--x-s3` suffix)** require a
 /// different `CreateBucketConfiguration` (`Location` + `Bucket`) than
 /// general-purpose buckets (`LocationConstraint`). The bucket name itself
@@ -636,10 +643,27 @@ pub async fn head_bucket(client: &Client, bucket: &str) -> Result<HeadBucketOutp
 /// a `LocationConstraint` of `us-east-1` (the API was designed before that
 /// region existed), so the constraint is omitted there. It is also omitted
 /// when the client has no resolved region.
-pub async fn create_bucket(client: &Client, bucket: &str) -> Result<CreateBucketOutput> {
+pub async fn create_bucket(
+    client: &Client,
+    bucket: &str,
+    bucket_namespace: Option<BucketNamespace>,
+    location_constraint: Option<&str>,
+) -> Result<CreateBucketOutput> {
     let mut req = client.create_bucket().bucket(bucket);
 
-    if let Some(loc) = parse_directory_bucket_zone(bucket) {
+    if bucket_namespace.is_some() || location_constraint.is_some() {
+        // Explicit account-regional configuration takes precedence over the
+        // directory-bucket and region-derived paths below.
+        if let Some(namespace) = bucket_namespace {
+            req = req.bucket_namespace(namespace);
+        }
+        if let Some(location) = location_constraint {
+            let cfg = CreateBucketConfiguration::builder()
+                .location_constraint(BucketLocationConstraint::from(location))
+                .build();
+            req = req.create_bucket_configuration(cfg);
+        }
+    } else if let Some(loc) = parse_directory_bucket_zone(bucket) {
         let location = LocationInfo::builder()
             .r#type(loc.location_type)
             .name(loc.zone_id)

@@ -1,5 +1,7 @@
+pub mod bucket_namespace;
 pub mod canned_acl;
 pub mod checksum_algorithm;
+pub mod create_bucket_configuration;
 pub mod file_exist;
 pub mod human_bytes;
 pub mod metadata;

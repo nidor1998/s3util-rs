@@ -139,7 +139,7 @@ machinery.
 | `put-object-tagging`     | Replaces all tags from `--tagging "k=v&k2=v2"`; silent; supports `--source-version-id`       |
 | `get-object-tagging`     | Prints object tags as JSON (`{"TagSet": [...], "VersionId": "..."}`); supports `--source-version-id` |
 | `delete-object-tagging`  | Removes all tags from an object; silent; supports `--source-version-id`                       |
-| `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; exit 3 if tagging step fails after create |
+| `create-bucket`          | Creates a bucket; LocationConstraint from the SDK client's resolved region (`--target-region`, `AWS_REGION`, or profile); optional `--tagging`; `--bucket-namespace account-regional` + `--create-bucket-configuration LocationConstraint=<region>` for account-level regional buckets; exit 3 if tagging step fails after create |
 | `head-bucket`            | Prints `HeadBucket` response as JSON                                                          |
 | `delete-bucket`          | Deletes an empty bucket; silent on success                                                    |
 | `put-bucket-policy`      | Sets bucket policy from a file path or `-` (stdin); body sent verbatim, no client-side validation; silent |
@@ -784,6 +784,20 @@ When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's 
 Directory buckets (`--x-s3` suffix) are automatically detected. Some S3 features behave differently on Express One Zone (for example, default additional-checksum handling); `--disable-express-one-zone-additional-checksum` overrides `s3util`'s default if your bucket policy demands it.
 
 `create-bucket` also accepts directory-bucket names. The zone ID is parsed from the name (`<base>--<zone-id>--x-s3`) and the appropriate `Location`/`Bucket` configuration is sent. The zone type is inferred from the zone-ID shape — at most one hyphen is treated as an Availability Zone (e.g. `apne1-az4`), two or more as a Local Zone (e.g. `usw2-lax1-az1`). The active region (`--target-region` / `AWS_REGION` / profile) must match the zone's region; otherwise S3 will reject the request.
+
+### Account-level regional buckets
+
+To create an account-level regional bucket, pass `--bucket-namespace account-regional` together with `--create-bucket-configuration LocationConstraint=<region>`. `account-regional` is the only accepted `--bucket-namespace` value, and `LocationConstraint=<region>` is the only accepted `--create-bucket-configuration` shorthand. The two options are used together — specifying one without the other is rejected. When both are given they are sent to `CreateBucket` verbatim, bypassing the region-derived and directory-bucket configuration described above; align the `LocationConstraint` region with the client's resolved region (`--target-region` / `AWS_REGION` / profile).
+
+```bash
+s3util create-bucket \
+    --bucket-namespace account-regional \
+    --create-bucket-configuration LocationConstraint=ap-northeast-1 \
+    --target-region ap-northeast-1 \
+    s3://mybucket2-477378187151-ap-northeast-1-an
+```
+
+When `--bucket-namespace` is omitted, nothing new is sent and `create-bucket` behaves exactly as before.
 
 ### S3 Permissions
 

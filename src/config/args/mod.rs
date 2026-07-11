@@ -160,6 +160,9 @@ pub enum Commands {
     ///
     /// For general-purpose buckets, the location constraint is derived from the
     /// resolved region (--target-region, AWS_REGION, or the active profile's region).
+    ///
+    /// For account-level regional buckets, pass `--bucket-namespace account-regional`
+    /// together with `--create-bucket-configuration LocationConstraint=<region>`.
     #[command(display_order = 8)]
     CreateBucket(CreateBucketArgs),
     /// Delete an S3 bucket (must be empty)
