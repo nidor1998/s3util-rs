@@ -60,6 +60,25 @@ pub async fn transfer(
     // head_object is read in both branches before the dispatch.
     let source_version_id = head_object_output.version_id().map(String::from);
 
+    // Pin every subsequent read of the source to the version this HEAD saw.
+    //
+    // Without this the first GET asked for "latest", so an overwrite landing
+    // between the HEAD and that GET produced a copy of the NEW object truncated
+    // to the OLD object's length: the size and part plan come from the HEAD,
+    // parts 2+ are pinned to the first GET's version, and `validate_content_range`
+    // compares only start/end — never the total — so nothing detected it. The
+    // resulting ETag mismatch is a warning for remote sources and is skipped
+    // outright under SSE-KMS/SSE-C, so `cp` could report success on a truncated
+    // object. It also kept `TransferOutcome.source_version_id` consistent with
+    // the bytes actually copied, which is what `mv` deletes.
+    //
+    // On an unversioned bucket HEAD returns no version-id, so this stays None
+    // and behaviour is unchanged. An explicit --source-version-id still wins.
+    let effective_version_id = config
+        .version_id
+        .clone()
+        .or_else(|| source_version_id.clone());
+
     let source_size = head_object_output.content_length().unwrap_or(0);
     let source_tag_count = head_object_output.tag_count();
 
@@ -69,7 +88,7 @@ pub async fn transfer(
         config,
         source_size,
         source_key,
-        config.version_id.clone(),
+        effective_version_id.clone(),
     )
     .await?;
 
@@ -100,7 +119,7 @@ pub async fn transfer(
         source
             .get_object(
                 source_key,
-                config.version_id.clone(),
+                effective_version_id.clone(),
                 config.additional_checksum_mode.clone(),
                 range.clone(),
                 config.source_sse_c.clone(),
@@ -140,7 +159,7 @@ pub async fn transfer(
         None
     } else {
         let tagging_output = source_clone
-            .get_object_tagging(source_key, config.version_id.clone())
+            .get_object_tagging(source_key, effective_version_id.clone())
             .await
             .context(format!("failed to get source object tagging: {source_key}"))?;
         if tagging_output.tag_set().is_empty() {
@@ -177,7 +196,7 @@ pub async fn transfer(
         &get_object_output,
         range.as_deref(),
         source_key,
-        config.version_id.clone(),
+        effective_version_id.clone(),
         checksum_algorithm_slice,
     )
     .await;
@@ -486,6 +505,21 @@ mod tests {
     #[derive(Clone)]
     struct MockSource {
         version_id: Option<String>,
+        /// Records the version-id each `get_object` call was issued with, so a
+        /// test can assert the first chunk is pinned to the HEAD-time version.
+        get_object_version_ids: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    }
+
+    impl MockSource {
+        fn new(version_id: Option<String>) -> Self {
+            Self {
+                version_id,
+                get_object_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
+            }
+        }
+        fn recorded_get_object_version_ids(&self) -> Vec<Option<String>> {
+            self.get_object_version_ids.lock().unwrap().clone()
+        }
     }
 
     #[async_trait]
@@ -499,13 +533,14 @@ mod tests {
         async fn get_object(
             &self,
             _key: &str,
-            _version_id: Option<String>,
+            version_id: Option<String>,
             _checksum_mode: Option<ChecksumMode>,
             _range: Option<String>,
             _sse_c: Option<String>,
             _sse_c_key: SseCustomerKey,
             _sse_c_key_md5: Option<String>,
         ) -> Result<GetObjectOutput> {
+            self.get_object_version_ids.lock().unwrap().push(version_id);
             Ok(GetObjectOutput::builder()
                 .body(ByteStream::from(b"data".to_vec()))
                 .content_length(4)
@@ -825,9 +860,7 @@ mod tests {
     #[tokio::test]
     async fn transfer_captures_source_version_id_from_head_object() {
         let config = minimal_config(false);
-        let source: Storage = Box::new(MockSource {
-            version_id: Some("V123".to_string()),
-        });
+        let source: Storage = Box::new(MockSource::new(Some("V123".to_string())));
         let target: Storage = Box::new(MockTarget);
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -841,10 +874,67 @@ mod tests {
         assert_eq!(outcome.source_version_id.as_deref(), Some("V123"));
     }
 
+    /// The first GET must be pinned to the version the HEAD observed.
+    ///
+    /// Without the pin it asked for "latest", so an overwrite landing between
+    /// the HEAD and that GET produced a copy of the NEW object truncated to the
+    /// OLD object's length — the size and part plan come from the HEAD, and
+    /// `validate_content_range` compares only start/end, never the total, so
+    /// nothing detected it.
+    #[tokio::test]
+    async fn first_get_is_pinned_to_the_head_time_version() {
+        let config = minimal_config(false);
+        let mock = MockSource::new(Some("V123".to_string()));
+        let recorder = mock.clone();
+        let source: Storage = Box::new(mock);
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        let recorded = recorder.recorded_get_object_version_ids();
+        assert!(!recorded.is_empty(), "get_object must have been called");
+        for version_id in &recorded {
+            assert_eq!(
+                version_id.as_deref(),
+                Some("V123"),
+                "every source read must be pinned to the HEAD-time version, got: {recorded:?}"
+            );
+        }
+    }
+
+    /// On an unversioned bucket HEAD reports no version-id, so the pin stays
+    /// None and the request shape is unchanged.
+    #[tokio::test]
+    async fn first_get_is_unpinned_when_the_bucket_is_unversioned() {
+        let config = minimal_config(false);
+        let mock = MockSource::new(None);
+        let recorder = mock.clone();
+        let source: Storage = Box::new(mock);
+        let target: Storage = Box::new(MockTarget);
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        transfer(
+            &config, source, target, "src/key", "dst/key", token, stats_tx,
+        )
+        .await
+        .unwrap();
+
+        for version_id in recorder.recorded_get_object_version_ids() {
+            assert_eq!(version_id, None);
+        }
+    }
+
     #[tokio::test]
     async fn transfer_captures_none_when_head_object_has_no_version_id() {
         let config = minimal_config(false);
-        let source: Storage = Box::new(MockSource { version_id: None });
+        let source: Storage = Box::new(MockSource::new(None));
         let target: Storage = Box::new(MockTarget);
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -863,7 +953,7 @@ mod tests {
         // Token cancelled before transfer() runs ⇒ transfer returns the default
         // outcome immediately, without making any source/target call.
         let config = minimal_config(false);
-        let source: Storage = Box::new(MockSource { version_id: None });
+        let source: Storage = Box::new(MockSource::new(None));
         let target: Storage = Box::new(MockTarget);
         let token = create_pipeline_cancellation_token();
         token.cancel();
@@ -884,9 +974,7 @@ mod tests {
         // Server-side copy bypasses the source GET — version-id capture comes
         // from the head_object response identically to the download+upload path.
         let config = minimal_config(true);
-        let source: Storage = Box::new(MockSource {
-            version_id: Some("V456".to_string()),
-        });
+        let source: Storage = Box::new(MockSource::new(Some("V456".to_string())));
         let target: Storage = Box::new(MockTarget);
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -944,9 +1032,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_source_real_return_methods_behave_as_expected() {
-        let source = MockSource {
-            version_id: Some("v1".to_string()),
-        };
+        let source = MockSource::new(Some("v1".to_string()));
 
         assert!(!source.is_local_storage());
         assert!(!source.is_express_onezone_storage());
@@ -970,7 +1056,7 @@ mod tests {
         let put_err = source
             .put_object(
                 "k",
-                Box::new(MockSource { version_id: None }),
+                Box::new(MockSource::new(None)),
                 "src",
                 0,
                 None,
@@ -995,7 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_source_unimplemented_methods_panic() {
-        let source = MockSource { version_id: None };
+        let source = MockSource::new(None);
 
         assert_future_panics(source.get_object_tagging("k", None)).await;
         assert_future_panics(source.head_object_first_part(
@@ -1034,7 +1120,7 @@ mod tests {
         let put = target
             .put_object(
                 "k",
-                Box::new(MockSource { version_id: None }),
+                Box::new(MockSource::new(None)),
                 "src",
                 0,
                 None,
@@ -1630,7 +1716,7 @@ mod tests {
         let mut config = minimal_config(false);
         config.enable_sync_object_annotations = true;
 
-        let source: Storage = Box::new(MockSource { version_id: None });
+        let source: Storage = Box::new(MockSource::new(None));
         let err = log_dry_run_annotation_sync(&config, &source, "src/key")
             .await
             .unwrap_err();
@@ -1930,7 +2016,7 @@ mod tests {
         let put_err = source
             .put_object(
                 "k",
-                Box::new(MockSource { version_id: None }),
+                Box::new(MockSource::new(None)),
                 "src",
                 0,
                 None,
@@ -2393,9 +2479,7 @@ mod tests {
         // call was skipped.
         let mut config = minimal_config(false);
         config.disable_tagging = true;
-        let source: Storage = Box::new(MockSource {
-            version_id: Some("V1".to_string()),
-        });
+        let source: Storage = Box::new(MockSource::new(Some("V1".to_string())));
         let target: Storage = Box::new(MockTarget);
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -2412,7 +2496,7 @@ mod tests {
     #[tokio::test]
     async fn transfer_warns_but_succeeds_when_target_returns_no_etag() {
         let config = minimal_config(false);
-        let source: Storage = Box::new(MockSource { version_id: None });
+        let source: Storage = Box::new(MockSource::new(None));
         let target: Storage = Box::new(NoEtagTarget);
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();

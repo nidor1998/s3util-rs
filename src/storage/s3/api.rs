@@ -68,7 +68,7 @@ use aws_sdk_s3::types::{
     CorsConfiguration, CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
     NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
     RequestPayer, RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration,
-    Tagging, VersioningConfiguration, WebsiteConfiguration,
+    Tagging, TransitionDefaultMinimumObjectSize, VersioningConfiguration, WebsiteConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
@@ -982,11 +982,13 @@ pub async fn put_bucket_lifecycle_configuration(
     client: &Client,
     bucket: &str,
     cfg: BucketLifecycleConfiguration,
+    transition_default_minimum_object_size: Option<TransitionDefaultMinimumObjectSize>,
 ) -> Result<PutBucketLifecycleConfigurationOutput> {
     client
         .put_bucket_lifecycle_configuration()
         .bucket(bucket)
         .lifecycle_configuration(cfg)
+        .set_transition_default_minimum_object_size(transition_default_minimum_object_size)
         .send()
         .await
         .with_context(|| format!("put-bucket-lifecycle-configuration on s3://{bucket}"))

@@ -25,6 +25,22 @@ pub struct PutBucketLifecycleConfigurationArgs {
     )]
     pub lifecycle_configuration: Option<String>,
 
+    /// Bucket-level default minimum object size for transitions.
+    ///
+    /// `get-bucket-lifecycle-configuration` reports this at the top level of its
+    /// JSON, but S3 takes it as a request parameter rather than a member of the
+    /// lifecycle configuration itself (the AWS CLI exposes it the same way), so
+    /// it cannot be supplied inside the configuration file. Without it S3
+    /// applies its own default of `all_storage_classes_128K`, which silently
+    /// resets a bucket set to `varies_by_storage_class`.
+    #[arg(
+        long,
+        env,
+        value_parser = ["varies_by_storage_class", "all_storage_classes_128K"],
+        help_heading = "General"
+    )]
+    pub transition_default_minimum_object_size: Option<String>,
+
     /// Show what would happen without performing any S3 mutating operation.
     #[arg(long, env, default_value_t = false, help_heading = "General")]
     pub dry_run: bool,
@@ -160,5 +176,107 @@ mod tests {
         ]);
         let err = a.bucket_name().unwrap_err();
         assert!(err.contains("must be s3://"), "unexpected err: {err}");
+    }
+}
+
+/// `--transition-default-minimum-object-size` exists because
+/// `get-bucket-lifecycle-configuration` reports the value at the top level of
+/// its JSON while S3 accepts it only as a request parameter. Without the flag,
+/// putting back that same output silently reset the bucket to S3's default of
+/// `all_storage_classes_128K`.
+#[cfg(test)]
+mod transition_default_minimum_object_size_tests {
+    use super::tests_support::parse_args;
+
+    #[test]
+    fn defaults_to_none_so_s3_keeps_its_own_default() {
+        let args = parse_args(&[
+            "test",
+            "put-bucket-lifecycle-configuration",
+            "s3://b",
+            "cfg.json",
+        ]);
+        assert!(
+            args.transition_default_minimum_object_size.is_none(),
+            "the parameter must be omitted unless the user asks for it"
+        );
+    }
+
+    #[test]
+    fn accepts_both_values_s3_defines() {
+        for value in ["varies_by_storage_class", "all_storage_classes_128K"] {
+            let args = parse_args(&[
+                "test",
+                "put-bucket-lifecycle-configuration",
+                "s3://b",
+                "cfg.json",
+                "--transition-default-minimum-object-size",
+                value,
+            ]);
+            assert_eq!(
+                args.transition_default_minimum_object_size.as_deref(),
+                Some(value)
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_an_unknown_value() {
+        assert!(
+            super::tests_support::try_parse_args(&[
+                "test",
+                "put-bucket-lifecycle-configuration",
+                "s3://b",
+                "cfg.json",
+                "--transition-default-minimum-object-size",
+                "128KB",
+            ])
+            .is_err(),
+            "only the two values S3 defines may be accepted"
+        );
+    }
+
+    /// The value must map onto the SDK enum, not just parse as a string.
+    #[test]
+    fn values_map_onto_the_sdk_enum() {
+        use aws_sdk_s3::types::TransitionDefaultMinimumObjectSize;
+        assert_eq!(
+            TransitionDefaultMinimumObjectSize::from("varies_by_storage_class"),
+            TransitionDefaultMinimumObjectSize::VariesByStorageClass
+        );
+        assert_eq!(
+            TransitionDefaultMinimumObjectSize::from("all_storage_classes_128K"),
+            TransitionDefaultMinimumObjectSize::AllStorageClasses128K
+        );
+    }
+}
+
+#[cfg(test)]
+mod tests_support {
+    use super::PutBucketLifecycleConfigurationArgs;
+    use clap::Parser;
+
+    #[derive(Parser, Debug)]
+    #[command(name = "test")]
+    struct SupportCli {
+        #[command(subcommand)]
+        cmd: SupportSub,
+    }
+
+    #[derive(clap::Subcommand, Debug)]
+    enum SupportSub {
+        PutBucketLifecycleConfiguration(PutBucketLifecycleConfigurationArgs),
+    }
+
+    pub(super) fn parse_args(args: &[&str]) -> PutBucketLifecycleConfigurationArgs {
+        try_parse_args(args).unwrap()
+    }
+
+    pub(super) fn try_parse_args(
+        args: &[&str],
+    ) -> Result<PutBucketLifecycleConfigurationArgs, clap::Error> {
+        let cli = SupportCli::try_parse_from(args)?;
+        let SupportSub::PutBucketLifecycleConfiguration(a) = cli.cmd;
+        Ok(a)
     }
 }

@@ -99,6 +99,29 @@ fn stream_upload_metadata(
     Some(metadata)
 }
 
+/// Classify an ETag mismatch as a chunking artifact rather than corruption.
+///
+/// True whenever the two ETags have different SHAPES, not only when the source
+/// is multipart. A single-part source at or above `multipart_threshold` (S3
+/// accepts a single PUT up to 5 GiB) is re-uploaded here as multipart, so its
+/// plain MD5 can never equal the composite we compute — reporting that as
+/// "may be corrupted" was wrong for every such object, and the message it
+/// produced offered no way forward. Two plain MD5s that differ, by contrast,
+/// really are a content mismatch.
+///
+/// A locally-sourced object precalculates its ETag, so a mismatch there is
+/// always a genuine corruption and the caller errors before consulting this.
+fn is_chunksize_related_e_tag_mismatch(
+    source_remote_storage: bool,
+    source_e_tag: &Option<String>,
+    target_e_tag: &Option<String>,
+    auto_chunksize_enabled: bool,
+) -> bool {
+    let both_single_part =
+        !is_multipart_upload_e_tag(source_e_tag) && !is_multipart_upload_e_tag(target_e_tag);
+    source_remote_storage && !both_single_part && !auto_chunksize_enabled
+}
+
 pub struct MutipartEtags {
     pub digest: Vec<u8>,
     pub part_number: i32,
@@ -630,9 +653,12 @@ impl UploadManager {
                         "skip e_tag verification"
                     );
                 } else {
-                    let chunksize_related = source_remote_storage
-                        && is_multipart_upload_e_tag(source_e_tag)
-                        && !self.is_auto_chunksize_enabled();
+                    let chunksize_related = is_chunksize_related_e_tag_mismatch(
+                        source_remote_storage,
+                        source_e_tag,
+                        target_e_tag,
+                        self.is_auto_chunksize_enabled(),
+                    );
                     let message = if chunksize_related {
                         format!("{} {}", "e_tag", MISMATCH_WARNING_WITH_HELP)
                     } else {
@@ -1972,9 +1998,11 @@ impl UploadManager {
                 .set_if_none_match(self.if_none_match.clone())
                 .send()
                 .await?;
-            let _ = self
-                .stats_sender
-                .send_blocking(SyncStatistics::SyncBytes(source_total_size));
+            // No SyncBytes here: the unconditional send after this if/else
+            // covers both branches. Emitting it in the copy branch as well
+            // double-counted every single-part server-side copy, so the
+            // progress indicator and the summary reported twice the object
+            // size as transferred.
             convert_copy_to_put_object_output(copy_object_output, source_total_size as i64)
         } else {
             let builder = self
@@ -2749,5 +2777,89 @@ mod stream_upload_metadata_tests {
             .expect("the flag alone must produce a metadata map");
         assert_eq!(built.len(), 1);
         assert!(built.contains_key("s3sync_origin_last_modified"));
+    }
+}
+
+#[cfg(test)]
+mod e_tag_mismatch_classification_tests {
+    use super::is_chunksize_related_e_tag_mismatch;
+
+    fn single(v: &str) -> Option<String> {
+        Some(format!("\"{v}\""))
+    }
+    fn multipart(v: &str, parts: u32) -> Option<String> {
+        Some(format!("\"{v}-{parts}\""))
+    }
+
+    /// The case this fix is about: a source uploaded with a single PutObject
+    /// but larger than --multipart-threshold is re-uploaded as multipart, so
+    /// the ETags cannot match however healthy the copy is. Reporting it as
+    /// "may be corrupted" was wrong; it is a chunking artifact.
+    #[test]
+    fn single_part_source_copied_as_multipart_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            false,
+        ));
+    }
+
+    /// The reverse shape difference is equally structural.
+    #[test]
+    fn multipart_source_copied_as_single_part_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 3),
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            false,
+        ));
+    }
+
+    /// The originally-handled case: both multipart, different part layouts.
+    #[test]
+    fn multipart_source_with_different_layout_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &multipart("aaa", 2),
+            &multipart("bbb", 3),
+            false,
+        ));
+    }
+
+    /// Two plain MD5s that differ really are a content mismatch — the fix must
+    /// not turn genuine corruption into a chunk-size hint.
+    #[test]
+    fn two_differing_single_part_e_tags_are_real_corruption() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &single("098f6bcd4621d373cade4e832627b4f6"),
+            false,
+        ));
+    }
+
+    /// --auto-chunksize reproduces the source's own part layout, so a mismatch
+    /// under it is not explainable by chunk size.
+    #[test]
+    fn auto_chunksize_rules_out_the_chunksize_explanation() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            true,
+        ));
+    }
+
+    /// A local source precalculates its ETag, so the chunk-size explanation
+    /// never applies (the caller errors out before reaching the warning).
+    #[test]
+    fn local_source_is_never_chunksize_related() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            false,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            false,
+        ));
     }
 }

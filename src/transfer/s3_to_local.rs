@@ -51,6 +51,17 @@ pub async fn transfer(
     // that was copied, preserving any newer concurrent versions.
     let source_version_id = head_object_output.version_id().map(String::from);
 
+    // Pin every subsequent read to the version this HEAD saw. Otherwise the
+    // first GET asks for "latest", so an overwrite landing between the HEAD and
+    // that GET yields a file whose size and chunk plan come from the old object
+    // but whose bytes come from the new one. On an unversioned bucket HEAD
+    // returns no version-id, so this stays None and behaviour is unchanged; an
+    // explicit --source-version-id still wins.
+    let effective_version_id = config
+        .version_id
+        .clone()
+        .or_else(|| source_version_id.clone());
+
     let source_size = head_object_output.content_length().unwrap_or(0);
 
     // Auto-detect checksum algorithm from HEAD. `additional_checksum_algorithm`
@@ -73,7 +84,7 @@ pub async fn transfer(
         config,
         source_size,
         source_key,
-        config.version_id.clone(),
+        effective_version_id.clone(),
     )
     .await?;
 
@@ -87,7 +98,7 @@ pub async fn transfer(
     let get_object_output = source
         .get_object(
             source_key,
-            config.version_id.clone(),
+            effective_version_id.clone(),
             config.additional_checksum_mode.clone(),
             range.clone(),
             config.source_sse_c.clone(),

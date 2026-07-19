@@ -7,7 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- `put-bucket-lifecycle-configuration` gained `--transition-default-minimum-object-size`
+  (`varies_by_storage_class` or `all_storage_classes_128K`). S3 accepts this only as a request parameter, never as a
+  member of the lifecycle configuration itself, so there was previously no way to send it: feeding back the output of
+  `get-bucket-lifecycle-configuration` (which reports it at the top level) silently reset the bucket to S3's default of
+  `all_storage_classes_128K`, changing which small objects transition.
+
 ### Fixed
+
+- Two reachable panics in the transfer paths now return errors. Copying s3-to-s3 with `--auto-chunksize
+  --enable-additional-checksum` from a source of 5 MiB or more that was uploaded with a single `PutObject` and lacks the
+  requested checksum crashed the process on an empty parts list; per-part verification is now skipped with a warning. And
+  a failed chunk download while writing to local storage panicked inside the download task instead of reporting the
+  cause — which aborted the whole process under the `release-min-size` profile, where `panic = "abort"`. A chunk whose
+  length disagrees with the plan (a source modified mid-download) is now an error rather than a panic too.
+- Reads of a source object are pinned to the version observed by the initial `HeadObject`, for s3-to-s3, s3-to-local and
+  s3-to-stdout. Previously the first `GetObject` asked for the latest version, so an overwrite landing in that window
+  produced a copy of the new object truncated to the old object's length — undetected, because the range check compares
+  only the start and end offsets — or, when writing to stdout, interleaved bytes from two versions. Unversioned buckets
+  are unaffected, and `--source-version-id` still takes precedence.
+- An ETag mismatch is no longer reported as possible corruption when the source and target ETags simply have different
+  shapes. A source uploaded with a single `PutObject` but larger than `--multipart-threshold` is re-uploaded as
+  multipart, so a plain MD5 can never equal the composite; the message now explains the chunk-size cause and points at
+  `--auto-chunksize`. Two differing single-part ETags are still reported as corruption.
+- `--disable-additional-checksum-verify` is now honoured when downloading to local storage. The target-side verification
+  ran regardless, still warning on a mismatch and still failing hard on a full-object mismatch.
+- A single-part server-side copy no longer counts its bytes twice, which made the progress indicator and the summary
+  report twice the object size as transferred.
 
 - `--if-none-match` now applies to uploads from stdin. Both stdin paths passed a hard-coded "no condition" to the
   target, so the documented overwrite protection did nothing and an existing object was silently replaced.

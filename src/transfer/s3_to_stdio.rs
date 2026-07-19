@@ -481,12 +481,14 @@ struct WriterState<W: AsyncWrite + Unpin + Send> {
 /// returned `content_range` against the requested range and honors the
 /// source's rate-limit bandwidth (applied between reads, not inside
 /// poll_read — see body comment for the cancellation reasoning).
+#[allow(clippy::too_many_arguments)]
 async fn ranged_get_into_buffer(
     source: &dyn crate::storage::StorageTrait,
     source_key: &str,
     range: &str,
     size: u64,
     config: &Config,
+    version_id: Option<String>,
     cancellation_token: PipelineCancellationToken,
 ) -> Result<Vec<u8>> {
     // Race the GET issue itself against cancellation — the SDK's send()
@@ -497,7 +499,7 @@ async fn ranged_get_into_buffer(
         _ = cancellation_token.cancelled() => return Err(anyhow!(S3syncError::Cancelled)),
         result = source.get_object(
             source_key,
-            config.version_id.clone(),
+            version_id,
             None, // checksum_mode: not needed for chunk fetches
             Some(range.to_string()),
             config.source_sse_c.clone(),
@@ -635,6 +637,17 @@ async fn transfer_parallel(
     let source_e_tag = head.e_tag().map(|e| e.to_string());
     let source_sse = head.server_side_encryption().cloned();
 
+    // Pin every chunk GET to the version this HEAD saw. Without it the workers
+    // each asked for "latest", so an overwrite mid-download interleaved bytes
+    // from two different versions on stdout — detectable only afterwards, as an
+    // ETag mismatch, once the corrupt bytes had already been emitted. On an
+    // unversioned bucket HEAD returns no version-id, so this stays None and
+    // behaviour is unchanged; an explicit --source-version-id still wins.
+    let effective_version_id = config
+        .version_id
+        .clone()
+        .or_else(|| head.version_id().map(String::from));
+
     let multipart_chunksize = config.transfer_config.multipart_chunksize;
 
     // Detect additional checksum from HEAD (mirrors serial's GET-based detection).
@@ -697,7 +710,7 @@ async fn transfer_parallel(
             let parts = source
                 .get_object_parts_attributes(
                     source_key,
-                    config.version_id.clone(),
+                    effective_version_id.clone(),
                     MAX_PARTS_DEFAULT,
                     config.source_sse_c.clone(),
                     config.source_sse_c_key.clone(),
@@ -709,7 +722,7 @@ async fn transfer_parallel(
                 source
                     .get_object_parts(
                         source_key,
-                        config.version_id.clone(),
+                        effective_version_id.clone(),
                         config.source_sse_c.clone(),
                         config.source_sse_c_key.clone(),
                         config.source_sse_c_key_md5.clone(),
@@ -806,6 +819,7 @@ async fn transfer_parallel(
         let cancellation_token = cancellation_token.clone();
         let stats_sender = stats_sender.clone();
         let config = config.clone();
+        let version_id = effective_version_id.clone();
         let source_key = source_key.to_string();
 
         workers.push(parallel_worker(
@@ -817,6 +831,7 @@ async fn transfer_parallel(
             source_clone,
             source_key,
             config,
+            version_id,
             cancellation_token,
             stats_sender,
         ));
@@ -868,6 +883,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
     source: Storage,
     source_key: String,
     config: Config,
+    version_id: Option<String>,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -915,6 +931,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
             &range,
             size,
             &config,
+            version_id.clone(),
             cancellation_token.clone(),
         )
         .await;

@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use tracing::info;
 
+use aws_sdk_s3::types::TransitionDefaultMinimumObjectSize;
 use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::put_bucket_lifecycle_configuration::PutBucketLifecycleConfigurationArgs;
 use s3util_rs::input::json::LifecycleConfigurationJson;
@@ -44,7 +45,17 @@ pub async fn run_put_bucket_lifecycle_configuration(
         info!(bucket = %bucket, "[dry-run] would put bucket lifecycle configuration.");
         return Ok(());
     }
-    api::put_bucket_lifecycle_configuration(&client, &bucket, cfg).await?;
+    let transition_default_minimum_object_size = args
+        .transition_default_minimum_object_size
+        .as_deref()
+        .map(TransitionDefaultMinimumObjectSize::from);
+    api::put_bucket_lifecycle_configuration(
+        &client,
+        &bucket,
+        cfg,
+        transition_default_minimum_object_size,
+    )
+    .await?;
     info!(bucket = %bucket, "Bucket lifecycle configuration set.");
     Ok(())
 }

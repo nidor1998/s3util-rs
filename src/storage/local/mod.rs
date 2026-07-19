@@ -279,6 +279,16 @@ impl LocalStorage {
             return Ok(());
         }
 
+        // Honour --disable-additional-checksum-verify, as every sibling path
+        // does (s3_to_stdio, upload_manager::validate_checksum, and the source
+        // side of this storage's own get_object). Omitting it here meant the
+        // s3-to-local target-side verify ran anyway: it still warned on a
+        // mismatch (exit 3) and still hard-errored on a full-object mismatch,
+        // despite the user having switched verification off.
+        if self.config.disable_additional_checksum_verify {
+            return Ok(());
+        }
+
         if let Some(source_final_checksum) = source_final_checksum {
             debug!(
                 key = &key,
@@ -672,13 +682,22 @@ impl LocalStorage {
                             source_sse_c_key_md5,
                         )
                         .await;
+                    // Resolve the Result BEFORE touching the response: unwrapping
+                    // here panicked the task on any chunk-GET failure (network
+                    // error after SDK retries, 416 from a source that shrank),
+                    // losing the real cause behind a JoinError — and aborting the
+                    // whole process under the `release-min-size` profile, which
+                    // sets panic = "abort".
+                    let get_object_output = get_object_output.context("get_object() failed.")?;
                     let chunk_content_length =
-                        get_object_output.as_ref().unwrap().content_length.unwrap() as usize;
+                        get_object_output.content_length().ok_or_else(|| {
+                            anyhow!(
+                                "get_object() returned no content length for {source_key} \
+                                 part {part_number}"
+                            )
+                        })? as usize;
                     let body = convert_to_buf_byte_stream_with_callback(
-                        get_object_output
-                            .context("get_object() failed.")?
-                            .body
-                            .into_async_read(),
+                        get_object_output.body.into_async_read(),
                         None,
                         cloned_source.get_rate_limit_bandwidth(),
                         None,
@@ -727,6 +746,21 @@ impl LocalStorage {
                         }
                     }
 
+                    // `chunk_whole_data` is sized from the locally computed
+                    // chunk plan while `chunk_data` holds what the server
+                    // actually returned. `copy_from_slice` panics when they
+                    // differ — reachable if the source shrank between the HEAD
+                    // and this ranged GET, so S3 clamped the range. Report it
+                    // as the truncation it is instead of aborting the task.
+                    if chunk_data.len() != chunk_whole_data.len() {
+                        return Err(anyhow!(
+                            "unexpected chunk size for {source_key} part {part_number}: \
+                             expected {} bytes, got {}. The source object may have been \
+                             modified during the download.",
+                            chunk_whole_data.len(),
+                            chunk_data.len()
+                        ));
+                    }
                     chunk_whole_data.copy_from_slice(&chunk_data);
                 } else {
                     debug!(

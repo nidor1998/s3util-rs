@@ -155,29 +155,47 @@ pub async fn get_object_parts_if_necessary(
                 .await
                 .context("get_object_parts_if_necessary() failed.")?;
 
-            if object_parts.is_empty()
-                && e_tag_verify::is_multipart_upload_e_tag(&e_tag.map(|e_tag| e_tag.to_string()))
-            {
-                if config.transfer_config.auto_chunksize {
-                    error!(
-                        key = key,
-                        "failed to get object attributes information. \
-                            Please remove --auto-chunksize option and retry."
-                    );
+            // Every empty-parts case must be handled here: the per-part checks
+            // below index `object_parts[0]`, so falling through with an empty
+            // list panics the process.
+            if object_parts.is_empty() {
+                if e_tag_verify::is_multipart_upload_e_tag(&e_tag.map(|e_tag| e_tag.to_string())) {
+                    if config.transfer_config.auto_chunksize {
+                        error!(
+                            key = key,
+                            "failed to get object attributes information. \
+                                Please remove --auto-chunksize option and retry."
+                        );
 
-                    return Err(anyhow!("failed to get object attributes information."));
+                        return Err(anyhow!("failed to get object attributes information."));
+                    }
+
+                    // Source is multipart but has no per-part additional checksum metadata
+                    // (e.g., uploaded without --additional-checksum-algorithm, or only a
+                    // FULL_OBJECT CRC64NVME). GetObjectAttributes returns empty Parts in
+                    // that case; per-part additional-checksum verification is impossible
+                    // but the copy itself can proceed — downstream validate_checksum will
+                    // emit the algorithm-mismatch warning and skip verification.
+                    warn!(
+                        key = key,
+                        "source multipart object has no per-part additional checksum. \
+                            skip additional checksum verification."
+                    );
+                    return Ok(None);
                 }
 
-                // Source is multipart but has no per-part additional checksum metadata
-                // (e.g., uploaded without --additional-checksum-algorithm, or only a
-                // FULL_OBJECT CRC64NVME). GetObjectAttributes returns empty Parts in
-                // that case; per-part additional-checksum verification is impossible
-                // but the copy itself can proceed — downstream validate_checksum will
-                // emit the algorithm-mismatch warning and skip verification.
+                // Single-part source that carries no per-part checksum metadata:
+                // GetObjectAttributes legitimately returns an empty parts list
+                // because there are no parts to describe. There is nothing to
+                // align per-part hashes to, so skip per-part verification; the
+                // whole-object comparison downstream still applies. Reachable
+                // with `--auto-chunksize --enable-additional-checksum` against a
+                // >=5 MiB object uploaded with a single PutObject that lacks the
+                // requested algorithm, which used to panic here.
                 warn!(
                     key = key,
-                    "source multipart object has no per-part additional checksum. \
-                        skip additional checksum verification."
+                    "source object has no per-part checksum metadata. \
+                        skip per-part additional checksum verification."
                 );
                 return Ok(None);
             }
@@ -475,10 +493,13 @@ mod tests {
     /// `is_local_storage()` and `head_object*()`/`get_object_parts*()` paths,
     /// so all other methods panic — keeps the surface tight.
     #[derive(Clone)]
-    struct StubStorage {
+    pub(super) struct StubStorage {
         is_local: bool,
         head_object_first_part_response: Arc<Mutex<Option<Result<HeadObjectOutput, String>>>>,
         head_object_response: Arc<Mutex<Option<Result<HeadObjectOutput, String>>>>,
+        /// Parts returned by `get_object_parts_attributes`. `None` keeps the
+        /// `unimplemented!()` behaviour so existing tests are unaffected.
+        object_parts_attributes: Arc<Mutex<Option<Vec<ObjectPart>>>>,
     }
 
     impl StubStorage {
@@ -487,14 +508,20 @@ mod tests {
                 is_local: true,
                 head_object_first_part_response: Arc::new(Mutex::new(None)),
                 head_object_response: Arc::new(Mutex::new(None)),
+                object_parts_attributes: Arc::new(Mutex::new(None)),
             }
         }
-        fn s3() -> Self {
+        pub(super) fn s3() -> Self {
             Self {
                 is_local: false,
                 head_object_first_part_response: Arc::new(Mutex::new(None)),
                 head_object_response: Arc::new(Mutex::new(None)),
+                object_parts_attributes: Arc::new(Mutex::new(None)),
             }
+        }
+        pub(super) fn with_object_parts_attributes(self, parts: Vec<ObjectPart>) -> Self {
+            *self.object_parts_attributes.lock().unwrap() = Some(parts);
+            self
         }
         fn with_head_object_first_part_response(self, r: Result<HeadObjectOutput, String>) -> Self {
             *self.head_object_first_part_response.lock().unwrap() = Some(r);
@@ -583,7 +610,10 @@ mod tests {
             _sse_c_key: SseCustomerKey,
             _sse_c_key_md5: Option<String>,
         ) -> Result<Vec<ObjectPart>> {
-            unimplemented!()
+            match self.object_parts_attributes.lock().unwrap().clone() {
+                Some(parts) => Ok(parts),
+                None => unimplemented!(),
+            }
         }
         async fn put_object(
             &self,
@@ -633,7 +663,11 @@ mod tests {
         fn set_warning(&self) {}
     }
 
-    fn config_with_chunksize(threshold: u64, chunksize: u64, auto_chunksize: bool) -> Config {
+    pub(super) fn config_with_chunksize(
+        threshold: u64,
+        chunksize: u64,
+        auto_chunksize: bool,
+    ) -> Config {
         Config {
             source: StoragePath::Local("/".into()),
             target: StoragePath::Local("/".into()),
@@ -1115,5 +1149,148 @@ mod tests {
         .await;
         assert_future_panics(stub.put_object_tagging("k", None, dummy_tagging())).await;
         assert_future_panics(stub.delete_object("k", None)).await;
+    }
+}
+
+/// Regression tests for the empty-parts path in `get_object_parts_if_necessary`.
+#[cfg(test)]
+mod empty_object_parts_tests {
+    use super::tests::{StubStorage, config_with_chunksize};
+    use super::*;
+    use aws_sdk_s3::types::ChecksumAlgorithm;
+
+    /// A single-part source that carries no per-part checksum metadata makes
+    /// `GetObjectAttributes` return an empty parts list. The empty-list guard
+    /// used to fire only for multipart ETags, so this input fell through to
+    /// `object_parts[0]` and panicked the process — reachable from the CLI with
+    /// `--auto-chunksize --enable-additional-checksum` against a >=5 MiB object
+    /// uploaded with a plain PutObject.
+    #[tokio::test]
+    async fn single_part_source_with_empty_parts_returns_none_instead_of_panicking() {
+        let source = StubStorage::s3().with_object_parts_attributes(Vec::new());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+        let algorithms = [ChecksumAlgorithm::Sha256];
+
+        let result = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            // Single-part (dash-free) ETag: the old guard did not cover this.
+            Some("\"5d41402abc4b2a76b9719d911017c592\""),
+            5 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await;
+
+        assert!(
+            matches!(result, Ok(None)),
+            "empty parts for a single-part source must skip per-part \
+             verification, got: {result:?}"
+        );
+    }
+
+    /// The same input without `--auto-chunksize` must also be safe.
+    #[tokio::test]
+    async fn single_part_source_with_empty_parts_is_safe_without_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts_attributes(Vec::new());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, false);
+        let algorithms = [ChecksumAlgorithm::Crc32];
+
+        let result = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592\""),
+            5 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(None)), "got: {result:?}");
+    }
+
+    /// A multipart source with empty parts keeps its existing behaviour: a hard
+    /// error under --auto-chunksize (the chunk plan cannot be derived) ...
+    #[tokio::test]
+    async fn multipart_source_with_empty_parts_still_errors_under_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts_attributes(Vec::new());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+        let algorithms = [ChecksumAlgorithm::Sha256];
+
+        let result = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592-3\""),
+            5 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await;
+
+        assert!(
+            result.is_err(),
+            "a multipart source with no parts list must still fail under \
+             --auto-chunksize, got: {result:?}"
+        );
+    }
+
+    /// ... and a skip (warning only) without it.
+    #[tokio::test]
+    async fn multipart_source_with_empty_parts_skips_without_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts_attributes(Vec::new());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, false);
+        let algorithms = [ChecksumAlgorithm::Sha256];
+
+        let result = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592-3\""),
+            5 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await;
+
+        assert!(matches!(result, Ok(None)), "got: {result:?}");
+    }
+
+    /// A non-empty parts list must still be returned and still validated.
+    #[tokio::test]
+    async fn non_empty_parts_are_returned() {
+        let parts = vec![
+            ObjectPart::builder().size(5 * 1024 * 1024).build(),
+            ObjectPart::builder().size(1024).build(),
+        ];
+        let source = StubStorage::s3().with_object_parts_attributes(parts.clone());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+        let algorithms = [ChecksumAlgorithm::Sha256];
+
+        let result = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"abc-2\""),
+            5 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await
+        .unwrap()
+        .expect("parts must be returned");
+        assert_eq!(result.len(), 2);
     }
 }
