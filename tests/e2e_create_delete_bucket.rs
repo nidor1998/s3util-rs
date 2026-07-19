@@ -681,8 +681,9 @@ mod tests {
         assert!(exists, "the bucket must be untouched");
     }
 
-    /// A tag key with the reserved `aws:` prefix passes client-side parsing
-    /// but is rejected by PutBucketTagging. The bucket has already been
+    /// A percent-encoded tag key passes the client-side `--tagging` regex and
+    /// is URL-decoded by `parse_tagging_to_tags` into the reserved `aws:`
+    /// prefix, which PutBucketTagging rejects. The bucket has already been
     /// created by then: the command must warn (exit 3) and leave the bucket
     /// in place untagged, exactly as the warning message promises.
     #[tokio::test]
@@ -698,7 +699,7 @@ mod tests {
             "--target-profile",
             "s3util-e2e-test",
             "--tagging",
-            "aws:reserved=value",
+            "aws%3Areserved=value",
             &bucket_arg,
         ]);
 

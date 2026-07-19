@@ -686,7 +686,7 @@ mod tests {
         let target_arg = format!("s3://{bucket}/dst-key");
         let output = run_s3util(&[
             "rename",
-            "--target-profile",
+            "--source-profile",
             "s3util-e2e-test",
             &source_arg,
             &target_arg,

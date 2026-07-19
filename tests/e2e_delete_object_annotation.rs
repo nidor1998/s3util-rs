@@ -407,10 +407,13 @@ mod tests {
         );
     }
 
-    /// Deleting an annotation that was never created (object exists) must
-    /// exit 4 through the AnnotationNotFound arm.
+    /// Deleting an annotation that was never created (object exists) is
+    /// idempotent on real S3: the API answers success rather than
+    /// NoSuchAnnotation, so the CLI must exit 0. (The AnnotationNotFound
+    /// arm in the CLI stays as defensive handling for services that do
+    /// report it.)
     #[tokio::test]
-    async fn delete_object_annotation_missing_annotation_exits_4() {
+    async fn delete_object_annotation_missing_annotation_is_idempotent() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -434,54 +437,8 @@ mod tests {
 
         assert_eq!(
             output.status.code(),
-            Some(4),
-            "deleting a missing annotation must exit 4; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("annotation never_created not found"),
-            "expected the annotation-not-found message; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
-
-    /// The same, targeting an explicit object version: the message must carry
-    /// the versionId.
-    #[tokio::test]
-    async fn delete_object_annotation_missing_annotation_with_version_exits_4() {
-        TestHelper::init_dummy_tracing_subscriber();
-
-        let helper = TestHelper::new().await;
-        let bucket = TestHelper::generate_bucket_name();
-        helper.create_bucket(&bucket, REGION).await;
-        helper.enable_bucket_versioning(&bucket).await;
-        let version = helper
-            .put_object_with_version(&bucket, "test_object", b"content".to_vec())
-            .await;
-
-        let object_arg = format!("s3://{bucket}/test_object");
-        let output = run_s3util(&[
-            "delete-object-annotation",
-            "--target-profile",
-            "s3util-e2e-test",
-            "--annotation-name",
-            "never_created",
-            "--target-version-id",
-            &version,
-            &object_arg,
-        ]);
-
-        helper.delete_bucket_with_cascade(&bucket).await;
-
-        assert_eq!(
-            output.status.code(),
-            Some(4),
-            "deleting a missing annotation on a version must exit 4; stderr: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        assert!(
-            String::from_utf8_lossy(&output.stderr).contains("versionId="),
-            "the versioned message must carry the version id; stderr: {}",
+            Some(0),
+            "deleting a missing annotation is idempotent and must exit 0; stderr: {}",
             String::from_utf8_lossy(&output.stderr)
         );
     }
