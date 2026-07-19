@@ -496,4 +496,47 @@ mod tests {
         );
         assert_eq!(output.status.code(), Some(1));
     }
+
+    /// get-object-tagging with a version-id that does not belong to the key
+    /// must exit 4 through the versioned NotFound arm.
+    #[tokio::test]
+    async fn get_object_tagging_with_version_id_from_other_object_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let _v_a = helper
+            .put_object_with_version(&bucket, "object-a", b"aaaa".to_vec())
+            .await;
+        let v_b = helper
+            .put_object_with_version(&bucket, "object-b", b"bbbb".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/object-a");
+        let output = run_s3util(&[
+            "get-object-tagging",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--source-version-id",
+            &v_b,
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "get-object-tagging with a foreign version-id must exit 4; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("versionId="),
+            "the versioned not-found message must carry the version id; stderr: {stderr}"
+        );
+    }
 }

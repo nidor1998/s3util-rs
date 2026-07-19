@@ -179,4 +179,20 @@ mod tests {
             disable_color_tracing: true,
         });
     }
+
+    /// Drive the real `PipeSafeWriter` (not the copy in `try_init_tracing`)
+    /// through its non-BrokenPipe arms. The BrokenPipe arms need stderr to be
+    /// an actually-closed pipe and are exercised process-level by
+    /// `tests/cli_tracing_flag_variants.rs`.
+    #[test]
+    fn pipe_safe_writer_write_and_flush_pass_through() {
+        use std::io::Write;
+
+        let mut writer = super::PipeSafeWriter;
+        let written = writer
+            .write(b"")
+            .expect("empty write to stderr must pass through");
+        assert_eq!(written, 0);
+        writer.flush().expect("flush to stderr must pass through");
+    }
 }

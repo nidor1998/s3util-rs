@@ -846,4 +846,45 @@ mod if_none_match_tests {
         let streaming = run(config_with(false, 1024), vec![0x42; 4096]).await;
         assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
     }
+
+    #[tokio::test]
+    async fn cancelled_token_short_circuits_before_reading_stdin() {
+        let config = config_with(false, 8 * 1024 * 1024);
+        let target = RecordingTarget::new();
+        let handle = target.clone();
+        let storage: Storage = Box::new(target);
+        let (tx, _rx) = async_channel::unbounded::<SyncStatistics>();
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+
+        transfer(
+            &config,
+            storage,
+            "k",
+            std::io::Cursor::new(vec![0x41; 16]),
+            token,
+            tx,
+        )
+        .await
+        .unwrap();
+
+        let recorded = handle.recorded();
+        assert_eq!(
+            recorded.put_object_if_none_match, None,
+            "no upload may start after cancellation"
+        );
+        assert_eq!(recorded.put_object_stream_if_none_match, None);
+    }
+
+    #[tokio::test]
+    async fn disable_tagging_suppresses_tagging_on_the_streaming_path() {
+        // --disable-tagging with a configured tagging string: the streaming
+        // path must resolve tagging to None and still complete the upload.
+        let mut config = config_with(false, 1024);
+        config.tagging = Some("k=v".to_string());
+        config.disable_tagging = true;
+
+        let streaming = run(config, vec![0x42; 4096]).await;
+        assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
+    }
 }

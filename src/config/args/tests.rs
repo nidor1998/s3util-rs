@@ -1915,4 +1915,76 @@ mod tests {
         // flattens it; a low count means the walk went wrong.
         assert!(checked >= 18, "only {checked} credential args found");
     }
+
+    #[test]
+    fn full_object_checksum_without_algorithm_builds() {
+        // --full-object-checksum with no --additional-checksum-algorithm at
+        // all: the SHA1/SHA256 reject check must be skipped entirely.
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--full-object-checksum"],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn annotation_sync_accepts_regular_buckets_on_both_sides() {
+        // Neither side is an express one-zone bucket, so both express checks
+        // fall through and the build succeeds.
+        let result = build_config_from_args(args_with_extra(
+            "s3://src-bucket/k",
+            "s3://dst-bucket/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn cp_try_from_propagates_validation_failure() {
+        // Config::try_from(CpArgs) must surface validate_storage_config's
+        // rejection (full-object checksum with SHA256), not swallow it.
+        // (build_config_from_common itself cannot fail: its three fallible
+        // inputs — metadata, threshold, chunksize — are all clap-validated.)
+        let cli = parse_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "SHA256",
+            ],
+        ))
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        let err = Config::try_from(cp_args).unwrap_err();
+        assert!(
+            err.contains("full object checksum"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mv_try_from_propagates_validation_failure() {
+        let cli = parse_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "/tmp/src".to_string(),
+            "s3://b/k".to_string(),
+            "--full-object-checksum".to_string(),
+            "--additional-checksum-algorithm".to_string(),
+            "SHA256".to_string(),
+        ])
+        .unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(
+            err.contains("full object checksum"),
+            "unexpected error: {err}"
+        );
+    }
 }

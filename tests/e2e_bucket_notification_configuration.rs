@@ -252,4 +252,56 @@ mod tests {
             "expected 'parsing JSON from' in stderr; got: {stderr}"
         );
     }
+
+    /// A non-empty configuration (EventBridge needs no SNS/SQS provisioning)
+    /// must round-trip: get prints the pretty JSON instead of the
+    /// "not configured" info line.
+    #[tokio::test]
+    async fn put_event_bridge_then_get_prints_configuration() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let config_json = r#"{"EventBridgeConfiguration":{}}"#;
+        let put = run_s3util_with_stdin(
+            &[
+                "put-bucket-notification-configuration",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+                "-",
+            ],
+            config_json.as_bytes(),
+        );
+        assert!(
+            put.status.success(),
+            "putting the EventBridge configuration must succeed; stderr: {}",
+            String::from_utf8_lossy(&put.stderr)
+        );
+
+        let get = run_s3util(&[
+            "get-bucket-notification-configuration",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert!(
+            get.status.success(),
+            "get must succeed; stderr: {}",
+            String::from_utf8_lossy(&get.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&get.stdout);
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be the configuration JSON");
+        assert!(
+            json.get("EventBridgeConfiguration").is_some(),
+            "expected EventBridgeConfiguration in: {stdout}"
+        );
+    }
 }

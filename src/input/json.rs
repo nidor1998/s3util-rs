@@ -3034,4 +3034,76 @@ mod tests {
         }"#;
         assert!(serde_json::from_str::<BucketLoggingStatusJson>(json).is_err());
     }
+
+    // ----- absent-optional-field branches -----
+
+    #[test]
+    fn lifecycle_and_operator_without_tags_parses() {
+        let json = r#"{"Rules":[{"Status":"Enabled","Filter":{"And":{"Prefix":"p/","ObjectSizeGreaterThan":10}},"Expiration":{"Days":1}}]}"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().unwrap();
+        assert_eq!(and.prefix(), Some("p/"));
+        assert!(and.tags().is_empty());
+        assert_eq!(and.object_size_greater_than(), Some(10));
+    }
+
+    #[test]
+    fn encryption_rule_without_apply_default_parses() {
+        let json = r#"{"Rules":[{"BucketKeyEnabled":true}]}"#;
+        let parsed: ServerSideEncryptionConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let rule = &cfg.rules()[0];
+        assert!(rule.apply_server_side_encryption_by_default().is_none());
+        assert_eq!(rule.bucket_key_enabled(), Some(true));
+    }
+
+    #[test]
+    fn logging_target_grant_without_grantee_parses() {
+        let json = r#"{"LoggingEnabled":{"TargetBucket":"b","TargetPrefix":"p/","TargetGrants":[{"Permission":"READ"}]}}"#;
+        let parsed: BucketLoggingStatusJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let grants = cfg.logging_enabled().unwrap().target_grants();
+        assert!(grants[0].grantee().is_none());
+        assert!(grants[0].permission().is_some());
+    }
+
+    #[test]
+    fn notification_s3_key_filter_without_rules_parses() {
+        let json = r#"{"QueueConfigurations":[{"QueueArn":"arn:aws:sqs:us-east-1:1:q","Events":["s3:ObjectCreated:*"],"Filter":{"Key":{}}}]}"#;
+        let parsed: NotificationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let filter = cfg.queue_configurations()[0].filter().unwrap();
+        assert!(filter.key().unwrap().filter_rules().is_empty());
+    }
+
+    #[test]
+    fn replication_and_operator_without_tags_parses() {
+        let json = r#"{"Role":"arn:aws:iam::1:role/r","Rules":[{"Status":"Enabled","Filter":{"And":{"Prefix":"p/"}},"Destination":{"Bucket":"arn:aws:s3:::d"}}]}"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().unwrap();
+        assert_eq!(and.prefix(), Some("p/"));
+        assert!(and.tags().is_empty());
+    }
+
+    #[test]
+    fn replication_source_selection_with_only_replica_modifications_parses() {
+        let json = r#"{"Role":"arn:aws:iam::1:role/r","Rules":[{"Status":"Enabled","Filter":{"Prefix":""},"SourceSelectionCriteria":{"ReplicaModifications":{"Status":"Enabled"}},"Destination":{"Bucket":"arn:aws:s3:::d"}}]}"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ssc = cfg.rules()[0].source_selection_criteria().unwrap();
+        assert!(ssc.sse_kms_encrypted_objects().is_none());
+        assert!(ssc.replica_modifications().is_some());
+    }
+
+    #[test]
+    fn replication_source_selection_with_only_sse_kms_parses() {
+        let json = r#"{"Role":"arn:aws:iam::1:role/r","Rules":[{"Status":"Enabled","Filter":{"Prefix":""},"SourceSelectionCriteria":{"SseKmsEncryptedObjects":{"Status":"Enabled"}},"Destination":{"Bucket":"arn:aws:s3:::d"}}]}"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ssc = cfg.rules()[0].source_selection_criteria().unwrap();
+        assert!(ssc.sse_kms_encrypted_objects().is_some());
+        assert!(ssc.replica_modifications().is_none());
+    }
 }

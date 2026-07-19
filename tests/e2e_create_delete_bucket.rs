@@ -643,4 +643,81 @@ mod tests {
             "create-bucket --dry-run --if-not-exists must NOT create the bucket"
         );
     }
+
+    /// --if-not-exists --dry-run against an EXISTING bucket: the probe runs
+    /// (it is read-only), the dry-run skip message fires, and nothing changes.
+    #[tokio::test]
+    async fn create_bucket_if_not_exists_dry_run_when_bucket_exists_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let output = run_s3util(&[
+            "create-bucket",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--if-not-exists",
+            "--dry-run",
+            "-v",
+            &bucket_arg,
+        ]);
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exists = helper.is_bucket_exist(&bucket).await;
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "--if-not-exists --dry-run on an existing bucket must exit 0; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("would skip"),
+            "expected the dry-run skip message; stderr: {stderr}"
+        );
+        assert!(exists, "the bucket must be untouched");
+    }
+
+    /// A tag key with the reserved `aws:` prefix passes client-side parsing
+    /// but is rejected by PutBucketTagging. The bucket has already been
+    /// created by then: the command must warn (exit 3) and leave the bucket
+    /// in place untagged, exactly as the warning message promises.
+    #[tokio::test]
+    async fn create_bucket_with_reserved_tag_prefix_creates_untagged_and_exits_3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+
+        let bucket_arg = format!("s3://{bucket}");
+        let output = run_s3util(&[
+            "create-bucket",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--tagging",
+            "aws:reserved=value",
+            &bucket_arg,
+        ]);
+
+        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+        let exists = helper.is_bucket_exist(&bucket).await;
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(3),
+            "created-but-untagged must exit 3 (warning); stderr: {stderr}"
+        );
+        assert!(
+            exists,
+            "the bucket itself must exist even though tagging failed"
+        );
+        assert!(
+            stderr.contains("PutBucketTagging failed"),
+            "expected the tagging-failure warning; stderr: {stderr}"
+        );
+    }
 }

@@ -895,4 +895,48 @@ mod tests {
             )
             .try_init();
     }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_read_failure_is_an_error() {
+        init_dummy_tracing_subscriber();
+
+        // A directory opens fine but read(2) fails with a non-EOF error
+        // (EISDIR), driving the hard-error arm of the read loop.
+        let dir = tempfile::tempdir().unwrap();
+        let err = generate_checksum_from_path(
+            &PathBuf::from(dir.path()),
+            ChecksumAlgorithm::Sha256,
+            vec![1],
+            8 * 1024 * 1024,
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn generate_checksum_from_path_for_check_read_failure_is_an_error() {
+        init_dummy_tracing_subscriber();
+
+        let dir = tempfile::tempdir().unwrap();
+        let err = generate_checksum_from_path_for_check(
+            &PathBuf::from(dir.path()),
+            ChecksumAlgorithm::Sha256,
+            false,
+            vec![1],
+            false,
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

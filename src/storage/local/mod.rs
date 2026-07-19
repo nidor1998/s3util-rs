@@ -1726,3 +1726,945 @@ mod tests {
         .await;
     }
 }
+
+/// Error- and edge-path tests for `verify_local_file`, `put_object_single_part`
+/// and `put_object_multipart`. These paths need a misbehaving source (bodies
+/// that error, lie about their length, or arrive cancelled), so each test
+/// drives the private method directly with a `MockPartSource` rather than
+/// going through the public `put_object` dispatcher.
+#[cfg(test)]
+mod put_object_error_path_tests {
+    use super::*;
+    use crate::config::args::{Commands, parse_from_args};
+    use crate::types::token::create_pipeline_cancellation_token;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::primitives::DateTime;
+    use std::path::Path;
+
+    /// How the mock source answers the ranged `get_object` that
+    /// `put_object_multipart` issues for parts ≥ 2.
+    #[derive(Clone)]
+    enum PartBehavior {
+        /// Response without a ContentLength at all.
+        NoContentLength,
+        /// Body that fails on the first poll (`SdkBody::taken()`).
+        ErrorBody,
+        /// ContentLength `content_length` but only `body_len` real bytes.
+        Inconsistent {
+            content_length: i64,
+            body_len: usize,
+        },
+        /// Well-formed `len`-byte part.
+        Sized { len: usize },
+        /// Cancel the pipeline token, then return a well-formed part.
+        CancelThenSized {
+            len: usize,
+            token: PipelineCancellationToken,
+        },
+    }
+
+    #[derive(Clone)]
+    struct MockPartSource {
+        behavior: PartBehavior,
+    }
+
+    #[async_trait]
+    impl StorageTrait for MockPartSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            match &self.behavior {
+                PartBehavior::NoContentLength => Ok(GetObjectOutput::builder()
+                    .body(ByteStream::from(vec![]))
+                    .build()),
+                PartBehavior::ErrorBody => Ok(GetObjectOutput::builder()
+                    .content_length(5)
+                    .body(ByteStream::new(SdkBody::taken()))
+                    .build()),
+                PartBehavior::Inconsistent {
+                    content_length,
+                    body_len,
+                } => Ok(GetObjectOutput::builder()
+                    .content_length(*content_length)
+                    .body(ByteStream::from(vec![b'x'; *body_len]))
+                    .build()),
+                PartBehavior::Sized { len } => Ok(GetObjectOutput::builder()
+                    .content_length(*len as i64)
+                    .body(ByteStream::from(vec![b'x'; *len]))
+                    .build()),
+                PartBehavior::CancelThenSized { len, token } => {
+                    token.cancel();
+                    Ok(GetObjectOutput::builder()
+                        .content_length(*len as i64)
+                        .body(ByteStream::from(vec![b'x'; *len]))
+                        .build())
+                }
+            }
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn mock_source(behavior: PartBehavior) -> Storage {
+        Box::new(MockPartSource { behavior })
+    }
+
+    /// Build a real `Config` through the cp arg parser so both client configs
+    /// (and thus the parallel-upload semaphore `put_object_multipart` acquires)
+    /// exist, exactly as in a production s3→local run.
+    fn config_for_target(target: &str) -> Config {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "cp",
+            "s3://source-bucket/source-key",
+            target,
+        ])
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    struct TestStorage {
+        storage: LocalStorage,
+        stats_receiver: async_channel::Receiver<SyncStatistics>,
+        has_warning: Arc<AtomicBool>,
+    }
+
+    fn local_storage_with_config(
+        config: Config,
+        cancellation_token: PipelineCancellationToken,
+    ) -> TestStorage {
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let has_warning = Arc::new(AtomicBool::new(false));
+        TestStorage {
+            storage: LocalStorage {
+                config,
+                cancellation_token,
+                stats_sender,
+                rate_limit_bandwidth: None,
+                has_warning: has_warning.clone(),
+            },
+            stats_receiver,
+            has_warning,
+        }
+    }
+
+    fn first_chunk(content_length: i64, body: ByteStream) -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(content_length)
+            .body(body)
+            .last_modified(DateTime::from_secs(0))
+            .build()
+    }
+
+    fn tempdir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
+    }
+
+    fn key_in(dir: &Path, name: &str) -> String {
+        dir.join(name).to_string_lossy().to_string()
+    }
+
+    // ------------------------------------------------------------------
+    // verify_local_file
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn verify_reports_content_length_mismatch_when_etag_verify_disabled() {
+        let dir = tempdir();
+        let target = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&target);
+        config.disable_etag_verify = true;
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let real_path = PathBuf::from("test_data/5byte.dat");
+        let err = t
+            .storage
+            .verify_local_file(
+                "k", None, &None, &None, 6, None, None, &real_path, None, 5, false,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("content length mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_honours_disable_additional_checksum_verify() {
+        let dir = tempdir();
+        let target = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&target);
+        config.disable_etag_verify = true;
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        config.disable_additional_checksum_verify = true;
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let real_path = PathBuf::from("test_data/5byte.dat");
+        t.storage
+            .verify_local_file(
+                "k",
+                None,
+                &None,
+                &None,
+                5,
+                // A checksum that could never match: proves the early return
+                // fires before any hashing happens.
+                Some("BOGUS".to_string()),
+                Some(ChecksumAlgorithm::Sha256),
+                &real_path,
+                None,
+                5,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn verify_full_object_checksum_mismatch_is_an_error() {
+        let dir = tempdir();
+        let target = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&target);
+        config.disable_etag_verify = true;
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let real_path = PathBuf::from("test_data/5byte.dat");
+        // No '-' suffix ⇒ full-object checksum ⇒ a mismatch is corruption.
+        let err = t
+            .storage
+            .verify_local_file(
+                "k",
+                None,
+                &None,
+                &None,
+                5,
+                Some("BOGUS".to_string()),
+                Some(ChecksumAlgorithm::Sha256),
+                &real_path,
+                None,
+                5,
+                false,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("additional checksum mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn verify_composite_checksum_mismatch_warns_instead_of_failing() {
+        let dir = tempdir();
+        let target = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&target);
+        config.disable_etag_verify = true;
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let real_path = PathBuf::from("test_data/5byte.dat");
+        let parts = vec![
+            ObjectPart::builder().size(3).build(),
+            ObjectPart::builder().size(2).build(),
+        ];
+        // '-2' suffix ⇒ composite checksum ⇒ mismatch may be chunksize-related,
+        // so it warns and flags instead of failing the transfer.
+        t.storage
+            .verify_local_file(
+                "k",
+                None,
+                &None,
+                &None,
+                5,
+                Some("BOGUS-2".to_string()),
+                Some(ChecksumAlgorithm::Sha256),
+                &real_path,
+                Some(parts),
+                5,
+                false,
+            )
+            .await
+            .unwrap();
+        assert!(t.has_warning.load(Ordering::SeqCst));
+        let mut saw_mismatch_stat = false;
+        while let Ok(stat) = t.stats_receiver.try_recv() {
+            if matches!(stat, SyncStatistics::ChecksumMismatch { .. }) {
+                saw_mismatch_stat = true;
+            }
+        }
+        assert!(saw_mismatch_stat, "expected a ChecksumMismatch stat");
+    }
+
+    #[tokio::test]
+    async fn verify_skips_checksum_when_source_has_none() {
+        let dir = tempdir();
+        let target = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&target);
+        config.disable_etag_verify = true;
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let real_path = PathBuf::from("test_data/5byte.dat");
+        t.storage
+            .verify_local_file(
+                "k", None, &None, &None, 5, None, None, &real_path, None, 5, false,
+            )
+            .await
+            .unwrap();
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    // ------------------------------------------------------------------
+    // put_object_single_part
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn single_part_directory_key_only_requires_parent() {
+        let dir = tempdir();
+        let key = format!("{}/", key_in(dir.path(), "subdir"));
+        let config = config_for_target(&key_in(dir.path(), "unused.dat"));
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        t.storage
+            .put_object_single_part(
+                &key,
+                mock_source(PartBehavior::Sized { len: 0 }),
+                first_chunk(0, ByteStream::from(vec![])),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn single_part_body_read_failure_is_retryable_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_single_part(
+                &key,
+                mock_source(PartBehavior::Sized { len: 0 }),
+                first_chunk(4, ByteStream::new(SdkBody::taken())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn single_part_cancellation_mid_body_returns_cancelled() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&key);
+        // Tiny chunksize so the cancellation check runs after the first read.
+        config.transfer_config.multipart_chunksize = 1;
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let t = local_storage_with_config(config, token);
+
+        let err = t
+            .storage
+            .put_object_single_part(
+                &key,
+                mock_source(PartBehavior::Sized { len: 0 }),
+                first_chunk(4, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn single_part_without_object_checksum_persists_file() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        t.storage
+            .put_object_single_part(
+                &key,
+                mock_source(PartBehavior::Sized { len: 0 }),
+                first_chunk(4, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&key).unwrap(), b"data");
+    }
+
+    // ------------------------------------------------------------------
+    // put_object_multipart
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn multipart_directory_key_only_requires_parent() {
+        let dir = tempdir();
+        let key = format!("{}/", key_in(dir.path(), "subdir"));
+        let config = config_for_target(&key_in(dir.path(), "unused.dat"));
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        t.storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                first_chunk(5, ByteStream::from(vec![b'x'; 5])),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn multipart_first_chunk_read_failure_is_retryable_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                first_chunk(5, ByteStream::new(SdkBody::taken())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_first_chunk_shorter_than_declared_is_an_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                first_chunk(10, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid first chunk data size"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_cancellation_during_first_chunk_returns_cancelled() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&key);
+        config.transfer_config.multipart_chunksize = 1;
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let t = local_storage_with_config(config, token);
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                first_chunk(4, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_cancellation_before_part_scheduling_returns_cancelled() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let t = local_storage_with_config(config, token);
+
+        // First chunk is fully consumed without tripping the in-body
+        // cancellation check (body ≪ chunksize), so the parts loop's own
+        // entry check is what fires.
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                first_chunk(4, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    /// Build the config/first-chunk pair used by the part-2 behavior tests:
+    /// chunksize 5, source size 10 ⇒ part 1 is the 5-byte first chunk and
+    /// part 2 is a ranged get answered by the mock.
+    fn two_part_setup(key: &str) -> (Config, GetObjectOutput) {
+        let mut config = config_for_target(key);
+        config.transfer_config.multipart_chunksize = 5;
+        (config, first_chunk(5, ByteStream::from(vec![b'x'; 5])))
+    }
+
+    #[tokio::test]
+    async fn multipart_part_get_without_content_length_is_an_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::NoContentLength),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("no content length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part_body_read_failure_is_retryable_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::ErrorBody),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part_shorter_than_declared_is_an_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Inconsistent {
+                    content_length: 5,
+                    body_len: 3,
+                }),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("Invalid chunk data size"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part_differing_from_plan_is_reported_as_truncation() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        // Internally consistent 3-byte response for a planned 5-byte part —
+        // the shape a shrunken source produces after S3 clamps the range.
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Inconsistent {
+                    content_length: 3,
+                    body_len: 3,
+                }),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected chunk size"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_cancellation_during_part_body_returns_cancelled() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&key);
+        config.transfer_config.multipart_chunksize = 5;
+        let token = create_pipeline_cancellation_token();
+        let t = local_storage_with_config(config, token.clone());
+
+        // Source size 11 ⇒ part 2 is 6 bytes > chunksize 5, so the in-body
+        // cancellation check runs after the token was cancelled by the mock.
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::CancelThenSized { len: 6, token }),
+                11,
+                None,
+                first_chunk(5, ByteStream::from(vec![b'x'; 5])),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_cancellation_after_parts_complete_returns_cancelled() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let mut config = config_for_target(&key);
+        config.transfer_config.multipart_chunksize = 5;
+        let token = create_pipeline_cancellation_token();
+        let t = local_storage_with_config(config, token.clone());
+
+        // Part 2 downloads cleanly (5 bytes, no in-body check trips), but the
+        // token is cancelled by then — the post-join check must fire.
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::CancelThenSized { len: 5, token }),
+                10,
+                None,
+                first_chunk(5, ByteStream::from(vec![b'x'; 5])),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_total_size_mismatch_is_an_error() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let config = config_for_target(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        // First chunk longer than the declared source size: the only part
+        // written is 6 bytes against a 4-byte plan, so the size accounting
+        // must fail before the file is persisted.
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                4,
+                None,
+                first_chunk(6, ByteStream::from(vec![b'x'; 6])),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("size mismatch"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            !PathBuf::from(&key).exists(),
+            "a size-mismatched download must not be persisted"
+        );
+    }
+
+    #[tokio::test]
+    async fn single_part_larger_than_chunksize_completes_uncancelled() {
+        // Body crosses the chunksize boundary with a live token: the in-loop
+        // cancellation checkpoint must be passed through, not tripped.
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out_chunked.dat");
+        let mut config = config_for_target(&key);
+        config.transfer_config.multipart_chunksize = 1;
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        t.storage
+            .put_object_single_part(
+                &key,
+                mock_source(PartBehavior::Sized { len: 0 }),
+                first_chunk(4, ByteStream::from(b"data".to_vec())),
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&key).unwrap(), b"data");
+    }
+
+    #[tokio::test]
+    async fn multipart_oversized_part_with_live_token_reports_plan_mismatch() {
+        // Part 2 answers with 6 bytes against a 5-byte plan. With a live
+        // token the in-loop cancellation checkpoint (which the byte overflow
+        // triggers) must fall through, and the download must then fail on the
+        // plan mismatch — not on a spurious Cancelled.
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out_chunked_mp.dat");
+        let mut config = config_for_target(&key);
+        config.transfer_config.multipart_chunksize = 5;
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 6 }),
+                11,
+                None,
+                first_chunk(5, ByteStream::from(vec![b'x'; 5])),
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("unexpected chunk size"),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            err.downcast_ref::<S3syncError>().is_none(),
+            "must not be misreported as cancellation: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_without_object_checksum_persists_file() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        t.storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::Sized { len: 5 }),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(std::fs::read(&key).unwrap(), vec![b'x'; 10]);
+    }
+}

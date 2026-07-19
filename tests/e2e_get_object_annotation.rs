@@ -476,4 +476,94 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// An annotation stored under SSE-KMS (bucket default encryption) has a
+    /// non-MD5 ETag and — put without an additional checksum — nothing to
+    /// verify against. The download must still succeed (exit 0), warn that
+    /// integrity could not be verified, and write the payload. The outfile is
+    /// a bare filename resolved against the working directory.
+    #[tokio::test]
+    async fn get_object_annotation_kms_without_checksum_warns_unverifiable() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Default-encrypt everything in the bucket (including annotation
+        // objects) with the AWS-managed KMS key.
+        let default_encryption = aws_sdk_s3::types::ServerSideEncryptionByDefault::builder()
+            .sse_algorithm(aws_sdk_s3::types::ServerSideEncryption::AwsKms)
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ServerSideEncryptionRule::builder()
+            .apply_server_side_encryption_by_default(default_encryption)
+            .build();
+        let config = aws_sdk_s3::types::ServerSideEncryptionConfiguration::builder()
+            .rules(rule)
+            .build()
+            .unwrap();
+        helper
+            .client
+            .put_bucket_encryption()
+            .bucket(&bucket)
+            .server_side_encryption_configuration(config)
+            .send()
+            .await
+            .unwrap();
+
+        helper
+            .put_object(&bucket, "test_object", b"content".to_vec())
+            .await;
+        helper
+            .put_object_annotation(
+                &bucket,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                None,
+            )
+            .await;
+
+        let work_dir = TestHelper::create_temp_dir();
+        let object_arg = format!("s3://{bucket}/test_object");
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args([
+                "get-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                TEST_ANNOTATION_NAME,
+                "-v",
+                &object_arg,
+                "annotation_out.json",
+            ])
+            .current_dir(&work_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn s3util");
+
+        let payload = std::fs::read_to_string(work_dir.join("annotation_out.json")).ok();
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&work_dir);
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "an unverifiable annotation still downloads with exit 0; stderr: {stderr}"
+        );
+        assert!(
+            stderr.contains("could not be verified") || stderr.contains("could NOT be verified"),
+            "expected the unverifiable warning; stderr: {stderr}"
+        );
+        assert_eq!(
+            payload.as_deref(),
+            Some(TEST_ANNOTATION_VALUE),
+            "the payload must be written to the bare-filename outfile"
+        );
+    }
 }

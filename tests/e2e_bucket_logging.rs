@@ -251,4 +251,75 @@ mod tests {
             "expected 'parsing JSON from' in stderr; got: {stderr}"
         );
     }
+
+    /// A bucket with logging ENABLED must round-trip: get prints the pretty
+    /// JSON with LoggingEnabled instead of the "not configured" info line.
+    /// The log-target bucket needs a bucket policy for the S3 logging service
+    /// principal, or PutBucketLogging is rejected.
+    #[tokio::test]
+    async fn put_logging_enabled_then_get_prints_configuration() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let source_bucket = TestHelper::generate_bucket_name();
+        let target_bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&source_bucket, REGION).await;
+        helper.create_bucket(&target_bucket, REGION).await;
+
+        let policy = format!(
+            r#"{{"Version":"2012-10-17","Statement":[{{"Sid":"S3ServerAccessLogsPolicy","Effect":"Allow","Principal":{{"Service":"logging.s3.amazonaws.com"}},"Action":["s3:PutObject"],"Resource":"arn:aws:s3:::{target_bucket}/*"}}]}}"#
+        );
+        helper
+            .client
+            .put_bucket_policy()
+            .bucket(&target_bucket)
+            .policy(policy)
+            .send()
+            .await
+            .unwrap();
+
+        let bucket_arg = format!("s3://{source_bucket}");
+        let config_json = format!(
+            r#"{{"LoggingEnabled":{{"TargetBucket":"{target_bucket}","TargetPrefix":"logs/"}}}}"#
+        );
+        let put = run_s3util_with_stdin(
+            &[
+                "put-bucket-logging",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+                "-",
+            ],
+            config_json.as_bytes(),
+        );
+        assert!(
+            put.status.success(),
+            "putting the logging configuration must succeed; stderr: {}",
+            String::from_utf8_lossy(&put.stderr)
+        );
+
+        let get = run_s3util(&[
+            "get-bucket-logging",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&source_bucket).await;
+        helper.delete_bucket_with_cascade(&target_bucket).await;
+
+        assert!(
+            get.status.success(),
+            "get must succeed; stderr: {}",
+            String::from_utf8_lossy(&get.stderr)
+        );
+        let stdout = String::from_utf8_lossy(&get.stdout);
+        let json: serde_json::Value =
+            serde_json::from_str(&stdout).expect("stdout must be the configuration JSON");
+        assert_eq!(
+            json["LoggingEnabled"]["TargetBucket"].as_str(),
+            Some(target_bucket.as_str()),
+            "expected LoggingEnabled in: {stdout}"
+        );
+    }
 }

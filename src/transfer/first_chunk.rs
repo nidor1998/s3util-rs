@@ -500,6 +500,9 @@ mod tests {
         /// Parts returned by `get_object_parts_attributes`. `None` keeps the
         /// `unimplemented!()` behaviour so existing tests are unaffected.
         object_parts_attributes: Arc<Mutex<Option<Vec<ObjectPart>>>>,
+        /// Parts returned by `get_object_parts` (the per-part HEAD fallback).
+        /// `None` keeps the `unimplemented!()` behaviour.
+        object_parts: Arc<Mutex<Option<Vec<ObjectPart>>>>,
     }
 
     impl StubStorage {
@@ -509,6 +512,7 @@ mod tests {
                 head_object_first_part_response: Arc::new(Mutex::new(None)),
                 head_object_response: Arc::new(Mutex::new(None)),
                 object_parts_attributes: Arc::new(Mutex::new(None)),
+                object_parts: Arc::new(Mutex::new(None)),
             }
         }
         pub(super) fn s3() -> Self {
@@ -517,10 +521,15 @@ mod tests {
                 head_object_first_part_response: Arc::new(Mutex::new(None)),
                 head_object_response: Arc::new(Mutex::new(None)),
                 object_parts_attributes: Arc::new(Mutex::new(None)),
+                object_parts: Arc::new(Mutex::new(None)),
             }
         }
         pub(super) fn with_object_parts_attributes(self, parts: Vec<ObjectPart>) -> Self {
             *self.object_parts_attributes.lock().unwrap() = Some(parts);
+            self
+        }
+        pub(super) fn with_object_parts(self, parts: Vec<ObjectPart>) -> Self {
+            *self.object_parts.lock().unwrap() = Some(parts);
             self
         }
         fn with_head_object_first_part_response(self, r: Result<HeadObjectOutput, String>) -> Self {
@@ -599,6 +608,9 @@ mod tests {
             _sse_c_key: SseCustomerKey,
             _sse_c_key_md5: Option<String>,
         ) -> Result<Vec<ObjectPart>> {
+            if let Some(parts) = self.object_parts.lock().unwrap().clone() {
+                return Ok(parts);
+            }
             unimplemented!()
         }
         async fn get_object_parts_attributes(
@@ -1292,5 +1304,96 @@ mod empty_object_parts_tests {
         .unwrap()
         .expect("parts must be returned");
         assert_eq!(result.len(), 2);
+    }
+
+    /// --auto-chunksize with a ranged first fetch whose length disagrees with
+    /// the first part reported by GetObjectAttributes: the chunk plan cannot
+    /// be trusted, so it must be a hard error.
+    #[tokio::test]
+    async fn attributes_first_part_size_mismatch_errors_under_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts_attributes(vec![
+            aws_sdk_s3::types::ObjectPart::builder()
+                .size(5 * 1024 * 1024)
+                .build(),
+        ]);
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+        let algorithms = [ChecksumAlgorithm::Sha256];
+
+        let err = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592-3\""),
+            4 * 1024 * 1024,
+            Some(&algorithms),
+            false,
+            Some("bytes=0-4194303"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("object parts(attribute) size does not match content length"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// Without a checksum algorithm the parts come from the per-part HEAD
+    /// fallback; a multipart source for which that returns nothing cannot
+    /// produce a chunk plan under --auto-chunksize.
+    #[tokio::test]
+    async fn parts_fallback_empty_for_multipart_source_errors_under_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts(Vec::new());
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+
+        let err = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592-3\""),
+            5 * 1024 * 1024,
+            None,
+            false,
+            Some("bytes=0-5242879"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("failed to get object parts information"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    /// The per-part HEAD fallback's own first-part/first-chunk parity check.
+    #[tokio::test]
+    async fn parts_fallback_first_part_size_mismatch_errors_under_auto_chunksize() {
+        let source = StubStorage::s3().with_object_parts(vec![
+            aws_sdk_s3::types::ObjectPart::builder()
+                .size(5 * 1024 * 1024)
+                .build(),
+        ]);
+        let config = config_with_chunksize(5 * 1024 * 1024, 5 * 1024 * 1024, true);
+
+        let err = get_object_parts_if_necessary(
+            &source,
+            &config,
+            "key",
+            None,
+            Some("\"5d41402abc4b2a76b9719d911017c592-3\""),
+            4 * 1024 * 1024,
+            None,
+            false,
+            Some("bytes=0-4194303"),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("object parts size does not match content length"),
+            "unexpected error: {err:#}"
+        );
     }
 }

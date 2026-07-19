@@ -146,4 +146,50 @@ mod tests {
 
         helper.delete_bucket_with_cascade(&bucket).await;
     }
+
+    /// Initiating a restore of a GLACIER-class object succeeds immediately
+    /// (S3 answers 202 and the retrieval happens asynchronously) — the
+    /// success path must log "Restore initiated." and exit 0.
+    #[tokio::test]
+    async fn restore_glacier_object_initiates_and_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        helper
+            .client
+            .put_object()
+            .bucket(&bucket)
+            .key("glacier-object")
+            .body(aws_sdk_s3::primitives::ByteStream::from(
+                b"cold data".to_vec(),
+            ))
+            .storage_class(aws_sdk_s3::types::StorageClass::Glacier)
+            .send()
+            .await
+            .unwrap();
+
+        let object_arg = format!("s3://{bucket}/glacier-object");
+        let output = run_s3util(&[
+            "restore-object",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--days",
+            "1",
+            "--tier",
+            "Bulk",
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "restore-object on a GLACIER object must exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

@@ -325,6 +325,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn indicator_counts_mismatches_as_warnings() {
+        // ETagMismatch / ChecksumMismatch must bump both their own counter and
+        // the warning counter, and show_result must render the "mismatch"
+        // verification status for both dimensions.
+        init_dummy_tracing_subscriber();
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let join_handle = show_indicator(
+            stats_receiver,
+            false,
+            true,
+            true,
+            String::new(),
+            "src".to_string(),
+            "dst".to_string(),
+            false,
+        );
+
+        stats_sender
+            .send(SyncStatistics::SyncBytes(1))
+            .await
+            .unwrap();
+        stats_sender
+            .send(SyncStatistics::ETagMismatch {
+                key: "test".to_string(),
+            })
+            .await
+            .unwrap();
+        stats_sender
+            .send(SyncStatistics::ChecksumMismatch {
+                key: "test".to_string(),
+            })
+            .await
+            .unwrap();
+        stats_sender.close();
+
+        join_handle.await.unwrap();
+    }
+
+    #[tokio::test]
     async fn indicator_with_resolved_target_prints_destination_line() {
         // Destination line is printed on successful completion (no errors),
         // gated on `show_result` so `--show-progress` controls whether the

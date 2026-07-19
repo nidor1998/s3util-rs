@@ -944,4 +944,26 @@ mod tests {
             )
             .try_init();
     }
+
+    #[tokio::test]
+    async fn generate_e_tag_hash_with_auto_chunksize_read_failure_is_an_error() {
+        init_dummy_tracing_subscriber();
+
+        // A directory opens fine but read(2) fails with a non-EOF error
+        // (EISDIR), driving the hard-error arm of the read loop. The part
+        // size of 1 passes the bounds check (directory metadata reports a
+        // nonzero size on every supported platform).
+        let dir = tempfile::tempdir().unwrap();
+        let err = generate_e_tag_hash_from_path_with_auto_chunksize(
+            &PathBuf::from(dir.path()),
+            vec![1],
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("Failed to read"),
+            "unexpected error: {err:#}"
+        );
+    }
 }

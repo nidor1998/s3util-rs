@@ -2863,3 +2863,392 @@ mod e_tag_mismatch_classification_tests {
         ));
     }
 }
+
+/// Pre-flight error paths of `upload` / `upload_with_auto_chunksize` /
+/// `singlepart_upload` / `multipart_upload` that fire before (or instead of)
+/// any successful S3 round trip. The client points at an unreachable endpoint
+/// with one attempt, so paths that do reach S3 fail fast with a dispatch
+/// error — letting the tests pin everything that happens before it.
+#[cfg(test)]
+mod upload_error_path_tests {
+    use super::*;
+    use crate::config::args::{Commands, parse_from_args};
+    use crate::storage::StorageTrait;
+    use crate::types::SseCustomerKey;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use async_trait::async_trait;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+    use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+    use aws_sdk_s3::types::{ChecksumMode, Tagging};
+    use aws_smithy_types::body::SdkBody;
+    use leaky_bucket::RateLimiter;
+    use std::path::PathBuf;
+
+    #[derive(Clone)]
+    struct NullSource;
+
+    #[async_trait]
+    impl StorageTrait for NullSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn dead_endpoint_config() -> Config {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "cp",
+            "test_data/5byte.dat",
+            "s3://target-bucket/key",
+            "--target-endpoint-url",
+            "http://127.0.0.1:1",
+            "--target-access-key",
+            "AKIAIOSFODNN7EXAMPLE",
+            "--target-secret-access-key",
+            "wJalrXUtnFEMIK7MDENG",
+            "--target-region",
+            "us-east-1",
+            "--aws-max-attempts",
+            "1",
+        ])
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    struct TestManager {
+        manager: UploadManager,
+        stats_receiver: async_channel::Receiver<SyncStatistics>,
+        has_warning: Arc<AtomicBool>,
+    }
+
+    async fn manager_with(
+        config: Config,
+        object_parts: Option<Vec<ObjectPart>>,
+        source_total_size: Option<u64>,
+    ) -> TestManager {
+        let client = Arc::new(
+            config
+                .target_client_config
+                .clone()
+                .unwrap()
+                .create_client()
+                .await,
+        );
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let has_warning = Arc::new(AtomicBool::new(false));
+        TestManager {
+            manager: UploadManager::new(
+                client,
+                config,
+                None,
+                create_pipeline_cancellation_token(),
+                stats_sender,
+                None,
+                object_parts,
+                false,
+                Box::new(NullSource),
+                "source-key".to_string(),
+                source_total_size,
+                None,
+                None,
+                has_warning.clone(),
+            ),
+            stats_receiver,
+            has_warning,
+        }
+    }
+
+    fn small_body_chunk() -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(4)
+            .body(ByteStream::from(b"data".to_vec()))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn upload_auto_chunksize_rejects_first_part_size_mismatch() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        let parts = vec![ObjectPart::builder().size(5).build()];
+        let mut t = manager_with(config, Some(parts), Some(7)).await;
+
+        // Single-part source (plain ETag) whose size disagrees with the
+        // reported first part — must fail before any S3 call.
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(7)
+                    .e_tag("\"0123456789abcdef0123456789abcdef\"")
+                    .body(ByteStream::from(vec![b'x'; 7]))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not match the first object part size"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Illegal object_parts state")]
+    async fn upload_with_auto_chunksize_panics_on_empty_parts() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        let mut t = manager_with(config, Some(Vec::new()), Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload_with_auto_chunksize("target-bucket", "key", small_body_chunk())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn singlepart_body_read_failure_is_retryable_error() {
+        let mut t = manager_with(dead_endpoint_config(), None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::new(SdkBody::taken()))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn singlepart_invalid_source_expires_warns_and_falls_back() {
+        let mut t = manager_with(dead_endpoint_config(), None, Some(4)).await;
+
+        // Unparseable Expires header: the fallback-to-None warning must fire,
+        // then the upload proceeds and dies on the unreachable endpoint.
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::from(b"data".to_vec()))
+                    .expires_string("not-an-http-date")
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("dispatch failure"),
+            "expected the upload itself to fail on the endpoint: {err:#}"
+        );
+        assert!(
+            t.has_warning.load(Ordering::SeqCst),
+            "invalid Expires must set the warning flag"
+        );
+        let mut saw_warning_stat = false;
+        while let Ok(stat) = t.stats_receiver.try_recv() {
+            if matches!(stat, SyncStatistics::SyncWarning { .. }) {
+                saw_warning_stat = true;
+            }
+        }
+        assert!(saw_warning_stat, "expected a SyncWarning stat");
+    }
+
+    #[tokio::test]
+    async fn singlepart_converts_configured_expires() {
+        let mut config = dead_endpoint_config();
+        config.expires = Some(chrono::Utc::now());
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        // The configured --expires converts cleanly; the only failure left is
+        // the endpoint itself.
+        assert!(
+            format!("{err:#}").contains("dispatch failure"),
+            "unexpected error: {err:#}"
+        );
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn multipart_invalid_source_expires_warns_and_falls_back() {
+        let mut config = dead_endpoint_config();
+        // Force the multipart path for a small object.
+        config.transfer_config.multipart_threshold = 4;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::from(b"data".to_vec()))
+                    .expires_string("not-an-http-date")
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("create_multipart_upload"),
+            "expected create_multipart_upload to be what fails: {err:#}"
+        );
+        assert!(
+            t.has_warning.load(Ordering::SeqCst),
+            "invalid Expires must set the warning flag"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_converts_configured_expires_and_storage_class() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.multipart_threshold = 4;
+        config.expires = Some(chrono::Utc::now());
+        config.storage_class = Some(StorageClass::Glacier);
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("create_multipart_upload"),
+            "expected create_multipart_upload to be what fails: {err:#}"
+        );
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+}

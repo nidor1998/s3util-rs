@@ -1380,6 +1380,12 @@ mod tests {
         // body bytes than the range it claims to be returning. Default
         // 0 leaves response sizes exact.
         over_read_extra: StdMutex<usize>,
+        // Cancelled from inside `get_object` (before the body is returned) —
+        // models a ctrl-c that lands while the GET is in flight.
+        cancel_on_get: StdMutex<Option<PipelineCancellationToken>>,
+        // Returned verbatim by `get_rate_limit_bandwidth` so tests can drive
+        // the explicit rate-limiter acquire in the serial read loop.
+        rate_limit: StdMutex<Option<Arc<RateLimiter>>>,
         head_calls: AtomicU32,
         head_first_part_calls: AtomicU32,
         get_object_parts_attributes_calls: AtomicU32,
@@ -1406,6 +1412,8 @@ mod tests {
                     fail_get_at_offsets: StdMutex::new(Vec::new()),
                     delay_get_at_offsets: StdMutex::new(HashMap::new()),
                     over_read_extra: StdMutex::new(0),
+                    cancel_on_get: StdMutex::new(None),
+                    rate_limit: StdMutex::new(None),
                     head_calls: AtomicU32::new(0),
                     head_first_part_calls: AtomicU32::new(0),
                     get_object_parts_attributes_calls: AtomicU32::new(0),
@@ -1489,6 +1497,17 @@ mod tests {
             *self.inner.over_read_extra.lock().unwrap() = extra;
             self
         }
+        /// Cancel `token` from inside every `get_object` call, after the
+        /// request has been accepted but before the body is handed back.
+        fn with_cancel_on_get(self, token: PipelineCancellationToken) -> Self {
+            *self.inner.cancel_on_get.lock().unwrap() = Some(token);
+            self
+        }
+        /// Serve `limiter` from `get_rate_limit_bandwidth`.
+        fn with_rate_limit(self, limiter: Arc<RateLimiter>) -> Self {
+            *self.inner.rate_limit.lock().unwrap() = Some(limiter);
+            self
+        }
         fn head_calls(&self) -> u32 {
             self.inner.head_calls.load(Ordering::SeqCst)
         }
@@ -1542,6 +1561,10 @@ mod tests {
                     Ok(_) => break,
                     Err(actual) => peak = actual,
                 }
+            }
+
+            if let Some(token) = self.inner.cancel_on_get.lock().unwrap().as_ref() {
+                token.cancel();
             }
 
             let (body, content_length, content_range): (Vec<u8>, i64, Option<String>) =
@@ -1748,7 +1771,7 @@ mod tests {
             PathBuf::new()
         }
         fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
-            None
+            self.inner.rate_limit.lock().unwrap().clone()
         }
         fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
             unimplemented!()
@@ -3177,6 +3200,369 @@ mod tests {
             .unwrap();
         assert_eq!(head.content_length(), Some(3));
         assert_eq!(mock.head_first_part_calls(), 1);
+    }
+
+    // ------------------------------------------------------------------
+    // Misbehaving / cancelling writers for the error and cancellation
+    // paths of the serial loop and the parallel drain.
+    // ------------------------------------------------------------------
+
+    /// Captures writes and cancels the token on the first write — models a
+    /// ctrl-c landing while the serial loop is mid-body.
+    struct CancelOnWriteWriter {
+        buf: Arc<StdMutex<Vec<u8>>>,
+        token: PipelineCancellationToken,
+    }
+
+    impl tokio::io::AsyncWrite for CancelOnWriteWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            self.buf.lock().unwrap().extend_from_slice(buf);
+            self.token.cancel();
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Writes succeed; flush also succeeds but cancels the token — models a
+    /// cancellation that lands after the last byte was already written.
+    struct CancelOnFlushWriter {
+        token: PipelineCancellationToken,
+    }
+
+    impl tokio::io::AsyncWrite for CancelOnFlushWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            self.token.cancel();
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    /// Fails on write, or (with `fail_flush`) succeeds writes and fails the
+    /// per-chunk flush — the two downstream-pipe failure shapes of the
+    /// parallel drain.
+    struct FailWriter {
+        fail_flush: bool,
+    }
+
+    impl tokio::io::AsyncWrite for FailWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            if self.fail_flush {
+                Poll::Ready(Ok(buf.len()))
+            } else {
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "simulated write failure",
+                )))
+            }
+        }
+        fn poll_flush(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            if self.fail_flush {
+                Poll::Ready(Err(io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "simulated flush failure",
+                )))
+            } else {
+                Poll::Ready(Ok(()))
+            }
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn serial_returns_default_when_cancelled_during_get() {
+        // Token fires inside the GET: the post-GET guard returns the default
+        // outcome without writing a byte.
+        let token = create_pipeline_cancellation_token();
+        let mock = MockSource::new(b"data".to_vec()).with_cancel_on_get(token.clone());
+        let config = test_config(1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        let writer = VecWriter::new();
+        let buf = writer.buf();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let result = transfer(&config, source, "k", writer, token, stats_tx).await;
+
+        assert!(result.is_ok(), "cancellation must yield default outcome");
+        assert!(buf.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn serial_cancellation_mid_body_stops_writing_and_returns_cancelled() {
+        // The first write cancels the token: the read loop must break on its
+        // next iteration and the transfer must surface Cancelled (truncated
+        // body — verification would be spurious). The permissive rate limiter
+        // drives the serial path's explicit acquire without ever throttling.
+        let token = create_pipeline_cancellation_token();
+        let limiter = Arc::new(RateLimiter::builder().initial(1 << 20).max(1 << 20).build());
+        let mock = MockSource::new(vec![0x42; 1024]).with_rate_limit(limiter);
+        let config = test_config(1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        let buf = Arc::new(StdMutex::new(Vec::new()));
+        let writer = CancelOnWriteWriter {
+            buf: buf.clone(),
+            token: token.clone(),
+        };
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled),
+            "expected Cancelled, got: {err:#}"
+        );
+        assert_eq!(buf.lock().unwrap().len(), 1024, "first write completes");
+    }
+
+    #[tokio::test]
+    async fn ranged_get_short_read_is_an_error() {
+        // The source delivers fewer bytes than the caller-side chunk plan
+        // expects (range and body agree with each other — the *plan* is what
+        // disagrees). The EOF break must be followed by the short-read error.
+        let mock = MockSource::new(b"abc".to_vec());
+        let config = test_config(2, 4, 4);
+        let err = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-2",
+            5,
+            &config,
+            None,
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("short read"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ranged_get_over_read_within_one_fill_is_an_error() {
+        // 50 padding bytes arrive in the same read as the requested 100, so
+        // the in-loop over-read check (not the post-loop trailing probe) must
+        // reject the response.
+        let mock = MockSource::new(vec![0x42; 200]).with_over_read(50);
+        let config = test_config(2, 4, 4);
+        let err = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-99",
+            100,
+            &config,
+            None,
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("observed at least 150"),
+            "expected the in-loop over-read error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_parallel_returns_default_when_cancelled_at_entry() {
+        // Direct call: the public dispatcher has its own earlier guard, so the
+        // parallel entry guard is only observable this way.
+        let mock = MockSource::new(vec![0x42; 10]);
+        let config = test_config(4, 4, 16);
+        let head = HeadObjectOutput::builder().content_length(10).build();
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let writer = VecWriter::new();
+        let buf = writer.buf();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        transfer_parallel(&config, source, "k", head, writer, token, stats_tx)
+            .await
+            .unwrap();
+        assert!(buf.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_parts_sum_mismatch_is_an_error() {
+        // Parts list says 6 bytes, HEAD says 10: downloading the parts-list
+        // range would silently truncate stdout, so the transfer must refuse.
+        let mock = MockSource::new(vec![0x42; 10])
+            .with_e_tag("\"abcabcabcabcabcabcabcabcabcabcab-2\"")
+            .with_parts(&[3, 3]);
+        let mut config = test_config(4, 8 * 1024 * 1024, 8 * 1024 * 1024);
+        config.transfer_config.auto_chunksize = true;
+
+        let (result, bytes, _events) = run_transfer(config, mock).await;
+        let err = result.unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not match source content_length"),
+            "unexpected error: {err:#}"
+        );
+        assert!(bytes.is_empty(), "nothing may reach stdout");
+    }
+
+    #[tokio::test]
+    async fn parallel_cancellation_after_all_chunks_written_returns_cancelled() {
+        // Every chunk downloads and writes cleanly; the token fires on the
+        // final per-chunk flush. The post-join cancellation check must turn
+        // the completed transfer into Cancelled rather than verifying a body
+        // the user asked to abort.
+        let token = create_pipeline_cancellation_token();
+        let mock = MockSource::new(vec![0x42; 10]);
+        let config = test_config(4, 4, 16);
+        let writer = CancelOnFlushWriter {
+            token: token.clone(),
+        };
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled),
+            "expected Cancelled, got: {err:#}"
+        );
+    }
+
+    /// Writes succeed; the token fires only on the SECOND flush — the
+    /// finalize-stage flush, after the per-chunk drain flush already passed.
+    struct CancelOnSecondFlushWriter {
+        token: PipelineCancellationToken,
+        flushes: u32,
+    }
+
+    impl tokio::io::AsyncWrite for CancelOnSecondFlushWriter {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _cx: &mut TaskContext<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+        fn poll_flush(mut self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            self.flushes += 1;
+            if self.flushes >= 2 {
+                self.token.cancel();
+            }
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _cx: &mut TaskContext<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn parallel_cancellation_during_finalize_flush_returns_cancelled() {
+        // The workers finish cleanly (their drain flush is the first flush);
+        // the cancellation lands on finalize's own flush, so the guard right
+        // after it must turn the transfer into Cancelled before verification.
+        let token = create_pipeline_cancellation_token();
+        let mock = MockSource::new(vec![0x42; 10]);
+        let config = test_config(4, 4, 16);
+        let writer = CancelOnSecondFlushWriter {
+            token: token.clone(),
+            flushes: 0,
+        };
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled),
+            "expected Cancelled, got: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_write_failure_is_reported_not_swallowed() {
+        // Chunk 0 drains into a writer whose write fails: the io error must be
+        // recorded as the transfer's failure (exit-1 shape), not surface as a
+        // bare cancellation.
+        let mock = MockSource::new(vec![0x42; 12]);
+        let config = test_config(2, 4, 4);
+        let writer = FailWriter { fail_flush: false };
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("simulated write failure"),
+            "expected the io error to survive: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_flush_failure_is_reported_not_swallowed() {
+        let mock = MockSource::new(vec![0x42; 12]);
+        let config = test_config(2, 4, 4);
+        let writer = FailWriter { fail_flush: true };
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("simulated flush failure"),
+            "expected the io error to survive: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn parallel_peer_failure_discards_late_chunk_and_keeps_first_error() {
+        // Chunk 1 is still in flight when chunk 0\'s write fails. The late
+        // worker must observe `failed` at hand-off, drop its buffer, and the
+        // reported error must remain the original write failure
+        // (first-writer-wins), not anything the late worker produces.
+        let mock = MockSource::new(vec![0x42; 12]).delay_get_at(4, Duration::from_millis(50));
+        let config = test_config(2, 4, 4);
+        let writer = FailWriter { fail_flush: false };
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("simulated write failure"),
+            "expected the FIRST failure to win: {err:#}"
+        );
     }
 }
 
