@@ -900,8 +900,11 @@ mod tests {
     async fn generate_checksum_from_path_read_failure_is_an_error() {
         init_dummy_tracing_subscriber();
 
-        // A directory opens fine but read(2) fails with a non-EOF error
-        // (EISDIR), driving the hard-error arm of the read loop.
+        // On Unix a directory opens fine but read(2) fails with a non-EOF
+        // error (EISDIR), driving the hard-error arm of the read loop. On
+        // Windows File::open on a directory already fails (ERROR_ACCESS_DENIED),
+        // so the read loop is unreachable and only the error surface is
+        // asserted there.
         let dir = tempfile::tempdir().unwrap();
         let err = generate_checksum_from_path(
             &PathBuf::from(dir.path()),
@@ -913,10 +916,12 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            err.to_string().contains("Failed to read"),
-            "unexpected error: {err:#}"
-        );
+        if cfg!(not(windows)) {
+            assert!(
+                err.to_string().contains("Failed to read"),
+                "unexpected error: {err:#}"
+            );
+        }
     }
 
     #[tokio::test]
@@ -934,9 +939,13 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            err.to_string().contains("Failed to read"),
-            "unexpected error: {err:#}"
-        );
+        // See generate_checksum_from_path_read_failure_is_an_error: the read
+        // loop's error arm is only reachable on non-Windows platforms.
+        if cfg!(not(windows)) {
+            assert!(
+                err.to_string().contains("Failed to read"),
+                "unexpected error: {err:#}"
+            );
+        }
     }
 }

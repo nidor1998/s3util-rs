@@ -949,10 +949,12 @@ mod tests {
     async fn generate_e_tag_hash_with_auto_chunksize_read_failure_is_an_error() {
         init_dummy_tracing_subscriber();
 
-        // A directory opens fine but read(2) fails with a non-EOF error
-        // (EISDIR), driving the hard-error arm of the read loop. The part
-        // size of 1 passes the bounds check (directory metadata reports a
-        // nonzero size on every supported platform).
+        // On Unix a directory opens fine but read(2) fails with a non-EOF
+        // error (EISDIR), driving the hard-error arm of the read loop. The
+        // part size of 1 passes the bounds check (directory metadata reports
+        // a nonzero size). On Windows File::open on a directory already fails
+        // (ERROR_ACCESS_DENIED), so the read loop is unreachable and only the
+        // error surface is asserted there.
         let dir = tempfile::tempdir().unwrap();
         let err = generate_e_tag_hash_from_path_with_auto_chunksize(
             &PathBuf::from(dir.path()),
@@ -961,9 +963,11 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(
-            err.to_string().contains("Failed to read"),
-            "unexpected error: {err:#}"
-        );
+        if cfg!(not(windows)) {
+            assert!(
+                err.to_string().contains("Failed to read"),
+                "unexpected error: {err:#}"
+            );
+        }
     }
 }
