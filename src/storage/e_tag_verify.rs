@@ -160,6 +160,17 @@ pub async fn generate_e_tag_hash_from_path_with_auto_chunksize(
     let mut read_bytes: usize = 0;
     let mut concatnated_md5_hash = Vec::new();
     for chunksize in object_parts {
+        // `object_parts` comes from the source's own object-attributes response,
+        // so a hostile or non-compliant endpoint controls these sizes. A
+        // negative value wraps to a huge `usize`, and any value larger than the
+        // bytes still unread cannot be a real part — either would size the buffer
+        // far past the file's actual content. Reject both before allocating, and
+        // fail closed with UNKNOWN exactly like the `read_bytes != file_size`
+        // check below (an inconsistent part list can't reproduce a valid ETag).
+        let remaining_bytes = file_size.saturating_sub(read_bytes as u64);
+        if chunksize < 0 || chunksize as u64 > remaining_bytes {
+            return Ok(UNKNOWN_E_TAG_VALUE.to_string());
+        }
         let mut buffer = Vec::<u8>::with_capacity(chunksize as usize);
         buffer.resize_with(chunksize as usize, Default::default);
         let read_result = file.read_exact(buffer.as_mut_slice()).await;
@@ -756,6 +767,38 @@ mod tests {
             .unwrap(),
             UNKNOWN_E_TAG_VALUE
         );
+    }
+
+    #[tokio::test]
+    async fn generate_e_tag_hash_from_path_auto_chunksize_rejects_bogus_part_sizes() {
+        // `object_parts` comes from the source's own object-attributes response,
+        // so a hostile or non-compliant endpoint controls these sizes. A negative
+        // value wraps to a huge `usize`; an oversized value dwarfs the file. Before
+        // the guard, either sized the read buffer past the file and aborted the
+        // allocation (OOM). Each must now fail closed with UNKNOWN.
+        //
+        // The last case exercises the running remaining-bytes accounting: a valid
+        // first part followed by a second that claims more than the file has left.
+        init_dummy_tracing_subscriber();
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
+
+        for parts in [
+            vec![-1],
+            vec![i64::MAX],
+            vec![17179870, i64::MAX],
+            vec![17179870, -1],
+        ] {
+            assert_eq!(
+                generate_e_tag_hash_from_path_with_auto_chunksize(
+                    &PathBuf::from(LARGE_FILE_PATH),
+                    parts,
+                    create_pipeline_cancellation_token(),
+                )
+                .await
+                .unwrap(),
+                UNKNOWN_E_TAG_VALUE
+            );
+        }
     }
 
     #[tokio::test]

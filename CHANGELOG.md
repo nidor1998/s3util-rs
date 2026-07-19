@@ -17,6 +17,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ETag and additional-checksum verification of a downloaded file no longer allocate a buffer sized from an unvalidated,
+  server-reported part size. When reproducing a multipart source's composite ETag or checksum, s3util reads the local
+  file in the part boundaries reported by the source's `GetObjectAttributes`/`HeadObject` response. A hostile or
+  non-compliant endpoint could report a negative part size (which wraps to a huge `usize`) or one far larger than the
+  file, sizing the read buffer past the file's actual bytes and aborting the process on the allocation (OOM) — reachable
+  in the default configuration, since ETag verification is on unless `--disable-etag-verify` is set. Each part size is
+  now checked against the bytes still unread before allocating; a negative or oversized part fails closed and the object
+  is reported as unverifiable, exactly like the existing part-list length check.
 - Two reachable panics in the transfer paths now return errors. Copying s3-to-s3 with `--auto-chunksize
   --enable-additional-checksum` from a source of 5 MiB or more that was uploaded with a single `PutObject` and lacks the
   requested checksum crashed the process on an empty parts list; per-part verification is now skipped with a warning. And
