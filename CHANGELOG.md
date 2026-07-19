@@ -17,6 +17,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--help` no longer prints the values of exported credential environment variables. An option bound to an environment
+  variable renders as `[env: VAR=value]` in help, so running any subcommand's `--help` with `SOURCE_SECRET_ACCESS_KEY`,
+  `TARGET_SESSION_TOKEN`, an SSE-C key, or another secret-bearing variable exported wrote the secret to the terminal —
+  and to anything capturing it, such as CI logs. Help now shows only the variable name (`hide_env_values`) for access
+  keys, secret access keys, session tokens, and SSE-C keys and key MD5s, on every subcommand.
 - ETag and additional-checksum verification of a downloaded file no longer allocate a buffer sized from an unvalidated,
   server-reported part size. When reproducing a multipart source's composite ETag or checksum, s3util reads the local
   file in the part boundaries reported by the source's `GetObjectAttributes`/`HeadObject` response. A hostile or
