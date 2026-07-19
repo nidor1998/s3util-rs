@@ -116,6 +116,41 @@ pub async fn transfer(
     .await
 }
 
+/// Feed one freshly-read slice of the body into the additional-checksum hasher.
+///
+/// Split out of `transfer_serial` so the memory behaviour is directly testable:
+/// `checksum_chunk_buffer` is owned by the caller, so a test can assert how much
+/// it ever holds. That matters because buffering and streaming produce the
+/// *identical* digest — a test that only checks the digest cannot tell them
+/// apart, and the single-part branch used to accumulate the whole object here,
+/// growing RSS to the object size (an OOM on a large download) while still
+/// verifying correctly.
+///
+/// Post-conditions:
+/// - multipart: the buffer never holds a full chunk after the call, because
+///   every complete `multipart_chunksize` block is finalized as its own part.
+/// - single-part / full-object: the buffer is never touched. `update` is
+///   incremental, so the hasher is fed directly and memory stays flat.
+fn feed_additional_checksum(
+    checksum: &mut AdditionalChecksum,
+    data: &[u8],
+    checksum_chunk_buffer: &mut Vec<u8>,
+    multipart_chunksize: usize,
+    checksum_is_multipart: bool,
+) {
+    if !checksum_is_multipart {
+        checksum.update(data);
+        return;
+    }
+
+    checksum_chunk_buffer.extend_from_slice(data);
+    while checksum_chunk_buffer.len() >= multipart_chunksize {
+        checksum.update(&checksum_chunk_buffer[..multipart_chunksize]);
+        checksum.finalize(); // finalize each part
+        checksum_chunk_buffer.drain(..multipart_chunksize);
+    }
+}
+
 /// Transfer an S3 object to stdout with inline ETag and checksum verification.
 ///
 /// Downloads the object from S3 via source.get_object(), writes the body
@@ -264,20 +299,13 @@ async fn transfer_serial(
 
         // Accumulate data for additional checksum computation
         if let Some(ref mut checksum) = additional_checksum {
-            if checksum_is_multipart {
-                checksum_chunk_buffer.extend_from_slice(&buf[..n]);
-                while checksum_chunk_buffer.len() >= multipart_chunksize {
-                    checksum.update(&checksum_chunk_buffer[..multipart_chunksize]);
-                    checksum.finalize(); // finalize each part
-                    checksum_chunk_buffer = checksum_chunk_buffer[multipart_chunksize..].to_vec();
-                }
-            } else {
-                // Single-part or full-object checksum: feed the hasher directly.
-                // `update` is incremental, so buffering the whole body first
-                // would produce the same digest while growing RSS to the object
-                // size — an OOM on a large download.
-                checksum.update(&buf[..n]);
-            }
+            feed_additional_checksum(
+                checksum,
+                &buf[..n],
+                &mut checksum_chunk_buffer,
+                multipart_chunksize,
+                checksum_is_multipart,
+            );
         }
     }
 
@@ -2988,14 +3016,16 @@ mod tests {
         );
     }
 
-    /// The serial path feeds a single-part / full-object checksum straight into
-    /// the hasher instead of accumulating the body in `checksum_chunk_buffer`
-    /// first, which used to grow RSS to the size of the object (an OOM on a
-    /// large download). `update` is incremental, so the digest must be identical
-    /// — this body spans many 64 KiB reads and several chunk boundaries, so a
-    /// hasher fed per-read has to agree with one fed the whole body at once.
+    /// End-to-end correctness of a single-part / full-object checksum on the
+    /// serial path, over a body spanning many 64 KiB reads and several chunk
+    /// boundaries.
+    ///
+    /// This does NOT prove the body is streamed rather than buffered — the two
+    /// produce the identical digest, which is exactly why the streaming fix was
+    /// safe. The memory property is asserted in
+    /// `additional_checksum_memory_tests::single_part_checksum_never_buffers_the_body`.
     #[tokio::test]
-    async fn serial_streams_full_object_checksum_without_buffering_whole_body() {
+    async fn serial_verifies_full_object_checksum_across_many_reads() {
         use aws_sdk_s3::types::ChecksumMode;
         let chunksize = 100_000usize;
         let body: Vec<u8> = (0..350_000).map(|i| (i % 191) as u8).collect();
@@ -3129,5 +3159,105 @@ mod tests {
             .unwrap();
         assert_eq!(head.content_length(), Some(3));
         assert_eq!(mock.head_first_part_calls(), 1);
+    }
+}
+
+/// Memory-behaviour tests for the serial additional-checksum path.
+///
+/// These exist because the digest alone cannot distinguish streaming from
+/// buffering: accumulating the whole body and hashing it once produces exactly
+/// the same value, so a correctness test passes either way. What follows
+/// asserts on the buffer itself.
+#[cfg(test)]
+mod additional_checksum_memory_tests {
+    use super::feed_additional_checksum;
+    use crate::storage::checksum::AdditionalChecksum;
+    use aws_sdk_s3::types::ChecksumAlgorithm;
+
+    const CHUNK: usize = 8 * 1024;
+
+    /// The single-part / full-object path must never touch the buffer. This is
+    /// the regression guard for the OOM: the old code accumulated every read
+    /// here, so RSS tracked the object size — 100 GiB for a 100 GiB download,
+    /// despite the documented `chunksize x max-parallel-uploads` bound.
+    #[test]
+    fn single_part_checksum_never_buffers_the_body() {
+        let mut checksum = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        let mut buffer = Vec::new();
+
+        // 512 reads of 8 KiB = 4 MiB of body through the hasher.
+        for _ in 0..512 {
+            feed_additional_checksum(&mut checksum, &[0xAB; CHUNK], &mut buffer, CHUNK, false);
+            assert!(
+                buffer.is_empty(),
+                "the single-part path must stream, but the buffer grew to {} bytes",
+                buffer.len()
+            );
+        }
+        assert!(buffer.is_empty());
+    }
+
+    /// The multipart path does buffer, but only up to one chunk: each complete
+    /// `multipart_chunksize` block is finalized as its own part and dropped.
+    #[test]
+    fn multipart_checksum_buffer_stays_within_one_chunk() {
+        let mut checksum = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        let mut buffer = Vec::new();
+
+        // Feed in reads that do not divide evenly into the chunk size, so a
+        // remainder is always carried across iterations.
+        let read = CHUNK / 3 + 7;
+        for _ in 0..512 {
+            feed_additional_checksum(&mut checksum, &vec![0xCD; read], &mut buffer, CHUNK, true);
+            assert!(
+                buffer.len() < CHUNK,
+                "multipart buffering must stay below one chunk, got {} bytes",
+                buffer.len()
+            );
+        }
+    }
+
+    /// Streaming and buffering must agree on the digest — this is what made the
+    /// fix safe, and it is asserted separately from the memory property above.
+    #[test]
+    fn streamed_digest_equals_the_all_at_once_digest() {
+        let body: Vec<u8> = (0..100_000).map(|i| (i % 251) as u8).collect();
+
+        let mut streamed = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        let mut buffer = Vec::new();
+        for slice in body.chunks(CHUNK) {
+            feed_additional_checksum(&mut streamed, slice, &mut buffer, CHUNK, false);
+        }
+
+        let mut at_once = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        at_once.update(&body);
+
+        assert_eq!(streamed.finalize(), at_once.finalize());
+    }
+
+    /// The multipart path must still produce the per-part composite, i.e. the
+    /// extraction did not change which bytes land in which part.
+    #[test]
+    fn multipart_parts_match_an_explicit_per_chunk_walk() {
+        let body: Vec<u8> = (0..CHUNK * 3 + 1234).map(|i| (i % 251) as u8).collect();
+
+        let mut via_helper = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        let mut buffer = Vec::new();
+        // Deliberately ragged reads, so chunk boundaries fall mid-read.
+        for slice in body.chunks(CHUNK / 3 + 7) {
+            feed_additional_checksum(&mut via_helper, slice, &mut buffer, CHUNK, true);
+        }
+        if !buffer.is_empty() {
+            via_helper.update(&buffer);
+            via_helper.finalize();
+        }
+
+        let mut explicit = AdditionalChecksum::new(ChecksumAlgorithm::Sha256, false);
+        for part in body.chunks(CHUNK) {
+            explicit.update(part);
+            explicit.finalize();
+        }
+
+        assert_eq!(via_helper.finalize_all(), explicit.finalize_all());
     }
 }
