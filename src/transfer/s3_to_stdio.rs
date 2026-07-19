@@ -150,7 +150,6 @@ async fn transfer_serial(
         return Ok(TransferOutcome::default());
     }
 
-    let source_size = get_object_output.content_length().unwrap_or(0) as u64;
     let source_e_tag = get_object_output.e_tag().map(|e| e.to_string());
     let source_sse = get_object_output.server_side_encryption().cloned();
     // Auto-detect checksum algorithm from source response when --enable-additional-checksum
@@ -165,7 +164,6 @@ async fn transfer_serial(
     };
 
     let multipart_chunksize = config.transfer_config.multipart_chunksize as usize;
-    let multipart_threshold = config.transfer_config.multipart_threshold as usize;
 
     // Determine if additional checksum verification is needed
     let verify_additional_checksum = config.additional_checksum_mode.is_some()
@@ -201,7 +199,16 @@ async fn transfer_serial(
     let mut concatnated_md5_hash: Vec<u8> = Vec::new();
     let mut parts_count: i64 = 0;
     let mut chunk_buffer: Vec<u8> = Vec::new();
-    let mut total_bytes = 0u64;
+
+    // Rolling MD5 over the whole body, for the single-part ETag form.
+    //
+    // A single-part ETag is MD5(entire object) — it cannot be derived from the
+    // per-chunk digests in `concatnated_md5_hash`, which only reproduce the
+    // composite (`-N`) form. Computing it incrementally here costs one extra
+    // MD5 pass and keeps memory flat; the alternative (hex-encoding the
+    // concatenated per-chunk digests) is only ever correct when the body
+    // happens to fit in a single chunk.
+    let mut whole_body_md5 = md5::Context::new();
 
     // For additional checksum: accumulate chunk data
     let mut checksum_chunk_buffer: Vec<u8> = Vec::new();
@@ -229,15 +236,25 @@ async fn transfer_serial(
             .await
             .context("s3_to_stdio: failed to write to stdout")?;
 
-        total_bytes += n as u64;
         let _ = stats_sender.send(SyncStatistics::SyncBytes(n as u64)).await;
 
         // Accumulate data for MD5 (ETag) computation in chunksize-sized blocks
         if !config.disable_etag_verify {
+            whole_body_md5.consume(&buf[..n]);
             chunk_buffer.extend_from_slice(&buf[..n]);
 
-            // Process complete chunks
-            while chunk_buffer.len() >= multipart_chunksize && total_bytes < source_size {
+            // Process complete chunks.
+            //
+            // The drain must NOT be gated on `total_bytes < source_size`: when
+            // the read that reaches EOF also carries the body past a chunk
+            // boundary, such a gate leaves more than one chunk's worth in
+            // `chunk_buffer` and the tail below then hashes it as a single
+            // oversized part, yielding one part too few and a composite ETag
+            // that mismatches. Draining unconditionally reproduces S3's own
+            // layout: every part is exactly `multipart_chunksize` except the
+            // last, which is whatever remains (possibly nothing, for a body
+            // that is an exact multiple).
+            while chunk_buffer.len() >= multipart_chunksize {
                 let md5_digest = md5::compute(&chunk_buffer[..multipart_chunksize]);
                 concatnated_md5_hash.extend_from_slice(md5_digest.as_slice());
                 parts_count += 1;
@@ -249,16 +266,17 @@ async fn transfer_serial(
         if let Some(ref mut checksum) = additional_checksum {
             if checksum_is_multipart {
                 checksum_chunk_buffer.extend_from_slice(&buf[..n]);
-                while checksum_chunk_buffer.len() >= multipart_chunksize
-                    && total_bytes < source_size
-                {
+                while checksum_chunk_buffer.len() >= multipart_chunksize {
                     checksum.update(&checksum_chunk_buffer[..multipart_chunksize]);
                     checksum.finalize(); // finalize each part
                     checksum_chunk_buffer = checksum_chunk_buffer[multipart_chunksize..].to_vec();
                 }
             } else {
-                // Singlepart or full-object checksum: just accumulate all data
-                checksum_chunk_buffer.extend_from_slice(&buf[..n]);
+                // Single-part or full-object checksum: feed the hasher directly.
+                // `update` is incremental, so buffering the whole body first
+                // would produce the same digest while growing RSS to the object
+                // size — an OOM on a large download.
+                checksum.update(&buf[..n]);
             }
         }
     }
@@ -270,16 +288,14 @@ async fn transfer_serial(
         parts_count += 1;
     }
 
-    // Process remaining data in the additional checksum buffer.
-    // For multipart, finalize the last part now (matching the per-chunk pattern
-    // inside the read loop). For single-part, leave the hasher un-finalized so
-    // the verification block below can call finalize() once to get the full hash.
+    // Finalize the last additional-checksum part. Only the multipart path
+    // buffers; the single-part/full-object path fed the hasher inside the loop
+    // and is left un-finalized so the verification block below can call
+    // finalize() once to get the full hash.
     if let Some(ref mut checksum) = additional_checksum {
-        if !checksum_chunk_buffer.is_empty() {
+        if checksum_is_multipart && !checksum_chunk_buffer.is_empty() {
             checksum.update(&checksum_chunk_buffer);
-            if checksum_is_multipart {
-                checksum.finalize(); // finalize last part
-            }
+            checksum.finalize(); // finalize last part
         }
     }
 
@@ -301,10 +317,22 @@ async fn transfer_serial(
 
     // ETag verification
     if !config.disable_etag_verify && !source.is_express_onezone_storage() {
-        let target_e_tag = if total_bytes < multipart_threshold as u64 {
-            Some(generate_e_tag_hash(&concatnated_md5_hash, 0))
-        } else {
+        // Pick the ETag format from the SOURCE's ETag shape, not from a
+        // size comparison against multipart_threshold. The threshold says how
+        // *we* would upload this object; it says nothing about how the source
+        // was uploaded, and only the latter determines the ETag we must
+        // reproduce. A single-part PUT of any size (S3 allows up to 5 GiB)
+        // carries a plain MD5 ETag, so a size-based choice sent a body larger
+        // than one chunk down the composite branch — or, worse, hex-encoded a
+        // concatenation of per-chunk digests as if it were a single digest.
+        //
+        // Mirrors finalize_parallel, which already keys off the source shape.
+        let target_e_tag = if is_multipart_upload_e_tag(&source_e_tag) {
             Some(generate_e_tag_hash(&concatnated_md5_hash, parts_count))
+        } else {
+            // Single-part: MD5 of the entire body. For a zero-byte object this
+            // is the MD5 of the empty string, which is exactly what S3 reports.
+            Some(generate_e_tag_hash(whole_body_md5.finalize().as_slice(), 0))
         };
 
         let verify_result = verify_e_tag(
@@ -437,6 +465,10 @@ struct WriterState<W: AsyncWrite + Unpin + Send> {
 
     concatnated_md5_hash: Vec<u8>,
     parts_count: i64,
+    /// Rolling MD5 over the whole body, fed in `next_to_write` order by the
+    /// drain loop. Reproduces the single-part ETag form, which cannot be
+    /// derived from the per-chunk digests in `concatnated_md5_hash`.
+    whole_body_md5: md5::Context,
     additional_checksum: Option<AdditionalChecksum>,
     checksum_is_multipart: bool,
     total_bytes: u64,
@@ -752,6 +784,7 @@ async fn transfer_parallel(
         ready: HashMap::new(),
         concatnated_md5_hash: Vec::new(),
         parts_count: 0,
+        whole_body_md5: md5::Context::new(),
         additional_checksum,
         checksum_is_multipart,
         total_bytes: 0,
@@ -894,6 +927,12 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
                 if s.failed.is_none() {
                     s.failed = Some(e);
                 }
+                // Cancelling here means "stop the peer workers", NOT "the user
+                // pressed ctrl-c" — the root cause is in `state.failed` and is
+                // returned by transfer_parallel. The CLI disambiguates the two
+                // via the transfer result (see cli::is_user_cancellation); do
+                // not reintroduce a bare `token.is_cancelled()` test upstream,
+                // or this failure will be reported as exit 130 with no message.
                 cancellation_token.cancel();
                 drop(s);
                 notify.notify_waiters();
@@ -915,6 +954,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
                 ready,
                 concatnated_md5_hash,
                 parts_count,
+                whole_body_md5,
                 additional_checksum,
                 checksum_is_multipart,
                 total_bytes,
@@ -927,6 +967,9 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
                     let md5 = md5::compute(&chunk);
                     concatnated_md5_hash.extend_from_slice(md5.as_slice());
                     *parts_count += 1;
+                    // Drain order is strictly `next_to_write`, so feeding the
+                    // rolling hash here sees the body in byte order.
+                    whole_body_md5.consume(&chunk);
                 }
                 if let Some(chk) = additional_checksum.as_mut() {
                     chk.update(&chunk);
@@ -937,6 +980,10 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
 
                 let chunk_len = chunk.len();
                 if let Err(e) = writer.write_all(&chunk).await {
+                    // Peer-stop signal, not user cancellation — see the comment
+                    // on the chunk-fetch failure path above. A downstream reader
+                    // closing the pipe lands here as BrokenPipe and must be
+                    // reported as a failure, the same as on the serial path.
                     *failed = Some(e.into());
                     cancellation_token.cancel();
                     drop(s);
@@ -1046,7 +1093,14 @@ async fn finalize_parallel<W: AsyncWrite + Unpin + Send>(
                 state.parts_count,
             ))
         } else {
-            Some(generate_e_tag_hash(&state.concatnated_md5_hash, 0))
+            // Single-part: MD5 of the entire body. `concatnated_md5_hash` holds
+            // one digest per downloaded chunk, so hex-encoding it only produced
+            // a valid ETag when the plan happened to be a single chunk — any
+            // single-part source larger than multipart_chunksize mismatched.
+            Some(generate_e_tag_hash(
+                state.whole_body_md5.finalize().as_slice(),
+                0,
+            ))
         };
 
         let verify_result = verify_e_tag(
@@ -2042,6 +2096,173 @@ mod tests {
         assert!(!mock.warning_set());
     }
 
+    /// MD5 of the empty string — the ETag S3 reports for a zero-byte object.
+    const EMPTY_BODY_E_TAG: &str = "\"d41d8cd98f00b204e9800998ecf8427e\"";
+
+    /// A zero-byte object must verify against S3's empty-body ETag.
+    ///
+    /// The tail hasher is skipped for an empty buffer, so nothing ever landed in
+    /// `concatnated_md5_hash` and the computed ETag came out as the empty string
+    /// — guaranteeing a mismatch warning and exit 3 on every zero-byte download.
+    #[tokio::test]
+    async fn zero_byte_object_etag_verifies_against_empty_body_md5() {
+        let mock = MockSource::new(Vec::new()).with_e_tag(EMPTY_BODY_E_TAG);
+        let config = test_config(1, 8 * 1024 * 1024, 8 * 1024 * 1024);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert!(captured.is_empty());
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k")),
+            "zero-byte object must verify, got events: {events:?}"
+        );
+        assert!(
+            !mock.warning_set(),
+            "a zero-byte object must not raise a verification warning"
+        );
+    }
+
+    /// Same object reached through the parallel entry point, which delegates
+    /// zero-byte sources to the serial path.
+    #[tokio::test]
+    async fn zero_byte_object_via_parallel_entry_point_also_verifies() {
+        let mock = MockSource::new(Vec::new()).with_e_tag(EMPTY_BODY_E_TAG);
+        let config = test_config(4, 0, 8 * 1024 * 1024);
+
+        let (result, _captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k"))
+        );
+        assert!(!mock.warning_set());
+    }
+
+    /// A single-part upload larger than one chunk must verify against its plain
+    /// MD5 ETag on the parallel path.
+    ///
+    /// S3 accepts a single PUT up to 5 GiB, so a plain-MD5 ETag says nothing
+    /// about size. The computed value used to be the hex of the *concatenated*
+    /// per-chunk digests, which is a valid ETag only when the download happened
+    /// to be one chunk — every larger single-part source produced a 64+ character
+    /// string compared against a 32 character MD5, i.e. a guaranteed mismatch.
+    #[tokio::test]
+    async fn parallel_single_part_source_spanning_chunks_verifies_whole_body_md5() {
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..3 * chunksize).map(|i| (i % 251) as u8).collect();
+        // Plain, dash-free ETag: this object was uploaded with one PutObject.
+        let single_part_e_tag = generate_e_tag_hash(md5::compute(&body).as_slice(), 0);
+
+        let mock = MockSource::new(body.clone()).with_e_tag(&single_part_e_tag);
+        let config = test_config(4, chunksize as u64, chunksize as u64);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(captured, body, "body must still be written verbatim");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k")),
+            "single-part source spanning 3 chunks must verify, got: {events:?}"
+        );
+        assert!(!mock.warning_set());
+    }
+
+    /// The serial-path counterpart, which additionally covers the case where
+    /// `--multipart-threshold` exceeds the chunk size: the old code chose the
+    /// ETag format by comparing the body size against the threshold, so a body
+    /// under the threshold but over the chunk size hashed several chunks and
+    /// then emitted them through the single-part branch.
+    #[tokio::test]
+    async fn serial_single_part_source_spanning_chunks_verifies_whole_body_md5() {
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..350_000).map(|i| (i % 251) as u8).collect();
+        let single_part_e_tag = generate_e_tag_hash(md5::compute(&body).as_slice(), 0);
+
+        let mock = MockSource::new(body.clone()).with_e_tag(&single_part_e_tag);
+        // Threshold far above the body size ⇒ the old size-based branch chose
+        // the single-part format while the loop had already split 3 chunks.
+        let config = test_config(1, 100 * 1024 * 1024, chunksize as u64);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k")),
+            "single-part source larger than the chunk size must verify, got: {events:?}"
+        );
+        assert!(!mock.warning_set());
+    }
+
+    /// A multipart source whose final read straddles a chunk boundary must still
+    /// be split into the same parts S3 used.
+    ///
+    /// The drain loop used to stop once `total_bytes` reached the object size, so
+    /// when the read that hit EOF also carried the body past a boundary, the
+    /// leftover — more than one chunk's worth — was hashed as a single oversized
+    /// part. That produced one part too few and a mismatching composite ETag,
+    /// and it depended on read framing, so it surfaced intermittently.
+    ///
+    /// Sizes are chosen so the 64 KiB reads land mid-chunk: 100_000-byte chunks
+    /// over a 250_000-byte body gives reads of 65536, 65536, 65536, 53392, and
+    /// the last one crosses the 200_000 boundary while reaching EOF.
+    #[tokio::test]
+    async fn serial_multipart_source_with_straddling_final_read_keeps_part_boundaries() {
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..250_000).map(|i| (i % 251) as u8).collect();
+        let parts: Vec<&[u8]> = body.chunks(chunksize).collect();
+        assert_eq!(parts.len(), 3, "fixture must be 3 parts");
+        let multipart_e_tag = compute_multipart_etag(&parts);
+
+        let mock = MockSource::new(body.clone()).with_e_tag(&multipart_e_tag);
+        let config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k")),
+            "part boundaries must match the source's 3 parts, got: {events:?}"
+        );
+        assert!(
+            !mock.warning_set(),
+            "a correctly chunked multipart source must not warn"
+        );
+    }
+
+    /// A genuine corruption must still be reported: the fixes must not make
+    /// verification unconditionally succeed.
+    #[tokio::test]
+    async fn single_part_source_with_wrong_etag_still_warns() {
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..250_000).map(|i| (i % 251) as u8).collect();
+        let mock = MockSource::new(body).with_e_tag("\"00000000000000000000000000000000\"");
+        let config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+
+        let (result, _captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "a mismatch warns, it does not fail");
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagMismatch { key } if key == "k")),
+            "a wrong ETag must still be detected"
+        );
+        assert!(mock.warning_set());
+    }
+
     #[tokio::test]
     async fn parallel_emits_etag_mismatch_warning_when_etag_differs() {
         let chunksize = 8 * 1024 * 1024usize;
@@ -2270,6 +2491,16 @@ mod tests {
         assert!(
             body.starts_with(&captured),
             "stdout output is not a prefix of the source body"
+        );
+        // The failing worker cancels the token to stop its peers, so the
+        // returned error MUST remain the root cause rather than a peer's
+        // Cancelled. The CLI keys the exit code off exactly this distinction
+        // (cli::is_user_cancellation): if a chunk failure surfaced as
+        // Cancelled here, the run would report exit 130 with no message.
+        let err = result.unwrap_err();
+        assert!(
+            !crate::types::error::is_cancelled_error(&err),
+            "a chunk-GET failure must not be reported as a cancellation, got: {err:#}"
         );
     }
 
@@ -2639,6 +2870,36 @@ mod tests {
                 .any(|e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")),
             "expected a ChecksumVerified event; got: {events:?}"
         );
+    }
+
+    /// The serial path feeds a single-part / full-object checksum straight into
+    /// the hasher instead of accumulating the body in `checksum_chunk_buffer`
+    /// first, which used to grow RSS to the size of the object (an OOM on a
+    /// large download). `update` is incremental, so the digest must be identical
+    /// — this body spans many 64 KiB reads and several chunk boundaries, so a
+    /// hasher fed per-read has to agree with one fed the whole body at once.
+    #[tokio::test]
+    async fn serial_streams_full_object_checksum_without_buffering_whole_body() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..350_000).map(|i| (i % 191) as u8).collect();
+        let full = compute_full_sha256(&body);
+
+        let mock = MockSource::new(body.clone()).with_sha256(&full);
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")),
+            "streamed full-object checksum must match; got: {events:?}"
+        );
+        assert!(!mock.warning_set());
     }
 
     #[tokio::test]

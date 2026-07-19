@@ -9,6 +9,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- ETag verification when copying an S3 object to stdout no longer reports spurious mismatches (exit code 3) on
+  byte-correct transfers. The computed single-part ETag was the hex of the concatenated per-chunk MD5 digests, which is
+  a valid ETag only when the body fit in a single chunk, and the format was chosen by comparing the body size against
+  `--multipart-threshold` rather than by looking at the source's own ETag. A zero-byte object (whose empty tail was
+  never hashed at all) and any single-part upload larger than `--multipart-chunksize` therefore always mismatched. The
+  whole-body MD5 is now computed incrementally and the format follows the source ETag's shape.
+- A multipart source is no longer split at the wrong part boundaries when the read that reaches end-of-file also
+  crosses a chunk boundary. The chunk drain stopped once the byte count reached the object size, so the remainder — more
+  than one chunk's worth — was hashed as a single oversized part, producing one part too few and an intermittent,
+  read-framing-dependent ETag mismatch.
+- Verifying a single-part or full-object additional checksum on an S3-to-stdout copy no longer buffers the entire object
+  in memory; the hasher is fed incrementally as the body streams, which yields the same digest.
+- A failed S3-to-stdout copy on the parallel path now exits 1 with the cause logged, instead of exiting 130 with no
+  message. The worker that hits a failed chunk download or a failed stdout write cancels the pipeline token to stop its
+  peers, and that cancellation was indistinguishable from a user pressing ctrl-c. The same failure on the serial path
+  already exited 1, so the two paths now agree.
+
 - JSON configuration files for the `put-*` subcommands now reject unknown fields instead of silently ignoring them,
   matching the AWS CLI's "Unknown parameter" behaviour. Previously a misspelled or wrongly nested key was dropped and
   the command replaced the whole bucket configuration with the truncated remainder. Most severely, piping the output of
