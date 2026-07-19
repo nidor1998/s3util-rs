@@ -972,6 +972,27 @@ mod tests {
     /// trailing `/` as a directory on every platform — so key resolution must
     /// append the basename here too. Leaving the key as the literal `out/` made
     /// the storage layer skip the write entirely and report success.
+    #[test]
+    fn extract_keys_s3_to_local_forward_slash_target_appends_basename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target_arg = format!("{}/", tmp.path().to_string_lossy());
+        let config = build_config(vec![
+            "s3util",
+            "cp",
+            "s3://b/remote/object.bin",
+            target_arg.as_str(),
+        ]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        assert!(
+            tgt.ends_with("object.bin"),
+            "forward-slash directory target must resolve to <dir>/<basename>, got: {tgt}"
+        );
+        assert!(
+            !fs_util::is_key_a_directory(&tgt),
+            "resolved key must not still look like a directory to the storage layer: {tgt}"
+        );
+    }
+
     /// Only a genuine SIGINT may be reported as a cancellation. The parallel
     /// s3-to-stdio workers cancel the same token to stop their peers after a
     /// chunk GET or stdout write fails; reporting that as exit 130 hid the
@@ -1015,26 +1036,5 @@ mod tests {
         ));
         let e: Result<TransferOutcome> = Err(anyhow!("some failure"));
         assert!(!is_user_cancellation(false, &e));
-    }
-
-    #[test]
-    fn extract_keys_s3_to_local_forward_slash_target_appends_basename() {
-        let tmp = tempfile::tempdir().unwrap();
-        let target_arg = format!("{}/", tmp.path().to_string_lossy());
-        let config = build_config(vec![
-            "s3util",
-            "cp",
-            "s3://b/remote/object.bin",
-            target_arg.as_str(),
-        ]);
-        let (_, tgt) = extract_keys(&config).unwrap();
-        assert!(
-            tgt.ends_with("object.bin"),
-            "forward-slash directory target must resolve to <dir>/<basename>, got: {tgt}"
-        );
-        assert!(
-            !fs_util::is_key_a_directory(&tgt),
-            "resolved key must not still look like a directory to the storage layer: {tgt}"
-        );
     }
 }

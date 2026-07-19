@@ -812,6 +812,24 @@ impl LocalStorage {
         file.flush().await?;
         drop(file);
 
+        // The size-accounting check is a verification too, so it runs before
+        // the temp file is persisted: a download whose written bytes do not
+        // add up to the source size must fail while the object is still
+        // invisible at the destination, exactly like an ETag or checksum
+        // mismatch below.
+        let total_upload_size: u64 = shared_total_upload_size.lock().unwrap().iter().sum();
+        if total_upload_size == source_size {
+            debug!(
+                key,
+                total_upload_size, "multipart upload(local) completed successfully."
+            );
+        } else {
+            return Err(anyhow!(format!(
+                "multipart upload(local) size mismatch: key={key}, expected = {0}, actual {total_upload_size}",
+                source_size
+            )));
+        }
+
         let target_object_parts = if let Some(object_checksum) = &object_checksum {
             object_checksum.object_parts.clone()
         } else {
@@ -846,19 +864,6 @@ impl LocalStorage {
             source_last_modified_seconds,
             source_last_modified_nanos,
         )?;
-
-        let total_upload_size: u64 = shared_total_upload_size.lock().unwrap().iter().sum();
-        if total_upload_size == source_size {
-            debug!(
-                key,
-                total_upload_size, "multipart upload(local) completed successfully."
-            );
-        } else {
-            return Err(anyhow!(format!(
-                "multipart upload(local) size mismatch: key={key}, expected = {0}, actual {total_upload_size}",
-                source_size
-            )));
-        }
 
         let lossy_path = real_path.to_string_lossy().to_string();
         debug!(

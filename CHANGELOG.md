@@ -75,18 +75,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `mv` now refuses to move an object onto itself instead of deleting it. `s3util mv s3://bucket/key s3://bucket/key`
   (and the directory-style `s3util mv s3://bucket/dir/key s3://bucket/dir/`, which resolves to the same key) copied the
   object over itself and then deleted the source — destroying the object outright on an unversioned bucket while
-  reporting success. The check runs before the copy, so nothing is transferred or deleted.
+  reporting success. The check runs before the copy, so nothing is transferred or deleted. It fires only when both
+  sides resolve to the same object: with different `--source-endpoint-url` / `--target-endpoint-url` the same bucket
+  and key names are two distinct objects (e.g. migrating between storage services that share a bucket name), and an
+  explicit `--source-version-id` (other than the `null` pseudo-version) is a version promotion — the copy publishes
+  that version as the newest one and the delete removes only the copied version.
 - On Windows, a target path ending in `/` (rather than `\`) is now recognised as a directory by target validation and
   key resolution, as it already was by the storage layer. Previously `s3util cp s3://bucket/key out/` against a
   non-existent `out` directory silently wrote nothing and exited 0, and `s3util mv` additionally deleted the source
   object.
 - Corrected `ONE-ZONE_IA` to `ONEZONE_IA` in the `--storage-class` option help and the invalid-storage-class error
   message.
-- Stricter format validation of `--metadata` values (e.g. a leading comma is now rejected).
+- Stricter format validation of `--metadata`: the whole value must be comma-separated `key=value` pairs, so a leading
+  comma or two pairs without a separating comma (`a=bc=d`) are now rejected.
 - A source object's `Expires` header that cannot be parsed as an HTTP date no longer causes a panic; a warning is
   reported and the value falls back to `None`.
 - When downloading to local storage, object verification now runs on the temporary file before it is persisted to the
-  final path, so an object that fails verification never becomes visible at the destination.
+  final path, so an object that fails verification never becomes visible at the destination. The multipart download's
+  size-accounting check moved in front of the persist for the same reason.
 
 ## [1.7.1] - 2026-07-11
 

@@ -239,11 +239,17 @@ async fn transfer_serial(
     //
     // A single-part ETag is MD5(entire object) — it cannot be derived from the
     // per-chunk digests in `concatnated_md5_hash`, which only reproduce the
-    // composite (`-N`) form. Computing it incrementally here costs one extra
-    // MD5 pass and keeps memory flat; the alternative (hex-encoding the
-    // concatenated per-chunk digests) is only ever correct when the body
-    // happens to fit in a single chunk.
+    // composite (`-N`) form. Computed incrementally so memory stays flat; the
+    // alternative (hex-encoding the concatenated per-chunk digests) is only
+    // ever correct when the body happens to fit in a single chunk.
     let mut whole_body_md5 = md5::Context::new();
+
+    // The source's ETag shape is known up front and decides which of the two
+    // hashes the verification below can use, so only that one is maintained —
+    // feeding both would hash every byte twice for no benefit. A source
+    // without an ETag skips verification either way; the single-part hash is
+    // kept for it only because that branch is the cheaper of the two.
+    let source_e_tag_is_multipart = is_multipart_upload_e_tag(&source_e_tag);
 
     // For additional checksum: accumulate chunk data
     let mut checksum_chunk_buffer: Vec<u8> = Vec::new();
@@ -275,25 +281,28 @@ async fn transfer_serial(
 
         // Accumulate data for MD5 (ETag) computation in chunksize-sized blocks
         if !config.disable_etag_verify {
-            whole_body_md5.consume(&buf[..n]);
-            chunk_buffer.extend_from_slice(&buf[..n]);
+            if source_e_tag_is_multipart {
+                chunk_buffer.extend_from_slice(&buf[..n]);
 
-            // Process complete chunks.
-            //
-            // The drain must NOT be gated on `total_bytes < source_size`: when
-            // the read that reaches EOF also carries the body past a chunk
-            // boundary, such a gate leaves more than one chunk's worth in
-            // `chunk_buffer` and the tail below then hashes it as a single
-            // oversized part, yielding one part too few and a composite ETag
-            // that mismatches. Draining unconditionally reproduces S3's own
-            // layout: every part is exactly `multipart_chunksize` except the
-            // last, which is whatever remains (possibly nothing, for a body
-            // that is an exact multiple).
-            while chunk_buffer.len() >= multipart_chunksize {
-                let md5_digest = md5::compute(&chunk_buffer[..multipart_chunksize]);
-                concatnated_md5_hash.extend_from_slice(md5_digest.as_slice());
-                parts_count += 1;
-                chunk_buffer = chunk_buffer[multipart_chunksize..].to_vec();
+                // Process complete chunks.
+                //
+                // The drain must NOT be gated on `total_bytes < source_size`: when
+                // the read that reaches EOF also carries the body past a chunk
+                // boundary, such a gate leaves more than one chunk's worth in
+                // `chunk_buffer` and the tail below then hashes it as a single
+                // oversized part, yielding one part too few and a composite ETag
+                // that mismatches. Draining unconditionally reproduces S3's own
+                // layout: every part is exactly `multipart_chunksize` except the
+                // last, which is whatever remains (possibly nothing, for a body
+                // that is an exact multiple).
+                while chunk_buffer.len() >= multipart_chunksize {
+                    let md5_digest = md5::compute(&chunk_buffer[..multipart_chunksize]);
+                    concatnated_md5_hash.extend_from_slice(md5_digest.as_slice());
+                    parts_count += 1;
+                    chunk_buffer = chunk_buffer[multipart_chunksize..].to_vec();
+                }
+            } else {
+                whole_body_md5.consume(&buf[..n]);
             }
         }
 
@@ -355,7 +364,7 @@ async fn transfer_serial(
         // concatenation of per-chunk digests as if it were a single digest.
         //
         // Mirrors finalize_parallel, which already keys off the source shape.
-        let target_e_tag = if is_multipart_upload_e_tag(&source_e_tag) {
+        let target_e_tag = if source_e_tag_is_multipart {
             Some(generate_e_tag_hash(&concatnated_md5_hash, parts_count))
         } else {
             // Single-part: MD5 of the entire body. For a zero-byte object this
@@ -497,6 +506,10 @@ struct WriterState<W: AsyncWrite + Unpin + Send> {
     /// drain loop. Reproduces the single-part ETag form, which cannot be
     /// derived from the per-chunk digests in `concatnated_md5_hash`.
     whole_body_md5: md5::Context,
+    /// Shape of the source's own ETag, fixed at HEAD time. Selects which of
+    /// the two ETag hashes the drain loop maintains — only one is ever used
+    /// by `finalize_parallel`, so feeding both would hash every byte twice.
+    source_e_tag_is_multipart: bool,
     additional_checksum: Option<AdditionalChecksum>,
     checksum_is_multipart: bool,
     total_bytes: u64,
@@ -826,6 +839,7 @@ async fn transfer_parallel(
         concatnated_md5_hash: Vec::new(),
         parts_count: 0,
         whole_body_md5: md5::Context::new(),
+        source_e_tag_is_multipart: is_multipart_upload_e_tag(&source_e_tag),
         additional_checksum,
         checksum_is_multipart,
         total_bytes: 0,
@@ -1000,6 +1014,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
                 concatnated_md5_hash,
                 parts_count,
                 whole_body_md5,
+                source_e_tag_is_multipart,
                 additional_checksum,
                 checksum_is_multipart,
                 total_bytes,
@@ -1009,12 +1024,15 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
 
             while let Some(chunk) = ready.remove(next_to_write) {
                 if !config.disable_etag_verify {
-                    let md5 = md5::compute(&chunk);
-                    concatnated_md5_hash.extend_from_slice(md5.as_slice());
-                    *parts_count += 1;
-                    // Drain order is strictly `next_to_write`, so feeding the
-                    // rolling hash here sees the body in byte order.
-                    whole_body_md5.consume(&chunk);
+                    if *source_e_tag_is_multipart {
+                        let md5 = md5::compute(&chunk);
+                        concatnated_md5_hash.extend_from_slice(md5.as_slice());
+                        *parts_count += 1;
+                    } else {
+                        // Drain order is strictly `next_to_write`, so feeding the
+                        // rolling hash here sees the body in byte order.
+                        whole_body_md5.consume(&chunk);
+                    }
                 }
                 if let Some(chk) = additional_checksum.as_mut() {
                     chk.update(&chunk);

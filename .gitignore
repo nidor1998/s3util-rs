@@ -9,3 +9,4 @@ lcov.info
 .DS_Store
 /docs
 /.devcontainer
+.claude/
