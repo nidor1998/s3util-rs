@@ -143,6 +143,7 @@ pub struct RenameArgs {
     #[arg(
         long,
         env,
+        hide_env_values = true,
         conflicts_with_all = ["source_profile"],
         requires = "source_secret_access_key",
         help_heading = "AWS Configuration"
@@ -153,6 +154,7 @@ pub struct RenameArgs {
     #[arg(
         long,
         env,
+        hide_env_values = true,
         conflicts_with_all = ["source_profile"],
         requires = "source_access_key",
         help_heading = "AWS Configuration"
@@ -163,6 +165,7 @@ pub struct RenameArgs {
     #[arg(
         long,
         env,
+        hide_env_values = true,
         conflicts_with_all = ["source_profile"],
         requires = "source_access_key",
         help_heading = "AWS Configuration"

@@ -139,15 +139,15 @@ It cannot work between different object storages or regions."#)]
     pub source_profile: Option<String>,
 
     /// Source access key
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_secret_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_secret_access_key", help_heading = "AWS Configuration")]
     pub source_access_key: Option<String>,
 
     /// Source secret access key
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
     pub source_secret_access_key: Option<String>,
 
     /// Source session token
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
     pub source_session_token: Option<String>,
 
     /// Source region
@@ -191,15 +191,15 @@ It cannot work between different object storages or regions."#)]
     pub target_profile: Option<String>,
 
     /// Target access key
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_secret_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_secret_access_key", help_heading = "AWS Configuration")]
     pub target_access_key: Option<String>,
 
     /// Target secret access key
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
     pub target_secret_access_key: Option<String>,
 
     /// Target session token
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
     pub target_session_token: Option<String>,
 
     /// Target region
@@ -365,13 +365,20 @@ If this option is enabled, extra API calls are required."#)]
     #[arg(
         long,
         env,
+        hide_env_values = true,
         requires = "source_sse_c_key_md5",
         help_heading = "Encryption"
     )]
     pub source_sse_c_key: Option<String>,
 
     /// Source base64 encoded MD5 digest of source_sse_c_key
-    #[arg(long, env, requires = "source_sse_c", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        hide_env_values = true,
+        requires = "source_sse_c",
+        help_heading = "Encryption"
+    )]
     pub source_sse_c_key_md5: Option<String>,
 
     /// Target SSE-C algorithm. Valid choices: AES256
@@ -382,13 +389,20 @@ If this option is enabled, extra API calls are required."#)]
     #[arg(
         long,
         env,
+        hide_env_values = true,
         requires = "target_sse_c_key_md5",
         help_heading = "Encryption"
     )]
     pub target_sse_c_key: Option<String>,
 
     /// Target base64 encoded MD5 digest of target-sse-c-key
-    #[arg(long, env, requires = "target_sse_c", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        hide_env_values = true,
+        requires = "target_sse_c",
+        help_heading = "Encryption"
+    )]
     pub target_sse_c_key_md5: Option<String>,
 
     /// Trace verbosity(-v: show info, -vv: show debug, -vvv show trace)

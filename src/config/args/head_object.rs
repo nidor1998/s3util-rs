@@ -29,11 +29,11 @@ pub struct HeadObjectArgs {
     pub source_sse_c: Option<String>,
 
     /// Base64-encoded SSE-C key matching the one used to write the object
-    #[arg(long, env, help_heading = "Object Options")]
+    #[arg(long, env, hide_env_values = true, help_heading = "Object Options")]
     pub source_sse_c_key: Option<String>,
 
     /// Base64-encoded MD5 of the SSE-C key
-    #[arg(long, env, help_heading = "Object Options")]
+    #[arg(long, env, hide_env_values = true, help_heading = "Object Options")]
     pub source_sse_c_key_md5: Option<String>,
 
     #[command(flatten)]

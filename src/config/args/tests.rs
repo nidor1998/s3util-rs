@@ -1884,4 +1884,35 @@ mod tests {
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("both storage must be s3://"));
     }
+
+    #[test]
+    fn credential_args_hide_env_values_in_every_subcommand() {
+        use clap::CommandFactory;
+
+        fn check(cmd: &clap::Command, path: &str, checked: &mut usize) {
+            for arg in cmd.get_arguments() {
+                let id = arg.get_id().as_str();
+                let sensitive = id.contains("access_key")
+                    || id.contains("session_token")
+                    || id.contains("sse_c_key");
+                if sensitive && arg.get_env().is_some() {
+                    *checked += 1;
+                    assert!(
+                        arg.is_hide_env_values_set() || arg.is_hide_env_set(),
+                        "{path} --{id}: env-backed credential arg must hide its env value in help output"
+                    );
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                check(sub, &format!("{path} {}", sub.get_name()), checked);
+            }
+        }
+
+        let cmd = Cli::command();
+        let mut checked = 0;
+        check(&cmd, cmd.get_name(), &mut checked);
+        // CommonArgs alone contributes 10 credential args per subcommand that
+        // flattens it; a low count means the walk went wrong.
+        assert!(checked >= 18, "only {checked} credential args found");
+    }
 }
