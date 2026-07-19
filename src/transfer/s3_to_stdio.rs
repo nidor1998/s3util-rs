@@ -2020,6 +2020,37 @@ mod tests {
         assert_eq!(mock.get_calls(), 3);
     }
 
+    /// The rolling whole-body MD5 is order-sensitive, and chunks are fetched
+    /// concurrently — so it is fed from the drain loop, which runs strictly in
+    /// `next_to_write` order, rather than at fetch time. This pins that: chunk
+    /// 0 is delayed so chunks 1 and 2 arrive first, and the single-part ETag
+    /// must still verify. Feeding the hash on arrival would digest the body
+    /// out of order and mismatch here while the written bytes stayed correct.
+    #[tokio::test]
+    async fn parallel_whole_body_md5_follows_write_order_not_arrival_order() {
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..3 * chunksize).map(|i| (i % 251) as u8).collect();
+        let single_part_e_tag = generate_e_tag_hash(md5::compute(&body).as_slice(), 0);
+
+        let mock = MockSource::new(body.clone())
+            .with_e_tag(&single_part_e_tag)
+            .delay_get_at(0, Duration::from_millis(80))
+            .delay_get_at(chunksize as u64, Duration::from_millis(20));
+        let config = test_config(4, 8 * 1024 * 1024, chunksize as u64);
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { key } if key == "k")),
+            "whole-body MD5 must follow write order, got: {events:?}"
+        );
+        assert!(!mock.warning_set());
+    }
+
     #[tokio::test]
     async fn parallel_concurrent_get_count_never_exceeds_max_parallel_uploads() {
         // 8 chunks, N=3, every chunk delayed so more would-be concurrent if
@@ -2869,6 +2900,74 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")),
             "expected a ChecksumVerified event; got: {events:?}"
+        );
+    }
+
+    /// The composite additional-checksum drain carries the same end-of-file
+    /// straddle hazard as the ETag drain and was fixed alongside it: gating the
+    /// drain on `total_bytes < source_size` let the final read leave more than
+    /// one chunk buffered, which was then finalized as a single oversized part.
+    /// Same fixture as the ETag straddle test — 100_000-byte chunks over a
+    /// 250_000-byte body, where the last 64 KiB read crosses the 200_000
+    /// boundary while reaching EOF.
+    #[tokio::test]
+    async fn serial_multipart_checksum_with_straddling_final_read_keeps_part_boundaries() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..250_000).map(|i| (i % 191) as u8).collect();
+        let parts: Vec<&[u8]> = body.chunks(chunksize).collect();
+        assert_eq!(parts.len(), 3, "fixture must be 3 parts");
+        let composite = compute_composite_sha256(&parts);
+
+        let mock = MockSource::new(body.clone()).with_sha256(&composite);
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+        // Isolate the checksum: the source has no ETag, so ETag verification
+        // returns None and cannot contribute an event or a warning.
+        config.disable_etag_verify = true;
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok(), "transfer failed: {result:?}");
+        assert_eq!(captured, body);
+        assert!(
+            events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")),
+            "composite checksum part boundaries must match the source's 3 parts, got: {events:?}"
+        );
+        assert!(!mock.warning_set());
+    }
+
+    /// `--disable-etag-verify` on the serial path. The rolling whole-body MD5
+    /// and the ETag format selection both live behind this guard, so the flag
+    /// must still suppress every ETag event and skip the hashing entirely.
+    #[tokio::test]
+    async fn serial_disable_etag_verify_skips_compute_and_verify() {
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..350_000).map(|i| (i % 251) as u8).collect();
+        let mock = MockSource::new(body.clone()).with_e_tag("\"would-mismatch\"");
+        let mut config = test_config(1, 8 * 1024 * 1024, chunksize as u64);
+        config.disable_etag_verify = true;
+
+        let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+        assert!(result.is_ok());
+        assert_eq!(captured, body, "body must still be written verbatim");
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagVerified { .. })),
+            "no ETag event may be emitted when verification is disabled"
+        );
+        assert!(
+            !events
+                .iter()
+                .any(|e| matches!(e, SyncStatistics::ETagMismatch { .. }))
+        );
+        assert!(
+            !mock.warning_set(),
+            "a would-be mismatch must stay silent behind --disable-etag-verify"
         );
     }
 

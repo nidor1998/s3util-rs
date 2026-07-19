@@ -1659,6 +1659,151 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Single-part source LARGER than --multipart-threshold.
+    ///
+    /// Every other s3→stdout fixture uploads its source through s3util, so any
+    /// source above the threshold is multipart and carries a `-N` ETag. S3
+    /// accepts a single PutObject up to 5 GiB, though, and such an object keeps
+    /// a plain MD5 ETag at any size — so it must be verified against the MD5 of
+    /// the whole body, not against a composite. `put_object` here issues a raw
+    /// single-part PUT to build exactly that source, which no existing test
+    /// covered; the download used to compute the hex of the concatenated
+    /// per-chunk digests and warn on every run (exit 3) despite correct bytes.
+    #[tokio::test]
+    async fn s3_to_stdout_single_part_source_above_threshold_verifies_etag() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 9 MiB > the 8 MiB default threshold, so the download splits into 2
+        // chunks while the source remains a single part.
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        helper
+            .put_object(&bucket, "single_part_large.dat", src_bytes.clone())
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "single_part_large.dat", None)
+            .await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "fixture must be a single-part upload (plain MD5 ETag), got: {}",
+            head.e_tag().unwrap()
+        );
+
+        let s3_path = format!("s3://{}/single_part_large.dat", bucket);
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "a byte-correct single-part download must not warn"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same case on the serial path (`--max-parallel-uploads 1`), which also
+    /// exercises a threshold above the chunk size: the ETag format used to be
+    /// chosen by comparing the body size against --multipart-threshold, so a
+    /// body under the threshold but over the chunk size hashed several chunks
+    /// and then emitted them through the single-part branch.
+    #[tokio::test]
+    async fn s3_to_stdout_single_part_source_serial_path_verifies_etag() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let src_bytes = TestHelper::generate_random_bytes(20 * 1024 * 1024).unwrap();
+        helper
+            .put_object(&bucket, "single_part_serial.dat", src_bytes.clone())
+            .await;
+
+        let s3_path = format!("s3://{}/single_part_serial.dat", bucket);
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--max-parallel-uploads",
+                "1",
+                // Threshold above the body size, chunk size well below it.
+                "--multipart-threshold",
+                "100MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// A zero-byte object must verify against S3's empty-body ETag
+    /// (d41d8cd98f00b204e9800998ecf8427e). The empty tail was never hashed, so
+    /// the computed ETag came out as the empty string and every zero-byte
+    /// download warned and exited 3.
+    #[tokio::test]
+    async fn s3_to_stdout_zero_byte_object_verifies_etag() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        helper.put_object(&bucket, "empty.dat", Vec::new()).await;
+
+        let s3_path = format!("s3://{}/empty.dat", bucket);
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "a zero-byte object must not raise a verification warning"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert!(stdout_bytes.is_empty());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     #[tokio::test]
     async fn s3_to_stdout_e_tag_multipart() {
         TestHelper::init_dummy_tracing_subscriber();
