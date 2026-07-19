@@ -508,6 +508,8 @@ Options:
 |------|------|-------------|
 | `--expires-in <SECONDS>` | Integer | Seconds until the URL expires. Default `3600`; must be greater than `0` and at most `604800` (7 days, S3's maximum for a SigV4 pre-signed URL) |
 
+With `--target-request-payer`, `x-amz-request-payer` becomes part of the URL's signature (`X-Amz-SignedHeaders=host;x-amz-request-payer`), because S3 requires the header on every request to a Requester Pays bucket and SigV4 requires any `x-amz-*` header to be signed. Whoever uses the URL must therefore send that header as well — `curl -H 'x-amz-request-payer: requester' '<URL>'` — otherwise S3 rejects the request with `SignatureDoesNotMatch`. Without the flag, the URL is plain but a Requester Pays bucket answers `403`.
+
 Common options (e.g. `--target-region`, `--target-access-key`, `--target-profile`) apply the same way as for other subcommands. `presign` covers `GetObject` only — it does not pre-sign uploads or any other operation. If the signing credentials are temporary (for example STS or SSO session credentials), the URL stops working once those credentials expire, even if `--expires-in` has not elapsed. Because no request is sent to S3, `presign` has no `--dry-run` and never returns the not-found exit code `4`: it exits `0` once the URL is printed, or `1` / `2` on a signing or argument error.
 
 ### put-object-annotation

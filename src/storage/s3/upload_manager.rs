@@ -1017,9 +1017,37 @@ impl UploadManager {
             None
         };
 
-        // Build minimal metadata from config. For stdin-sourced streams, there is
-        // no source GetObjectOutput to pull metadata from; we rely purely on what
-        // the user configured on the CLI.
+        // Build metadata from config. For stdin-sourced streams there is no
+        // source GetObjectOutput to pull metadata from, so every value comes
+        // from what the user configured on the CLI.
+        //
+        // These must match what the buffered stdin path applies via
+        // `UploadMetadata` in `singlepart_upload`: the same command must not
+        // produce a differently-tagged object just because the input crossed
+        // --multipart-threshold and took the streaming path instead.
+        let expires = match self.config.expires {
+            Some(expires) => Some(DateTime::from_str(
+                &expires.to_rfc3339(),
+                DateTimeFormat::DateTimeWithOffset,
+            )?),
+            None => None,
+        };
+
+        // `--put-last-modified-metadata` normally records the source object's
+        // mtime. A stream has no source object, so — as on the buffered stdin
+        // path, whose synthetic GetObjectOutput carries `now` — record the
+        // upload time.
+        let metadata = if self.config.put_last_modified_metadata {
+            let mut metadata = self.config.metadata.clone().unwrap_or_default();
+            metadata.insert(
+                S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
+                chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false),
+            );
+            Some(metadata)
+        } else {
+            self.config.metadata.clone()
+        };
+
         let create_output = self
             .client
             .create_multipart_upload()
@@ -1027,9 +1055,15 @@ impl UploadManager {
             .set_storage_class(self.config.storage_class.clone())
             .bucket(bucket)
             .key(key)
-            .set_metadata(self.config.metadata.clone())
+            .set_metadata(metadata)
             .set_tagging(self.tagging.clone())
             .set_content_type(self.config.content_type.clone())
+            .set_cache_control(self.config.cache_control.clone())
+            .set_content_disposition(self.config.content_disposition.clone())
+            .set_content_encoding(self.config.content_encoding.clone())
+            .set_content_language(self.config.content_language.clone())
+            .set_expires(expires)
+            .set_website_redirect_location(self.config.website_redirect.clone())
             .set_server_side_encryption(self.config.sse.clone())
             .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
             .set_sse_customer_algorithm(self.config.target_sse_c.clone())

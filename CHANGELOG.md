@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `--if-none-match` now applies to uploads from stdin. Both stdin paths passed a hard-coded "no condition" to the
+  target, so the documented overwrite protection did nothing and an existing object was silently replaced.
+- Uploading from stdin no longer drops `--cache-control`, `--content-disposition`, `--content-encoding`,
+  `--content-language`, `--expires`, `--website-redirect` and `--put-last-modified-metadata` when the input is large
+  enough to cross `--multipart-threshold`. Only the buffered (below-threshold) path applied them, so the same command
+  produced a differently-tagged object depending purely on how much data arrived on stdin.
+- `--target-request-payer` is now sent by `rm`, `head-object`, `get-object-tagging`, `put-object-tagging`,
+  `restore-object`, `presign`, and the target-exists probe used by `cp --skip-existing`. The flag was parsed and then
+  discarded by all of them, so each returned `403` against a Requester Pays bucket despite the documented option.
+  (`delete-object-tagging` and `head-bucket` also accept the flag, but the S3 API has no request-payer parameter for
+  `DeleteObjectTagging` or `HeadBucket`, so there is nothing to send.) For `presign`, the header becomes part of the
+  URL's signature, so the recipient must send `x-amz-request-payer: requester` as well — see the README.
+
 - ETag verification when copying an S3 object to stdout no longer reports spurious mismatches (exit code 3) on
   byte-correct transfers. The computed single-part ETag was the hex of the concatenated per-chunk MD5 digests, which is
   a valid ETag only when the body fit in a single chunk, and the format was chosen by comparing the body size against

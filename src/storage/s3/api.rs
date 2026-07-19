@@ -238,6 +238,9 @@ pub struct HeadObjectOpts {
     /// When `true`, sets `ChecksumMode=ENABLED` so S3 includes the
     /// additional checksum in the response.
     pub enable_additional_checksum: bool,
+    /// Sends `x-amz-request-payer: requester`, required to read an object in
+    /// a Requester Pays bucket. Without it S3 answers 403.
+    pub request_payer: Option<RequestPayer>,
 }
 
 /// Issue `HeadObject` against `bucket`/`key`. Returns the SDK response on
@@ -267,6 +270,9 @@ pub async fn head_object(
     if opts.enable_additional_checksum {
         req = req.checksum_mode(ChecksumMode::Enabled);
     }
+    if let Some(rp) = opts.request_payer {
+        req = req.request_payer(rp);
+    }
 
     req.send().await.map_err(|e| {
         if e.as_service_error()
@@ -292,10 +298,14 @@ pub async fn delete_object(
     bucket: &str,
     key: &str,
     version_id: Option<&str>,
+    request_payer: Option<RequestPayer>,
 ) -> Result<DeleteObjectOutput> {
     let mut req = client.delete_object().bucket(bucket).key(key);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send()
         .await
@@ -313,10 +323,14 @@ pub async fn get_object_tagging(
     bucket: &str,
     key: &str,
     version_id: Option<&str>,
+    request_payer: Option<RequestPayer>,
 ) -> Result<GetObjectTaggingOutput, HeadError> {
     let mut req = client.get_object_tagging().bucket(bucket).key(key);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send().await.map_err(|e| {
         let code = e
@@ -381,6 +395,7 @@ pub async fn put_object_tagging(
     key: &str,
     version_id: Option<&str>,
     tagging: Tagging,
+    request_payer: Option<RequestPayer>,
 ) -> Result<PutObjectTaggingOutput> {
     let mut req = client
         .put_object_tagging()
@@ -389,6 +404,9 @@ pub async fn put_object_tagging(
         .tagging(tagging);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send()
         .await
@@ -1510,6 +1528,7 @@ pub async fn restore_object(
     key: &str,
     version_id: Option<&str>,
     restore_request: RestoreRequest,
+    request_payer: Option<RequestPayer>,
 ) -> Result<RestoreObjectOutput, HeadError> {
     let mut req = client
         .restore_object()
@@ -1518,6 +1537,9 @@ pub async fn restore_object(
         .restore_request(restore_request);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send().await.map_err(|e| {
         let code = e
@@ -1592,18 +1614,28 @@ pub async fn rename_object(
 /// `expires_in`. The URL is produced locally from the SDK client's credentials
 /// and signing config — no S3 API call is made — so this only fails if the
 /// credentials are unresolvable or the signer rejects the request.
+///
+/// `request_payer` becomes a *signed header*, not a query parameter: the
+/// resulting URL carries `X-Amz-SignedHeaders=host;x-amz-request-payer`, so
+/// whoever uses it must send `x-amz-request-payer: requester` too or S3
+/// answers `SignatureDoesNotMatch`. That is unavoidable — S3 requires the
+/// header on every request to a Requester Pays bucket, and SigV4 requires any
+/// `x-amz-*` header to be signed — so the alternative is a URL that always
+/// gets a 403 from such a bucket.
 pub async fn presign_get_object(
     client: &Client,
     bucket: &str,
     key: &str,
     expires_in: Duration,
+    request_payer: Option<RequestPayer>,
 ) -> Result<String> {
     let presigning_config = PresigningConfig::expires_in(expires_in)
         .with_context(|| format!("invalid presigning config (expires_in={expires_in:?})"))?;
-    let presigned = client
-        .get_object()
-        .bucket(bucket)
-        .key(key)
+    let mut req = client.get_object().bucket(bucket).key(key);
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
+    }
+    let presigned = req
         .presigned(presigning_config)
         .await
         .with_context(|| format!("presign get-object on s3://{bucket}/{key}"))?;

@@ -105,8 +105,20 @@ async fn transfer_streaming(
         final_checksum: None,
     };
 
+    let if_none_match = if config.if_none_match {
+        Some("*".to_string())
+    } else {
+        None
+    };
+
     let _put_object_output = target
-        .put_object_stream(target_key, chained, tagging, Some(object_checksum), None)
+        .put_object_stream(
+            target_key,
+            chained,
+            tagging,
+            Some(object_checksum),
+            if_none_match,
+        )
         .await
         .context(format!("failed to stream to target: {target_key}"))?;
 
@@ -199,6 +211,12 @@ async fn transfer_buffered(
         final_checksum: None,
     };
 
+    let if_none_match = if config.if_none_match {
+        Some("*".to_string())
+    } else {
+        None
+    };
+
     let _put_object_output = target
         .put_object(
             target_key,
@@ -209,7 +227,7 @@ async fn transfer_buffered(
             get_object_output,
             tagging,
             Some(object_checksum),
-            None,
+            if_none_match,
         )
         .await
         .context(format!("failed to upload to target: {target_key}"))?;
@@ -457,5 +475,375 @@ mod checksum_invariant_tests {
                 algo
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod if_none_match_tests {
+    use super::*;
+    use crate::config::{CLITimeoutConfig, ClientConfig, RetryConfig, TransferConfig};
+    use crate::storage::StorageTrait;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use crate::types::{
+        AnnotationMap, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId,
+        StoragePath,
+    };
+    use async_trait::async_trait;
+    use aws_sdk_s3::Client;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::operation::delete_object_annotation::DeleteObjectAnnotationOutput;
+    use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+    use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+    use aws_sdk_s3::operation::put_object::PutObjectOutput;
+    use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+    use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+    use aws_sdk_s3::types::{ChecksumMode, ObjectPart, Tagging};
+    use aws_smithy_types::checksum_config::RequestChecksumCalculation;
+    use leaky_bucket::RateLimiter;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex as StdMutex};
+    use tokio::io::AsyncRead;
+    use tokio::sync::Semaphore;
+
+    /// What the target storage was asked to do, so the test can assert on the
+    /// `if_none_match` value that actually reached it.
+    #[derive(Clone, Debug, Default)]
+    struct Recorded {
+        put_object_if_none_match: Option<Option<String>>,
+        put_object_stream_if_none_match: Option<Option<String>>,
+    }
+
+    #[derive(Clone, Debug)]
+    struct RecordingTarget {
+        recorded: Arc<StdMutex<Recorded>>,
+    }
+
+    impl RecordingTarget {
+        fn new() -> Self {
+            Self {
+                recorded: Arc::new(StdMutex::new(Recorded::default())),
+            }
+        }
+        fn recorded(&self) -> Recorded {
+            self.recorded.lock().unwrap().clone()
+        }
+    }
+
+    #[async_trait]
+    impl StorageTrait for RecordingTarget {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<ObjectChecksum>,
+            if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            self.recorded.lock().unwrap().put_object_if_none_match = Some(if_none_match);
+            Ok(PutObjectOutput::builder().build())
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn put_object_stream(
+            &self,
+            _key: &str,
+            _reader: Box<dyn AsyncRead + Send + Unpin>,
+            _tagging: Option<String>,
+            _object_checksum: Option<ObjectChecksum>,
+            if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            self.recorded
+                .lock()
+                .unwrap()
+                .put_object_stream_if_none_match = Some(if_none_match);
+            Ok(PutObjectOutput::builder().build())
+        }
+        async fn list_object_annotations(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_annotation_results: i32,
+        ) -> Result<AnnotationMap> {
+            unimplemented!()
+        }
+        async fn get_object_annotation(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _annotation_name: &str,
+            _checksum_mode: Option<ChecksumMode>,
+        ) -> Result<GetObjectAnnotationOutput> {
+            unimplemented!()
+        }
+        async fn copy_object_annotation(
+            &self,
+            _key: &str,
+            _target_version_id: Option<String>,
+            _annotation_name: &str,
+            _source_annotation: GetObjectAnnotationOutput,
+        ) -> Result<PutObjectAnnotationOutput> {
+            unimplemented!()
+        }
+        async fn delete_object_annotation(
+            &self,
+            _key: &str,
+            _target_version_id: Option<String>,
+            _annotation_name: &str,
+        ) -> Result<DeleteObjectAnnotationOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            unimplemented!()
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn config_with(if_none_match: bool, threshold: u64) -> Config {
+        let client_config = ClientConfig {
+            client_config_location: ClientConfigLocation {
+                aws_config_file: None,
+                aws_shared_credentials_file: None,
+            },
+            credential: S3Credentials::FromEnvironment,
+            region: None,
+            endpoint_url: None,
+            force_path_style: false,
+            accelerate: false,
+            request_payer: None,
+            retry_config: RetryConfig {
+                aws_max_attempts: 1,
+                initial_backoff_milliseconds: 0,
+            },
+            cli_timeout_config: CLITimeoutConfig {
+                operation_timeout_milliseconds: None,
+                operation_attempt_timeout_milliseconds: None,
+                connect_timeout_milliseconds: None,
+                read_timeout_milliseconds: None,
+            },
+            disable_stalled_stream_protection: false,
+            request_checksum_calculation: RequestChecksumCalculation::WhenRequired,
+            parallel_upload_semaphore: Arc::new(Semaphore::new(1)),
+        };
+
+        Config {
+            source: StoragePath::Stdio,
+            target: StoragePath::S3 {
+                bucket: "b".to_string(),
+                prefix: "k".to_string(),
+            },
+            show_progress: false,
+            source_client_config: None,
+            target_client_config: Some(client_config),
+            tracing_config: None,
+            transfer_config: TransferConfig {
+                multipart_threshold: threshold,
+                multipart_chunksize: 5 * 1024 * 1024,
+                auto_chunksize: false,
+            },
+            disable_tagging: false,
+            server_side_copy: false,
+            no_guess_mime_type: false,
+            disable_multipart_verify: false,
+            disable_etag_verify: false,
+            disable_additional_checksum_verify: false,
+            storage_class: None,
+            sse: None,
+            sse_kms_key_id: SseKmsKeyId { id: None },
+            source_sse_c: None,
+            source_sse_c_key: SseCustomerKey { key: None },
+            source_sse_c_key_md5: None,
+            target_sse_c: None,
+            target_sse_c_key: SseCustomerKey { key: None },
+            target_sse_c_key_md5: None,
+            canned_acl: None,
+            additional_checksum_mode: None,
+            additional_checksum_algorithm: None,
+            cache_control: None,
+            content_disposition: None,
+            content_encoding: None,
+            content_language: None,
+            content_type: None,
+            expires: None,
+            metadata: None,
+            no_sync_system_metadata: false,
+            no_sync_user_defined_metadata: false,
+            website_redirect: None,
+            tagging: None,
+            put_last_modified_metadata: false,
+            disable_payload_signing: false,
+            disable_content_md5_header: false,
+            full_object_checksum: false,
+            source_accelerate: false,
+            target_accelerate: false,
+            source_request_payer: false,
+            target_request_payer: false,
+            if_none_match,
+            disable_stalled_stream_protection: false,
+            disable_express_one_zone_additional_checksum: false,
+            max_parallel_uploads: 1,
+            rate_limit_bandwidth: None,
+            version_id: None,
+            is_stdio_source: true,
+            is_stdio_target: false,
+            no_fail_on_verify_error: false,
+            skip_existing: false,
+            dry_run: false,
+            enable_sync_object_annotations: false,
+            disable_check_annotation_etag: false,
+        }
+    }
+
+    async fn run(config: Config, input: Vec<u8>) -> Recorded {
+        let target = RecordingTarget::new();
+        let handle = target.clone();
+        let storage: Storage = Box::new(target);
+        let (tx, _rx) = async_channel::unbounded::<SyncStatistics>();
+        transfer(
+            &config,
+            storage,
+            "k",
+            std::io::Cursor::new(input),
+            create_pipeline_cancellation_token(),
+            tx,
+        )
+        .await
+        .unwrap();
+        handle.recorded()
+    }
+
+    /// `--if-none-match` must reach the buffered (sub-threshold) stdin upload.
+    /// It was hard-coded to `None`, so the documented overwrite protection did
+    /// not apply to stdin at all and an existing object was clobbered.
+    #[tokio::test]
+    async fn if_none_match_reaches_the_buffered_stdin_upload() {
+        let recorded = run(config_with(true, 8 * 1024 * 1024), vec![0x41; 1024]).await;
+        assert_eq!(
+            recorded.put_object_if_none_match,
+            Some(Some("*".to_string())),
+            "buffered stdin upload must send If-None-Match: *"
+        );
+    }
+
+    /// The same for the streaming (at-or-above-threshold) stdin upload.
+    #[tokio::test]
+    async fn if_none_match_reaches_the_streaming_stdin_upload() {
+        let threshold = 1024u64;
+        let recorded = run(config_with(true, threshold), vec![0x42; 4096]).await;
+        assert_eq!(
+            recorded.put_object_stream_if_none_match,
+            Some(Some("*".to_string())),
+            "streaming stdin upload must send If-None-Match: *"
+        );
+    }
+
+    /// Without the flag neither path may send the header, or every stdin
+    /// upload would start failing against an existing key.
+    #[tokio::test]
+    async fn if_none_match_is_absent_on_both_paths_when_flag_is_off() {
+        let buffered = run(config_with(false, 8 * 1024 * 1024), vec![0x41; 1024]).await;
+        assert_eq!(buffered.put_object_if_none_match, Some(None));
+
+        let streaming = run(config_with(false, 1024), vec![0x42; 4096]).await;
+        assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
     }
 }
