@@ -41,6 +41,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   produced a copy of the new object truncated to the old object's length — undetected, because the range check compares
   only the start and end offsets — or, when writing to stdout, interleaved bytes from two versions. Unversioned buckets
   are unaffected, and `--source-version-id` still takes precedence.
+  **IAM impact:** the pinned reads carry a `versionId`, which S3 authorizes against `s3:GetObjectVersion` instead of
+  `s3:GetObject`. Reading from a bucket that has (or ever had) versioning enabled now requires `s3:GetObjectVersion`
+  (plus `s3:GetObjectVersionTagging` where tags are read, and `s3:DeleteObjectVersion` for `mv`); least-privilege
+  policies granting only the unversioned actions will start failing with `AccessDenied`.
 - An ETag mismatch is no longer reported as possible corruption when the source and target ETags simply have different
   shapes. A source uploaded with a single `PutObject` but larger than `--multipart-threshold` is re-uploaded as
   multipart, so a plain MD5 can never equal the composite; the message now explains the chunk-size cause and points at

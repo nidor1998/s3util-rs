@@ -151,7 +151,7 @@ machinery.
 | `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
 | `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
 | `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}`); silent when never configured (matches AWS CLI) |
-| `put-bucket-lifecycle-configuration`     | Sets lifecycle configuration from a JSON file path or `-` (stdin); silent on success |
+| `put-bucket-lifecycle-configuration`     | Sets lifecycle configuration from a JSON file path or `-` (stdin); `--transition-default-minimum-object-size` (`varies_by_storage_class` / `all_storage_classes_128K`) sets the small-object transition cutoff, which S3 accepts only as a request parameter, not in the JSON; silent on success |
 | `get-bucket-lifecycle-configuration`     | Prints lifecycle configuration as JSON (`{"Rules": […]}` matching `aws s3api`); exits 4 if no lifecycle is set |
 | `delete-bucket-lifecycle-configuration`  | Removes lifecycle configuration; silent on success                                  |
 | `put-bucket-encryption`                  | Sets default encryption from a JSON file path or `-` (stdin); silent on success     |
@@ -812,10 +812,16 @@ Required permissions depend on the transfer direction. "Source" and "target" bel
 **Source bucket** (any `cp`/`mv` reading from S3):
 
 - `s3:GetObject` — always. Covers `GetObject`, `HeadObject`, and `GetObjectAttributes`.
+- `s3:GetObjectVersion` — when the source bucket has (or ever had) versioning enabled, or when `--source-version-id`
+  is used. Reads are pinned to the version observed by the initial `HeadObject`, so the GETs carry a `versionId` and
+  S3 authorizes them against this action; a policy granting only `s3:GetObject` gets `AccessDenied` on a versioned
+  bucket.
 - `s3:GetObjectTagging` — when source tags are read. This is the default on S3→S3; suppressed by `--disable-tagging`.
-- `s3:GetObjectVersion` — when `--source-version-id` is used.
+- `s3:GetObjectVersionTagging` — when the tag read addresses a pinned version (versioned source bucket or
+  `--source-version-id`), same rule as `s3:GetObjectVersion`.
 - `s3:DeleteObject` — when running `mv` (the source is deleted on success).
-- `s3:DeleteObjectVersion` — when running `mv` with `--source-version-id`.
+- `s3:DeleteObjectVersion` — when running `mv` from a versioned source bucket or with `--source-version-id`
+  (`mv` deletes exactly the version it copied).
 
 **Target bucket** (any `cp`/`mv` writing to S3):
 
