@@ -83,6 +83,7 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
+- [Security assumptions](#security-assumptions)
 - [Scope](#scope)
 - [Non-Goals](#non-goals)
 - [License](#license)
@@ -1246,6 +1247,33 @@ However, I intend to keep the AWS SDK for Rust and other dependencies up to date
 **Issue and PR lifecycle**
 
 To keep the tracker focused, an issue or PR with no activity for 30 days is labeled `stale` and closed 7 days later unless a new comment (or, for PRs, a new commit) is added. Items labeled `pinned` or `security` are exempt; PRs are also exempt from `pinned`. Closed items can always be reopened.
+
+## Security assumptions
+
+s3util is built on a fundamental security assumption: **both the object storage system and the specific bucket you
+operate on must be trusted.**
+
+Within this trust model, s3util implements the security measures you would reasonably expect of an S3 utility:
+encrypted transport (TLS/HTTPS) for data in transit, end-to-end integrity verification (ETag, MD5, SHA256, and CRC
+checksums), support for server-side encryption, and secure handling of credentials through the standard AWS credential
+providers. These measures protect the confidentiality and integrity of your data against transport-level and accidental
+threats.
+
+However, s3util assumes that the storage endpoint is honest and non-adversarial — that it correctly implements the S3
+API and returns the data, metadata, and checksum values it actually stores, without tampering. The integrity
+verification features are **not** a defense against a malicious or compromised storage backend that deliberately returns
+falsified data or forged checksums. Against such an adversarial endpoint, these guarantees do not hold.
+
+Crucially, trust must extend to the **bucket**, not just the storage provider. Even when the object storage system
+itself is fully trustworthy, a bucket can still be adversarial — for example, a bucket you do not control, a shared
+bucket writable by others, or one whose objects, metadata, or checksums were crafted by an attacker. If you copy or read
+*from* such a bucket, the data and metadata it serves are already untrusted at the source, and s3util's guarantees no
+longer apply. A trusted storage provider hosting an untrusted bucket is, for the purposes of this security model, an
+untrusted source.
+
+Operating on an untrusted, compromised, or non-conformant endpoint or bucket is outside s3util's security model.
+Selecting a trustworthy storage provider, and ensuring that every bucket you operate on is one you control or trust —
+including its credentials, encryption, and access policies — remains your responsibility.
 
 ## Scope
 

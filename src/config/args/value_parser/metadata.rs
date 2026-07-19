@@ -5,14 +5,11 @@ use regex::Regex;
 const INVALID_METADATA: &str = "invalid metadata.";
 
 pub fn check_metadata(metadata: &str) -> Result<String, String> {
-    let regex = Regex::new(r"(,?([a-zA-Z0-9_\-.]+)=([a-zA-Z0-9_\-.]*))+").unwrap();
+    let regex = Regex::new(r"^[a-zA-Z0-9_.-]+=[a-zA-Z0-9_.-]*(,[a-zA-Z0-9_.-]+=[a-zA-Z0-9_.-]*)*$")
+        .unwrap();
 
     let mat = regex.find(metadata);
     if mat.is_none() {
-        return Err(INVALID_METADATA.to_string());
-    }
-
-    if mat.unwrap().as_str() != metadata {
         return Err(INVALID_METADATA.to_string());
     }
 
@@ -40,6 +37,7 @@ mod tests {
 
         assert!(check_metadata("key").is_err());
         assert!(check_metadata("key=Va-lu_e.%1").is_err());
+        assert!(check_metadata(",key=value").is_err());
     }
 
     #[test]

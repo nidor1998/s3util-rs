@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- Corrected `ONE-ZONE_IA` to `ONEZONE_IA` in the `--storage-class` option help and the invalid-storage-class error
+  message.
+- Stricter format validation of `--metadata` values (e.g. a leading comma is now rejected).
+- A source object's `Expires` header that cannot be parsed as an HTTP date no longer causes a panic; a warning is
+  reported and the value falls back to `None`.
+- When downloading to local storage, object verification now runs on the temporary file before it is persisted to the
+  final path, so an object that fails verification never becomes visible at the destination.
+
 ## [1.7.1] - 2026-07-11
 
 ### Changed

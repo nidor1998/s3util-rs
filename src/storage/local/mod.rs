@@ -446,9 +446,6 @@ impl LocalStorage {
         drop(file);
 
         let real_path = PathBuf::from(key);
-        temp_file.persist(&real_path)?;
-
-        fs_util::set_last_modified_for_path(&real_path, seconds, nanos)?;
 
         let target_object_parts = if let Some(object_checksum) = &object_checksum {
             object_checksum.object_parts.clone()
@@ -456,7 +453,10 @@ impl LocalStorage {
             None
         };
 
-        let target_content_length = fs_util::get_file_size(&real_path).await?;
+        // Verify the downloaded object on the temporary file before it is persisted to
+        // its final path, so an object that fails verification never becomes visible at
+        // the destination.
+        let target_content_length = fs_util::get_file_size(&temp_file.path().to_path_buf()).await?;
 
         self.verify_local_file(
             key,
@@ -466,12 +466,16 @@ impl LocalStorage {
             source_content_length,
             source_final_checksum,
             source_checksum_algorithm,
-            &real_path,
+            &temp_file.path().to_path_buf(),
             target_object_parts,
             target_content_length,
             source_storage_class == Some(StorageClass::ExpressOnezone),
         )
         .await?;
+
+        temp_file.persist(&real_path)?;
+
+        fs_util::set_last_modified_for_path(&real_path, seconds, nanos)?;
 
         let lossy_path = real_path.to_string_lossy().to_string();
         debug!(
@@ -774,6 +778,32 @@ impl LocalStorage {
         file.flush().await?;
         drop(file);
 
+        let target_object_parts = if let Some(object_checksum) = &object_checksum {
+            object_checksum.object_parts.clone()
+        } else {
+            None
+        };
+
+        // Verify the downloaded object on the temporary file before it is persisted to
+        // its final path, so an object that fails verification never becomes visible at
+        // the destination.
+        let target_content_length = fs_util::get_file_size(&temp_file.path().to_path_buf()).await?;
+
+        self.verify_local_file(
+            key,
+            object_checksum,
+            &source_sse,
+            &source_e_tag,
+            source_size,
+            source_additional_checksum,
+            source_checksum_algorithm,
+            &temp_file.path().to_path_buf(),
+            target_object_parts,
+            target_content_length,
+            source_storage_class == Some(StorageClass::ExpressOnezone),
+        )
+        .await?;
+
         let real_path = PathBuf::from(key);
         temp_file.persist(&real_path)?;
 
@@ -782,12 +812,6 @@ impl LocalStorage {
             source_last_modified_seconds,
             source_last_modified_nanos,
         )?;
-
-        let target_object_parts = if let Some(object_checksum) = &object_checksum {
-            object_checksum.object_parts.clone()
-        } else {
-            None
-        };
 
         let total_upload_size: u64 = shared_total_upload_size.lock().unwrap().iter().sum();
         if total_upload_size == source_size {
@@ -801,23 +825,6 @@ impl LocalStorage {
                 source_size
             )));
         }
-
-        let target_content_length = fs_util::get_file_size(&real_path).await?;
-
-        self.verify_local_file(
-            key,
-            object_checksum,
-            &source_sse,
-            &source_e_tag,
-            source_size,
-            source_additional_checksum,
-            source_checksum_algorithm,
-            &real_path,
-            target_object_parts,
-            target_content_length,
-            source_storage_class == Some(StorageClass::ExpressOnezone),
-        )
-        .await?;
 
         let lossy_path = real_path.to_string_lossy().to_string();
         debug!(
