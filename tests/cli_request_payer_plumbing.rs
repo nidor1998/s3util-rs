@@ -115,10 +115,33 @@ const CLI_FILES_PASSING_REQUEST_PAYER: &[&str] = &[
 fn cli_runtimes_pass_request_payer_from_client_config() {
     for file in CLI_FILES_PASSING_REQUEST_PAYER {
         let source = read(format!("src/bin/s3util/cli/{file}"));
+        // Require the actual field access, not merely the words: a bare
+        // `contains("request_payer")` would be satisfied by a comment.
+        // `cp.rs` reads it from `target_client_config`, so match on the suffix.
         assert!(
-            source.contains("request_payer"),
+            source.contains("client_config.request_payer"),
             "src/bin/s3util/cli/{file} advertises --target-request-payer but \
-             never reads client_config.request_payer, so the flag is dropped"
+             never reads `client_config.request_payer`, so the flag is dropped"
+        );
+    }
+}
+
+/// The S3 API has no request-payer parameter for `DeleteObjectTagging` or
+/// `HeadBucket`, so those wrappers must NOT grow one. This pins the reason the
+/// two commands are absent from the list above: if a future SDK adds support,
+/// this test fails and the omission gets revisited deliberately rather than
+/// staying an unexplained gap.
+#[test]
+fn wrappers_without_s3_support_do_not_pretend_to_forward_request_payer() {
+    let source = read("src/storage/s3/api.rs");
+
+    for wrapper in ["delete_object_tagging", "head_bucket"] {
+        let body = function_body(&source, wrapper);
+        assert!(
+            !body.contains(".request_payer("),
+            "api::{wrapper} forwards request_payer, but the S3 API has no such \
+             parameter for this operation — if the SDK now supports it, add the \
+             wrapper to WRAPPERS_FORWARDING_REQUEST_PAYER and wire up the CLI"
         );
     }
 }

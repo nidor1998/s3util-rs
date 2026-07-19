@@ -147,6 +147,68 @@ mod tests {
                 .await
         );
 
+        // `verify_test_object_metadata` does not cover website-redirect, so
+        // assert it here — it is one of the headers the streaming path dropped.
+        assert_eq!(
+            head.website_redirect_location(),
+            Some(TEST_WEBSITE_REDIRECT),
+            "--website-redirect must survive the streaming path"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// `--put-last-modified-metadata` on the streaming path. The buffered path
+    /// records the upload time via its synthetic GetObjectOutput; the streaming
+    /// path used to record nothing at all, so the user-metadata key was simply
+    /// missing above `--multipart-threshold`.
+    #[tokio::test]
+    async fn stdin_to_s3_put_last_modified_metadata_streaming_path() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(6 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/last_modified_streaming.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--put-last-modified-metadata",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        let head = helper
+            .head_object(&bucket, "last_modified_streaming.dat", None)
+            .await;
+        assert!(
+            head.e_tag().unwrap().contains('-'),
+            "fixture must have taken the multipart streaming path"
+        );
+        let metadata = head.metadata().expect("user metadata must be present");
+        assert!(
+            metadata.contains_key("s3sync_origin_last_modified"),
+            "--put-last-modified-metadata must record the key on the streaming \
+             path too; got: {metadata:?}"
+        );
+
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 

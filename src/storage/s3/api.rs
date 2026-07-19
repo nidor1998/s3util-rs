@@ -1970,3 +1970,112 @@ mod tests {
         assert!(parse_directory_bucket_zone("base----x-s3").is_none());
     }
 }
+
+/// Behavioural tests for pre-signing, which is pure local computation (the SDK
+/// signs from the client's credentials without contacting S3), so the resulting
+/// URL can be asserted on directly in a unit test.
+#[cfg(test)]
+mod presign_tests {
+    use super::*;
+    use aws_config::BehaviorVersion;
+    use aws_sdk_s3::config::{Credentials, Region};
+
+    fn offline_client() -> Client {
+        let conf = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                None,
+                None,
+                "presign-test",
+            ))
+            .build();
+        Client::from_conf(conf)
+    }
+
+    /// Without the flag the URL signs only `host`, so it can be fetched as-is.
+    #[tokio::test]
+    async fn presign_without_request_payer_signs_only_host() {
+        let url = presign_get_object(
+            &offline_client(),
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            url.contains("X-Amz-SignedHeaders=host&"),
+            "expected host-only SignedHeaders, got: {url}"
+        );
+        assert!(
+            !url.contains("x-amz-request-payer"),
+            "request-payer must not appear when the flag is off: {url}"
+        );
+    }
+
+    /// With the flag, `x-amz-request-payer` must be part of the signature.
+    /// It is a signed header rather than a query parameter, so the recipient
+    /// has to send the header too — asserted here so the documented contract
+    /// (README, `presign_get_object` docs) cannot drift silently.
+    #[tokio::test]
+    async fn presign_with_request_payer_signs_the_header() {
+        let url = presign_get_object(
+            &offline_client(),
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            Some(RequestPayer::Requester),
+        )
+        .await
+        .unwrap();
+
+        // The URL is percent-encoded: "host;x-amz-request-payer".
+        assert!(
+            url.contains("X-Amz-SignedHeaders=host%3Bx-amz-request-payer"),
+            "request-payer must be signed into the URL, otherwise a Requester \
+             Pays bucket answers 403; got: {url}"
+        );
+    }
+
+    /// The two URLs must differ in more than the header list: signing an extra
+    /// header changes the signature itself.
+    #[tokio::test]
+    async fn presign_request_payer_changes_the_signature() {
+        let client = offline_client();
+        let plain = presign_get_object(
+            &client,
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            None,
+        )
+        .await
+        .unwrap();
+        let payer = presign_get_object(
+            &client,
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            Some(RequestPayer::Requester),
+        )
+        .await
+        .unwrap();
+
+        let sig = |u: &str| {
+            u.split("X-Amz-Signature=")
+                .nth(1)
+                .map(|s| s.split('&').next().unwrap().to_string())
+                .unwrap()
+        };
+        assert_ne!(
+            sig(&plain),
+            sig(&payer),
+            "signing an additional header must change the signature"
+        );
+    }
+}

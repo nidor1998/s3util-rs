@@ -61,6 +61,44 @@ struct UploadMetadata {
     pub tagging: Option<String>,
 }
 
+/// Convert `--expires` into the SDK's `DateTime` for a stdin-sourced streaming
+/// upload. Split out from `upload_stream` (and kept free of `Config`) so the
+/// conversion is testable without an S3 client.
+fn stream_upload_expires(
+    expires: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Option<DateTime>> {
+    match expires {
+        Some(expires) => Ok(Some(DateTime::from_str(
+            &expires.to_rfc3339(),
+            DateTimeFormat::DateTimeWithOffset,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Build the user-metadata map for a stdin-sourced streaming upload.
+///
+/// `--put-last-modified-metadata` normally records the source object's mtime.
+/// A stream has no source object, so — matching the buffered stdin path, whose
+/// synthetic `GetObjectOutput` carries the current time — `now` is recorded.
+/// Taking `now` as a parameter keeps this deterministic for tests.
+fn stream_upload_metadata(
+    configured_metadata: Option<&HashMap<String, String>>,
+    put_last_modified_metadata: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<HashMap<String, String>> {
+    if !put_last_modified_metadata {
+        return configured_metadata.cloned();
+    }
+
+    let mut metadata = configured_metadata.cloned().unwrap_or_default();
+    metadata.insert(
+        S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
+        now.to_rfc3339_opts(SecondsFormat::Secs, false),
+    );
+    Some(metadata)
+}
+
 pub struct MutipartEtags {
     pub digest: Vec<u8>,
     pub part_number: i32,
@@ -1025,28 +1063,12 @@ impl UploadManager {
         // `UploadMetadata` in `singlepart_upload`: the same command must not
         // produce a differently-tagged object just because the input crossed
         // --multipart-threshold and took the streaming path instead.
-        let expires = match self.config.expires {
-            Some(expires) => Some(DateTime::from_str(
-                &expires.to_rfc3339(),
-                DateTimeFormat::DateTimeWithOffset,
-            )?),
-            None => None,
-        };
-
-        // `--put-last-modified-metadata` normally records the source object's
-        // mtime. A stream has no source object, so — as on the buffered stdin
-        // path, whose synthetic GetObjectOutput carries `now` — record the
-        // upload time.
-        let metadata = if self.config.put_last_modified_metadata {
-            let mut metadata = self.config.metadata.clone().unwrap_or_default();
-            metadata.insert(
-                S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
-                chrono::Utc::now().to_rfc3339_opts(SecondsFormat::Secs, false),
-            );
-            Some(metadata)
-        } else {
-            self.config.metadata.clone()
-        };
+        let expires = stream_upload_expires(self.config.expires)?;
+        let metadata = stream_upload_metadata(
+            self.config.metadata.as_ref(),
+            self.config.put_last_modified_metadata,
+            chrono::Utc::now(),
+        );
 
         let create_output = self
             .client
@@ -2650,5 +2672,82 @@ mod read_exact_or_eof_tests {
         let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
         assert_eq!(n, 64);
         assert_eq!(buf, vec![9u8; 64]);
+    }
+}
+
+/// Unit tests for the metadata that a stdin-sourced STREAMING upload sends.
+///
+/// The streaming path used to send none of this: it built its
+/// CreateMultipartUpload from storage class, metadata, tagging, content-type,
+/// SSE, ACL and checksum only, so `--expires` and
+/// `--put-last-modified-metadata` were silently dropped once the input crossed
+/// `--multipart-threshold`. The remaining header pass-throughs need a live S3
+/// client to observe and are covered by e2e; these two are computed values and
+/// are checkable here.
+#[cfg(test)]
+mod stream_upload_metadata_tests {
+    use super::{stream_upload_expires, stream_upload_metadata};
+    use chrono::{TimeZone, Utc};
+    use std::collections::HashMap;
+
+    fn fixed_now() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 19, 12, 34, 56).unwrap()
+    }
+
+    #[test]
+    fn expires_is_none_when_flag_absent() {
+        assert!(stream_upload_expires(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn expires_round_trips_through_the_sdk_datetime() {
+        let expires = Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap();
+        let converted = stream_upload_expires(Some(expires))
+            .unwrap()
+            .expect("expires must be converted, not dropped");
+        assert_eq!(converted.secs(), expires.timestamp());
+    }
+
+    #[test]
+    fn metadata_passes_through_untouched_without_the_last_modified_flag() {
+        let configured = HashMap::from([("k".to_string(), "v".to_string())]);
+        let built = stream_upload_metadata(Some(&configured), false, fixed_now())
+            .expect("configured metadata must survive");
+        assert_eq!(built, configured);
+        assert!(
+            !built.contains_key("s3sync_origin_last_modified"),
+            "the last-modified key must not appear unless the flag is set"
+        );
+    }
+
+    #[test]
+    fn metadata_is_none_when_nothing_is_configured() {
+        assert!(stream_upload_metadata(None, false, fixed_now()).is_none());
+    }
+
+    #[test]
+    fn last_modified_flag_adds_the_key_alongside_user_metadata() {
+        let configured = HashMap::from([("k".to_string(), "v".to_string())]);
+        let built = stream_upload_metadata(Some(&configured), true, fixed_now())
+            .expect("metadata must be present");
+
+        assert_eq!(
+            built.get("k").map(String::as_str),
+            Some("v"),
+            "user metadata must not be lost when the flag is set"
+        );
+        assert_eq!(
+            built.get("s3sync_origin_last_modified").map(String::as_str),
+            Some("2026-07-19T12:34:56+00:00"),
+            "the recorded time must be the upload time, matching the buffered path"
+        );
+    }
+
+    #[test]
+    fn last_modified_flag_works_without_any_user_metadata() {
+        let built = stream_upload_metadata(None, true, fixed_now())
+            .expect("the flag alone must produce a metadata map");
+        assert_eq!(built.len(), 1);
+        assert!(built.contains_key("s3sync_origin_last_modified"));
     }
 }
