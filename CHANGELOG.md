@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- JSON configuration files for the `put-*` subcommands now reject unknown fields instead of silently ignoring them,
+  matching the AWS CLI's "Unknown parameter" behaviour. Previously a misspelled or wrongly nested key was dropped and
+  the command replaced the whole bucket configuration with the truncated remainder. Most severely, piping the output of
+  `get-public-access-block` (which is wrapped in a `PublicAccessBlockConfiguration` key) straight back into
+  `put-public-access-block` parsed as "all four flags absent" and disabled every public-access protection on the bucket.
+- `mv` now refuses to move an object onto itself instead of deleting it. `s3util mv s3://bucket/key s3://bucket/key`
+  (and the directory-style `s3util mv s3://bucket/dir/key s3://bucket/dir/`, which resolves to the same key) copied the
+  object over itself and then deleted the source — destroying the object outright on an unversioned bucket while
+  reporting success. The check runs before the copy, so nothing is transferred or deleted.
+- On Windows, a target path ending in `/` (rather than `\`) is now recognised as a directory by target validation and
+  key resolution, as it already was by the storage layer. Previously `s3util cp s3://bucket/key out/` against a
+  non-existent `out` directory silently wrote nothing and exited 0, and `s3util mv` additionally deleted the source
+  object.
 - Corrected `ONE-ZONE_IA` to `ONEZONE_IA` in the `--storage-class` option help and the invalid-storage-class error
   message.
 - Stricter format validation of `--metadata` values (e.g. a leading comma is now rejected).

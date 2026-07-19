@@ -2,12 +2,55 @@ use anyhow::{Result, anyhow};
 use tracing::{error, info};
 
 use s3util_rs::Config;
+use s3util_rs::types::StoragePath;
 
-use crate::cli::{CopyPhase, ExitStatus, run_copy_phase};
+use crate::cli::{CopyPhase, ExitStatus, extract_keys, run_copy_phase};
 
 pub async fn run_mv(config: Config) -> Result<ExitStatus> {
+    check_not_self_move(&config)?;
+
     let phase = run_copy_phase(config.clone()).await?;
     apply_mv_decision_tree(config, phase).await
+}
+
+/// Reject `mv` when source and target resolve to the same S3 object.
+///
+/// `mv` is copy-then-delete, so a self-move deletes what the copy just wrote.
+/// On an unversioned bucket that destroys the object outright and still exits 0;
+/// on a versioned bucket it survives only because the delete happens to target
+/// the pre-copy version. The target key is resolved the same way the transfer
+/// resolves it, so directory-style targets are caught too:
+/// `mv s3://b/dir/file s3://b/dir/` resolves to the source key itself.
+///
+/// Checked before the copy runs, so nothing is transferred or deleted.
+fn check_not_self_move(config: &Config) -> Result<()> {
+    let (
+        StoragePath::S3 {
+            bucket: source_bucket,
+            ..
+        },
+        StoragePath::S3 {
+            bucket: target_bucket,
+            ..
+        },
+    ) = (&config.source, &config.target)
+    else {
+        return Ok(());
+    };
+
+    if source_bucket != target_bucket {
+        return Ok(());
+    }
+
+    let (source_key, target_key) = extract_keys(config)?;
+    if source_key != target_key {
+        return Ok(());
+    }
+
+    Err(anyhow!(
+        "cannot mv an object onto itself: source and target both resolve to \
+         s3://{source_bucket}/{source_key}"
+    ))
 }
 
 async fn apply_mv_decision_tree(config: Config, phase: CopyPhase) -> Result<ExitStatus> {
@@ -349,6 +392,136 @@ mod tests {
             cancelled,
             has_warning,
         }
+    }
+
+    /// `mv s3://b/k s3://b/k` is copy-then-delete onto the same object, which
+    /// destroys it on an unversioned bucket. It must be rejected before the
+    /// copy runs.
+    #[test]
+    fn self_move_identical_keys_is_rejected() {
+        let mut config = minimal_config();
+        config.source = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/file.txt".to_string(),
+        };
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/file.txt".to_string(),
+        };
+
+        let err = check_not_self_move(&config).expect_err("self-move must be rejected");
+        assert!(
+            err.to_string().contains("onto itself"),
+            "error must explain the self-move, got: {err}"
+        );
+    }
+
+    /// The directory-style form resolves to the source key by appending the
+    /// basename, so it is the same data-loss case spelled differently.
+    #[test]
+    fn self_move_via_directory_style_target_is_rejected() {
+        let mut config = minimal_config();
+        config.source = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/file.txt".to_string(),
+        };
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/".to_string(),
+        };
+
+        assert!(
+            check_not_self_move(&config).is_err(),
+            "`mv s3://b/dir/file.txt s3://b/dir/` resolves to the source key and must be rejected"
+        );
+    }
+
+    /// `mv s3://b/file.txt s3://b` — a bucket-only target resolves by appending
+    /// the source basename, which for a root-level source is the source key.
+    #[test]
+    fn self_move_via_bucket_only_target_is_rejected() {
+        let mut config = minimal_config();
+        config.source = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "file.txt".to_string(),
+        };
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: String::new(),
+        };
+
+        assert!(
+            check_not_self_move(&config).is_err(),
+            "`mv s3://b/file.txt s3://b` resolves to the source key and must be rejected"
+        );
+    }
+
+    /// The same bucket-only target is a legitimate move when the source lives in
+    /// a subdirectory — it relocates the object to the bucket root.
+    #[test]
+    fn bucket_only_target_from_subdirectory_is_allowed() {
+        let mut config = minimal_config();
+        config.source = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/file.txt".to_string(),
+        };
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: String::new(),
+        };
+
+        assert!(
+            check_not_self_move(&config).is_ok(),
+            "moving dir/file.txt to the bucket root is a genuine move"
+        );
+    }
+
+    #[test]
+    fn genuine_moves_are_allowed() {
+        // Same bucket, different key.
+        let mut config = minimal_config();
+        config.source = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "a.txt".to_string(),
+        };
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "b.txt".to_string(),
+        };
+        assert!(check_not_self_move(&config).is_ok());
+
+        // Same key, different bucket.
+        config.target = StoragePath::S3 {
+            bucket: "other".to_string(),
+            prefix: "a.txt".to_string(),
+        };
+        assert!(check_not_self_move(&config).is_ok());
+
+        // Directory-style target that resolves to a different key.
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "dir/".to_string(),
+        };
+        assert!(check_not_self_move(&config).is_ok());
+
+        // Non-S3 target is never a self-move.
+        config.target = StoragePath::Local(PathBuf::from("/tmp/a.txt"));
+        assert!(check_not_self_move(&config).is_ok());
+
+        // Stdio on either side is never a self-move (rejected earlier by clap,
+        // but the guard must not misfire or panic on it).
+        config.target = StoragePath::Stdio;
+        assert!(check_not_self_move(&config).is_ok());
+        config.source = StoragePath::Stdio;
+        config.target = StoragePath::S3 {
+            bucket: "b".to_string(),
+            prefix: "a.txt".to_string(),
+        };
+        assert!(check_not_self_move(&config).is_ok());
+
+        // Local source to S3 target — different storage kinds, never a self-move.
+        config.source = StoragePath::Local(PathBuf::from("/tmp/a.txt"));
+        assert!(check_not_self_move(&config).is_ok());
     }
 
     #[tokio::test]

@@ -9,6 +9,14 @@
 //! (so S3-side error messages match what the user would get from the AWS
 //! CLI).
 //!
+//! Every mirror carries `#[serde(deny_unknown_fields)]`, matching the AWS
+//! CLI's "Unknown parameter" rejection. Without it a misspelled or wrongly
+//! nested key is dropped silently and the `put-*` command then replaces the
+//! whole bucket configuration with the truncated result — e.g. feeding the
+//! wrapped `{"PublicAccessBlockConfiguration": {…}}` shape emitted by
+//! `get-public-access-block` straight back into `put-public-access-block`
+//! would parse as "all four flags absent" and disable every protection.
+//!
 //! Per-resource structs are added by their respective family tasks.
 
 use anyhow::Result;
@@ -38,12 +46,14 @@ use serde::Deserialize;
 /// Mirror of `BucketLifecycleConfiguration` for the AWS-CLI input shape.
 /// Top-level wrapper for `put-bucket-lifecycle-configuration` input JSON.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleConfigurationJson {
     pub Rules: Vec<LifecycleRuleJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleRuleJson {
     pub ID: Option<String>,
@@ -60,6 +70,7 @@ pub struct LifecycleRuleJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleRuleFilterJson {
     pub Prefix: Option<String>,
@@ -70,6 +81,7 @@ pub struct LifecycleRuleFilterJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleRuleAndOperatorJson {
     pub Prefix: Option<String>,
@@ -79,6 +91,7 @@ pub struct LifecycleRuleAndOperatorJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TagJson {
     pub Key: String,
@@ -86,6 +99,7 @@ pub struct TagJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleExpirationJson {
     /// RFC3339 timestamp.
@@ -95,6 +109,7 @@ pub struct LifecycleExpirationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct NoncurrentVersionExpirationJson {
     pub NoncurrentDays: Option<i32>,
@@ -102,6 +117,7 @@ pub struct NoncurrentVersionExpirationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TransitionJson {
     pub Date: Option<String>,
@@ -110,6 +126,7 @@ pub struct TransitionJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct NoncurrentVersionTransitionJson {
     pub NoncurrentDays: Option<i32>,
@@ -118,6 +135,7 @@ pub struct NoncurrentVersionTransitionJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct AbortIncompleteMultipartUploadJson {
     pub DaysAfterInitiation: Option<i32>,
@@ -313,12 +331,14 @@ fn parse_rfc3339(s: &str) -> Result<DateTime> {
 /// Mirror of `ServerSideEncryptionConfiguration` for the AWS-CLI input shape.
 /// Top-level wrapper for `put-bucket-encryption` input JSON.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ServerSideEncryptionConfigurationJson {
     pub Rules: Vec<ServerSideEncryptionRuleJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ServerSideEncryptionRuleJson {
     pub ApplyServerSideEncryptionByDefault: Option<ApplyServerSideEncryptionByDefaultJson>,
@@ -327,6 +347,7 @@ pub struct ServerSideEncryptionRuleJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ApplyServerSideEncryptionByDefaultJson {
     /// `AES256` or `aws:kms` or `aws:kms:dsse`.
@@ -339,6 +360,7 @@ pub struct ApplyServerSideEncryptionByDefaultJson {
 /// Unknown values are passed through to the SDK enum; S3 will reject
 /// them server-side.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct BlockedEncryptionTypesJson {
     pub EncryptionType: Option<Vec<String>>,
@@ -391,12 +413,14 @@ impl ServerSideEncryptionRuleJson {
 /// Top-level field name `CORSRules` matches the AWS CLI exactly
 /// (note the all-uppercase `CORS`).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct CorsConfigurationJson {
     pub CORSRules: Vec<CorsRuleJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct CorsRuleJson {
     pub ID: Option<String>,
@@ -447,6 +471,7 @@ impl CorsRuleJson {
 /// All four fields are optional in the input JSON; absent fields are
 /// passed to the SDK as `Some(false)` (matching AWS CLI v2 behaviour).
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct PublicAccessBlockConfigurationJson {
     pub BlockPublicAcls: Option<bool>,
@@ -477,6 +502,7 @@ impl PublicAccessBlockConfigurationJson {
 /// at parse time. S3 rejects invalid combinations server-side — same
 /// approach as lifecycle's `Filter` one-of.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct WebsiteConfigurationJson {
     pub IndexDocument: Option<IndexDocumentJson>,
@@ -486,18 +512,21 @@ pub struct WebsiteConfigurationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct IndexDocumentJson {
     pub Suffix: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ErrorDocumentJson {
     pub Key: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct RedirectAllRequestsToJson {
     pub HostName: String,
@@ -505,6 +534,7 @@ pub struct RedirectAllRequestsToJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct RoutingRuleJson {
     pub Condition: Option<ConditionJson>,
@@ -512,6 +542,7 @@ pub struct RoutingRuleJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ConditionJson {
     pub HttpErrorCodeReturnedEquals: Option<String>,
@@ -519,6 +550,7 @@ pub struct ConditionJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct RedirectJson {
     pub HostName: Option<String>,
@@ -607,12 +639,14 @@ impl RedirectJson {
 /// server-side, but the field is accepted at parse time so users can lift
 /// existing AWS-CLI inputs unchanged.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct BucketLoggingStatusJson {
     pub LoggingEnabled: Option<LoggingEnabledJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LoggingEnabledJson {
     pub TargetBucket: String,
@@ -622,6 +656,7 @@ pub struct LoggingEnabledJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TargetGrantJson {
     pub Grantee: Option<GranteeJson>,
@@ -631,6 +666,7 @@ pub struct TargetGrantJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct GranteeJson {
     pub DisplayName: Option<String>,
@@ -644,6 +680,7 @@ pub struct GranteeJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TargetObjectKeyFormatJson {
     pub SimplePrefix: Option<SimplePrefixJson>,
@@ -653,10 +690,12 @@ pub struct TargetObjectKeyFormatJson {
 /// Marker shape for `SimplePrefix` — set to `{}` in the input JSON to
 /// select the simple key format. The SDK uses a unit-style struct.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct SimplePrefixJson {}
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct PartitionedPrefixJson {
     /// `EventTime` or `DeliveryTime`. Unknown values are passed through to
@@ -767,6 +806,7 @@ impl PartitionedPrefixJson {
 /// `QueueConfigurations`, `LambdaFunctionConfigurations`, and the
 /// presence-only marker `EventBridgeConfiguration`.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct NotificationConfigurationJson {
     pub TopicConfigurations: Option<Vec<TopicConfigurationJson>>,
@@ -776,6 +816,7 @@ pub struct NotificationConfigurationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TopicConfigurationJson {
     pub Id: Option<String>,
@@ -788,6 +829,7 @@ pub struct TopicConfigurationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct QueueConfigurationJson {
     pub Id: Option<String>,
@@ -797,6 +839,7 @@ pub struct QueueConfigurationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LambdaFunctionConfigurationJson {
     pub Id: Option<String>,
@@ -808,22 +851,26 @@ pub struct LambdaFunctionConfigurationJson {
 /// Marker shape for `EventBridgeConfiguration` — set to `{}` in the input
 /// JSON to enable EventBridge delivery. The SDK uses a unit-style struct.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct EventBridgeConfigurationJson {}
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct NotificationConfigurationFilterJson {
     pub Key: Option<S3KeyFilterJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct S3KeyFilterJson {
     pub FilterRules: Option<Vec<FilterRuleJson>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct FilterRuleJson {
     /// `prefix` or `suffix`. Unknown values are passed through to the SDK
@@ -962,6 +1009,7 @@ impl FilterRuleJson {
 /// Mirror of `ReplicationConfiguration` for the AWS-CLI input shape.
 /// Top-level wrapper for `put-bucket-replication` input JSON.
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationConfigurationJson {
     pub Role: String,
@@ -969,6 +1017,7 @@ pub struct ReplicationConfigurationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationRuleJson {
     pub ID: Option<String>,
@@ -985,6 +1034,7 @@ pub struct ReplicationRuleJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationRuleFilterJson {
     pub Prefix: Option<String>,
@@ -993,6 +1043,7 @@ pub struct ReplicationRuleFilterJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationRuleAndOperatorJson {
     pub Prefix: Option<String>,
@@ -1000,6 +1051,7 @@ pub struct ReplicationRuleAndOperatorJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct SourceSelectionCriteriaJson {
     pub SseKmsEncryptedObjects: Option<SseKmsEncryptedObjectsJson>,
@@ -1007,24 +1059,28 @@ pub struct SourceSelectionCriteriaJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct SseKmsEncryptedObjectsJson {
     pub Status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicaModificationsJson {
     pub Status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ExistingObjectReplicationJson {
     pub Status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct DestinationJson {
     pub Bucket: String,
@@ -1037,18 +1093,21 @@ pub struct DestinationJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct AccessControlTranslationJson {
     pub Owner: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct EncryptionConfigurationJson {
     pub ReplicaKmsKeyID: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationTimeJson {
     pub Status: String,
@@ -1056,12 +1115,14 @@ pub struct ReplicationTimeJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationTimeValueJson {
     pub Minutes: i32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct MetricsJson {
     pub Status: String,
@@ -1069,6 +1130,7 @@ pub struct MetricsJson {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct DeleteMarkerReplicationJson {
     pub Status: String,
@@ -1516,6 +1578,130 @@ mod tests {
     #[test]
     fn pab_invalid_json_errors() {
         assert!(serde_json::from_str::<PublicAccessBlockConfigurationJson>("{not json").is_err());
+    }
+
+    /// Feeding the wrapped shape emitted by `get-public-access-block` back into
+    /// `put-public-access-block` must be rejected, not silently read as "all four
+    /// flags absent" — which `into_sdk` would turn into `false` for every field,
+    /// disabling all public-access protection on the bucket.
+    #[test]
+    fn pab_wrapped_get_output_shape_is_rejected_not_silently_emptied() {
+        let get_output_shape = r#"{
+          "PublicAccessBlockConfiguration": {
+            "BlockPublicAcls": true,
+            "IgnorePublicAcls": true,
+            "BlockPublicPolicy": true,
+            "RestrictPublicBuckets": true
+          }
+        }"#;
+
+        let err = serde_json::from_str::<PublicAccessBlockConfigurationJson>(get_output_shape)
+            .expect_err("wrapped get-output shape must not parse as a put input");
+        assert!(
+            err.to_string().contains("PublicAccessBlockConfiguration"),
+            "error must name the offending key, got: {err}"
+        );
+    }
+
+    /// A misspelled key must fail loudly rather than being dropped and replacing
+    /// the bucket's configuration with the truncated remainder.
+    ///
+    /// Covers every top-level type consumed by a `put-*` subcommand, plus a
+    /// nested mirror (the lifecycle rule filter) to prove the rejection is not
+    /// limited to the outermost struct.
+    #[test]
+    fn unknown_fields_are_rejected_across_mirrors() {
+        assert!(
+            serde_json::from_str::<PublicAccessBlockConfigurationJson>(
+                r#"{"BlockPublicAcls":true,"BlockPublicAcl":true}"#
+            )
+            .is_err(),
+            "misspelled PAB field must be rejected"
+        );
+        assert!(
+            serde_json::from_str::<LifecycleConfigurationJson>(
+                r#"{"Rules":[{"Status":"Enabled","Filter":{"prefix":"logs/"}}]}"#
+            )
+            .is_err(),
+            "lower-cased lifecycle Filter key must be rejected, not read as an empty filter \
+             matching every object in the bucket"
+        );
+        assert!(
+            serde_json::from_str::<BucketLoggingStatusJson>(r#"{"LoggingEnable":{}}"#).is_err(),
+            "misspelled logging wrapper must be rejected, not read as 'disable logging'"
+        );
+        assert!(
+            serde_json::from_str::<NotificationConfigurationJson>(r#"{"TopicConfiguration":[]}"#)
+                .is_err(),
+            "misspelled notification key must be rejected, not read as 'remove all notifications'"
+        );
+        assert!(
+            serde_json::from_str::<CorsConfigurationJson>(
+                r#"{"CORSRules":[{"AllowedMethods":["GET"],"AllowedOrigins":["*"],"MaxAge":100}]}"#
+            )
+            .is_err(),
+            "misspelled CORS rule field (MaxAge vs MaxAgeSeconds) must be rejected"
+        );
+        assert!(
+            serde_json::from_str::<ServerSideEncryptionConfigurationJson>(
+                r#"{"Rules":[{"BucketKeyEnabled":true}],"Rule":[]}"#
+            )
+            .is_err(),
+            "misspelled encryption key must be rejected"
+        );
+        assert!(
+            serde_json::from_str::<ReplicationConfigurationJson>(
+                r#"{"Role":"arn:aws:iam::1:role/r","Rules":[],"Roles":[]}"#
+            )
+            .is_err(),
+            "misspelled replication key must be rejected"
+        );
+        assert!(
+            serde_json::from_str::<WebsiteConfigurationJson>(
+                r#"{"IndexDocument":{"Suffix":"index.html"},"ErrorDocuments":{}}"#
+            )
+            .is_err(),
+            "misspelled website key must be rejected, not silently dropped"
+        );
+    }
+
+    /// The corresponding positive case: the exact AWS-CLI input shape for every
+    /// top-level `put-*` type must still parse after `deny_unknown_fields`.
+    /// Guards against the fix over-rejecting legitimate configuration.
+    #[test]
+    fn deny_unknown_fields_does_not_reject_valid_aws_cli_shapes() {
+        serde_json::from_str::<PublicAccessBlockConfigurationJson>(
+            r#"{"BlockPublicAcls":true,"IgnorePublicAcls":true,"BlockPublicPolicy":true,"RestrictPublicBuckets":true}"#,
+        )
+        .expect("valid PAB shape must parse");
+        serde_json::from_str::<LifecycleConfigurationJson>(
+            r#"{"Rules":[{"ID":"r","Status":"Enabled","Filter":{"Prefix":"logs/"},"Expiration":{"Days":30}}]}"#,
+        )
+        .expect("valid lifecycle shape must parse");
+        serde_json::from_str::<CorsConfigurationJson>(
+            r#"{"CORSRules":[{"AllowedMethods":["GET"],"AllowedOrigins":["*"],"MaxAgeSeconds":100}]}"#,
+        )
+        .expect("valid CORS shape must parse");
+        serde_json::from_str::<ServerSideEncryptionConfigurationJson>(
+            r#"{"Rules":[{"ApplyServerSideEncryptionByDefault":{"SSEAlgorithm":"AES256"},"BucketKeyEnabled":true}]}"#,
+        )
+        .expect("valid encryption shape must parse");
+        serde_json::from_str::<ReplicationConfigurationJson>(
+            r#"{"Role":"arn:aws:iam::1:role/r","Rules":[{"Status":"Enabled","Destination":{"Bucket":"arn:aws:s3:::b"}}]}"#,
+        )
+        .expect("valid replication shape must parse");
+        serde_json::from_str::<WebsiteConfigurationJson>(
+            r#"{"IndexDocument":{"Suffix":"index.html"},"ErrorDocument":{"Key":"error.html"}}"#,
+        )
+        .expect("valid website shape must parse");
+        serde_json::from_str::<BucketLoggingStatusJson>(
+            r#"{"LoggingEnabled":{"TargetBucket":"b","TargetPrefix":"logs/"}}"#,
+        )
+        .expect("valid logging shape must parse");
+        serde_json::from_str::<NotificationConfigurationJson>(
+            r#"{"TopicConfigurations":[{"TopicArn":"arn:aws:sns:us-east-1:1:t","Events":["s3:ObjectCreated:*"]}]}"#,
+        )
+        .expect("valid notification shape must parse");
     }
 
     // ----- WebsiteConfigurationJson -----

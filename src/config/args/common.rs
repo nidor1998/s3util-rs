@@ -3,6 +3,7 @@ use crate::config::args::value_parser::{
     tagging, url,
 };
 use crate::config::{CLITimeoutConfig, ClientConfig, Config, RetryConfig};
+use crate::storage::local::fs_util;
 use crate::types::{
     AccessKeys, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath,
 };
@@ -580,9 +581,11 @@ pub(crate) fn check_target_local_directory_exists(target: &str) -> Result<(), St
         StoragePath::S3 { .. } | StoragePath::Stdio => return Ok(()),
     };
 
-    let ends_with_sep = target_path
-        .to_string_lossy()
-        .ends_with(std::path::MAIN_SEPARATOR);
+    // Must agree with the storage layer's directory test (fs_util), which
+    // treats a trailing '/' as a directory on every platform — otherwise a
+    // Windows target like `out/` is validated as a file, resolved to the
+    // literal key `out/`, and then silently written as nothing.
+    let ends_with_sep = fs_util::has_trailing_separator(&target_path.to_string_lossy());
 
     let effective_dir: PathBuf = if ends_with_sep {
         // e.g. "/tmp/" → "/tmp"

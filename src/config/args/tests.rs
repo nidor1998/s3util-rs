@@ -700,6 +700,36 @@ mod tests {
         );
     }
 
+    /// Same as above but spelled with a forward slash rather than the platform
+    /// separator. Windows accepts `/` as a separator and the storage layer treats
+    /// a trailing `/` as a directory on every platform, so validation must too —
+    /// otherwise `out/` is validated as a file, resolved to the literal key
+    /// `out/`, and then silently written as nothing (and `mv` deletes the source).
+    #[test]
+    fn target_nonexistent_directory_forward_slash_rejected_on_every_platform() {
+        let result = build_config_from_args(args_with(
+            "s3://my-bucket/key",
+            "/definitely/does/not/exist/abc123/",
+        ));
+        assert!(
+            result.is_err(),
+            "a forward-slash directory target that does not exist must be rejected"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn target_existing_directory_forward_slash_passes_on_every_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = format!("{}/", dir.path().to_string_lossy());
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     #[test]
     fn target_existing_directory_no_trailing_separator_passes() {
         let dir = tempfile::tempdir().unwrap();

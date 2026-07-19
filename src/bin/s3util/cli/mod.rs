@@ -10,6 +10,7 @@ use s3util_rs::Config;
 use s3util_rs::storage::Storage;
 use s3util_rs::storage::StorageFactory;
 use s3util_rs::storage::local::LocalStorageFactory;
+use s3util_rs::storage::local::fs_util;
 use s3util_rs::storage::s3::S3StorageFactory;
 use s3util_rs::transfer::{TransferDirection, TransferOutcome, detect_direction};
 use s3util_rs::types::StoragePath;
@@ -605,7 +606,11 @@ pub(super) fn extract_keys(config: &Config) -> Result<(String, String)> {
             let p = path.clone();
             // If target is a directory (existing dir or ends with separator),
             // append the source object's basename — like `aws s3 cp s3://bucket/key .`
-            if p.is_dir() || p.to_string_lossy().ends_with(std::path::MAIN_SEPARATOR) {
+            // The separator test must accept '/' on Windows too, so that `out/`
+            // resolves to `out/<basename>` rather than staying the literal key
+            // `out/`, which the storage layer would treat as a directory and
+            // silently write nothing for.
+            if p.is_dir() || fs_util::has_trailing_separator(&p.to_string_lossy()) {
                 p.join(&source_basename).to_string_lossy().to_string()
             } else {
                 p.to_string_lossy().to_string()
@@ -941,5 +946,31 @@ mod tests {
         ]);
         let (_, tgt) = extract_keys(&config).unwrap();
         assert!(tgt.ends_with("object.bin"), "target was: {tgt}");
+    }
+
+    /// Same as above but with a forward slash instead of the platform separator.
+    /// Windows accepts `/` as a separator, and the storage layer treats a
+    /// trailing `/` as a directory on every platform — so key resolution must
+    /// append the basename here too. Leaving the key as the literal `out/` made
+    /// the storage layer skip the write entirely and report success.
+    #[test]
+    fn extract_keys_s3_to_local_forward_slash_target_appends_basename() {
+        let tmp = tempfile::tempdir().unwrap();
+        let target_arg = format!("{}/", tmp.path().to_string_lossy());
+        let config = build_config(vec![
+            "s3util",
+            "cp",
+            "s3://b/remote/object.bin",
+            target_arg.as_str(),
+        ]);
+        let (_, tgt) = extract_keys(&config).unwrap();
+        assert!(
+            tgt.ends_with("object.bin"),
+            "forward-slash directory target must resolve to <dir>/<basename>, got: {tgt}"
+        );
+        assert!(
+            !fs_util::is_key_a_directory(&tgt),
+            "resolved key must not still look like a directory to the storage layer: {tgt}"
+        );
     }
 }
