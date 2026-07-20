@@ -315,7 +315,7 @@ To make the message visible at the default `WarnLevel`, `--dry-run` automaticall
 - Windows 11 (x86_64, aarch64)
 - macOS 11.0 or later (aarch64, x86_64)
 
-`s3util` is written in Rust and requires Rust **1.91.1 or later** to build from source.
+`s3util` is written in Rust and requires Rust **1.94.1 or later** to build from source.
 
 AWS credentials are required. `s3util` supports all standard AWS credential mechanisms:
 - Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)

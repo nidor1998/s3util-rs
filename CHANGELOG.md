@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.8.0] - 2026-07-20
 
 ### Added
 
@@ -110,6 +110,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - When downloading to local storage, object verification now runs on the temporary file before it is persisted to the
   final path, so an object that fails verification never becomes visible at the destination. The multipart download's
   size-accounting check moved in front of the persist for the same reason.
+
+### Changed
+
+- aws-sdk-s3 `v1.137.0 -> v1.138.1`
+- MSRV `1.91.1 -> 1.94.1`
+- Updated other dependencies
 
 ## [1.7.1] - 2026-07-11
 

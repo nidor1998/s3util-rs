@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["nidor1998 <nidor1998@gmail.com>"]
 description = "Tools for managing Amazon S3 objects and buckets"
 license = "Apache-2.0"
-rust-version = "1.91.1"
+rust-version = "1.94.1"
 repository = "https://github.com/nidor1998/s3util-rs"
 homepage = "https://github.com/nidor1998/s3util-rs"
 documentation = "https://docs.rs/s3util-rs"
@@ -18,26 +18,26 @@ name = "s3util"
 path = "src/bin/s3util/main.rs"
 
 [dependencies]
-anyhow = { version = "1.0.103" }
-async-trait = "0.1.89"
+anyhow = { version = "1.0.104" }
+async-trait = "0.1.91"
 async-channel = "2.5.0"
 # Disable default features on aws-config and aws-sdk-s3 to drop the legacy
 # `rustls` alias that pulls rustls 0.21 (vulnerable rustls-webpki 0.101.x,
 # RUSTSEC-2026-0098). The modern `default-https-client` feature, which uses
 # rustls 0.23 via `aws-smithy-http-client`, is re-enabled explicitly.
-aws-config = { version = "1.8.18", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "credentials-process", "sso"] }
-aws-runtime = "1.7.5"
-aws-sdk-s3 = { version = "1.137.0", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
-aws-smithy-runtime-api = "1.12.3"
-aws-smithy-types = { version = "1.5.0" }
-aws-smithy-types-convert = { version = "0.60.14", features = ["convert-chrono"] }
-aws-types = "1.3.16"
+aws-config = { version = "1.9.0", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "credentials-process", "sso"] }
+aws-runtime = "1.8.1"
+aws-sdk-s3 = { version = "1.138.1", default-features = false, features = ["sigv4a", "http-1x", "default-https-client", "rt-tokio"] }
+aws-smithy-runtime-api = "1.13.0"
+aws-smithy-types = { version = "1.6.1" }
+aws-smithy-types-convert = { version = "0.61.1", features = ["convert-chrono"] }
+aws-types = "1.4.0"
 base64 = "0.22.1"
-bitflags = "2.13.0"
-byte-unit = "5.2.3"
+bitflags = "2.13.1"
+byte-unit = "5.2.5"
 cfg-if = "1.0.4"
-clap = { version = "4.6.1", features = ["derive", "env", "cargo", "string"] }
-clap_complete = "4.6.5"
+clap = { version = "4.6.2", features = ["derive", "env", "cargo", "string"] }
+clap_complete = "4.6.7"
 clap-verbosity-flag = "3.0.4"
 chrono = "0.4.45"
 crc32c = "0.6.8"
@@ -45,26 +45,26 @@ crc32fast = "1.5.0"
 crc-fast = "1.10.0"
 dyn-clone = "1.0.20"
 filetime = "0.2.29"
-futures = "0.3.32"
-futures-util = "0.3.32"
+futures = "0.3.33"
+futures-util = "0.3.33"
 hex = "0.4.3"
-http-body-util = "0.1.3"
+http-body-util = "0.1.4"
 hyper = "1.10.1"
-indicatif = "0.18.4"
+indicatif = "0.18.6"
 leaky-bucket = "1.1.2"
 log = "0.4.33"
-md5 = "0.8.0"
+md5 = "0.8.1"
 mime_guess = "2.0.5"
 pin-project = "1.1.13"
-regex = "1.12.4"
-serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.150"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
 sha1 = "0.11.0"
 sha2 = "0.11.0"
 simple_moving_average = "1.0.2"
 tempfile = "3.27.0"
-thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
+thiserror = "2.0.19"
+tokio = { version = "1.53.0", features = ["full"] }
 tokio-util = "0.7.18"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json", "local-time"] }
@@ -91,7 +91,7 @@ once_cell = "1.21.4"
 # system `curl` (Windows e2e parity). Default features pull rustls +
 # webpki-roots, so no OS cert store is required.
 ureq = "3"
-uuid = { version = "1.23.4", features = ["v4"] }
+uuid = { version = "1.24.0", features = ["v4"] }
 
 [lints.rust]
 unexpected_cfgs = { level = "warn", check-cfg = ['cfg(coverage_nightly)', 'cfg(e2e_test)'] }
