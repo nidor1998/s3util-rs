@@ -2667,4 +2667,135 @@ mod put_object_error_path_tests {
             .unwrap();
         assert_eq!(std::fs::read(&key).unwrap(), vec![b'x'; 10]);
     }
+
+    // ------------------------------------------------------------------
+    // Direct mock-trait coverage. The tests above only drive the ranged
+    // `get_object` that `put_object_multipart` issues; the assertions below
+    // pin the remaining real-return methods and verify every
+    // `unimplemented!()` stub still panics (so the regression guard remains
+    // intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    #[tokio::test]
+    async fn mock_part_source_real_return_methods_behave_as_expected() {
+        let source = MockPartSource {
+            behavior: PartBehavior::Sized { len: 5 },
+        };
+
+        // The mock stands in for an S3 source, never a local one.
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(5));
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn mock_part_source_cancel_then_sized_cancels_before_returning_the_part() {
+        // The `CancelThenSized` arm must hand back a well-formed part *and*
+        // cancel, so the caller's post-read guard is what stops the upload.
+        let token = create_pipeline_cancellation_token();
+        let source = MockPartSource {
+            behavior: PartBehavior::CancelThenSized {
+                len: 5,
+                token: token.clone(),
+            },
+        };
+        assert!(!token.is_cancelled());
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(5));
+        assert!(token.is_cancelled(), "get_object must cancel the token");
+    }
+
+    #[tokio::test]
+    async fn mock_part_source_unimplemented_methods_panic() {
+        let source = MockPartSource {
+            behavior: PartBehavior::Sized { len: 5 },
+        };
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            mock_source(PartBehavior::Sized { len: 5 }),
+            "src",
+            0,
+            None,
+            GetObjectOutput::builder().build(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
 }

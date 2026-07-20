@@ -3564,6 +3564,68 @@ mod tests {
             "expected the FIRST failure to win: {err:#}"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Direct coverage for the writer mocks. `transfer()` only ever writes
+    // and flushes, so each mock's `poll_shutdown` — and `FailWriter`'s
+    // succeeding branches — are unreachable through the transfer tests. Pin
+    // them here so a mock that silently starts failing on shutdown cannot
+    // hide behind an untested path.
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn writer_mocks_shut_down_cleanly() {
+        use tokio::io::AsyncWriteExt;
+
+        let token = create_pipeline_cancellation_token();
+        let mut cancel_on_write = CancelOnWriteWriter {
+            buf: Arc::new(StdMutex::new(Vec::new())),
+            token: token.clone(),
+        };
+        cancel_on_write.shutdown().await.unwrap();
+        assert!(
+            !token.is_cancelled(),
+            "shutdown must not cancel — only a write does"
+        );
+
+        let mut cancel_on_flush = CancelOnFlushWriter {
+            token: token.clone(),
+        };
+        cancel_on_flush.shutdown().await.unwrap();
+        assert!(
+            !token.is_cancelled(),
+            "shutdown must not cancel — only a flush does"
+        );
+
+        let mut cancel_on_second_flush = CancelOnSecondFlushWriter {
+            token: token.clone(),
+            flushes: 0,
+        };
+        cancel_on_second_flush.shutdown().await.unwrap();
+        assert!(!token.is_cancelled());
+
+        let mut fail_writer = FailWriter { fail_flush: false };
+        fail_writer.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn fail_writer_fails_exactly_one_of_write_or_flush() {
+        use tokio::io::AsyncWriteExt;
+
+        // fail_flush = false: writes fail, flush succeeds.
+        let mut on_write = FailWriter { fail_flush: false };
+        let err = on_write.write(b"data").await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert!(err.to_string().contains("simulated write failure"));
+        on_write.flush().await.unwrap();
+
+        // fail_flush = true: the failure moves to the flush instead.
+        let mut on_flush = FailWriter { fail_flush: true };
+        assert_eq!(on_flush.write(b"data").await.unwrap(), 4);
+        let err = on_flush.flush().await.unwrap_err();
+        assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+        assert!(err.to_string().contains("simulated flush failure"));
+    }
 }
 
 /// Memory-behaviour tests for the serial additional-checksum path.

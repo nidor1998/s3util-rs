@@ -3251,4 +3251,104 @@ mod upload_error_path_tests {
         );
         assert!(!t.has_warning.load(Ordering::SeqCst));
     }
+
+    // ------------------------------------------------------------------
+    // Direct mock-trait coverage. `NullSource` exists only to satisfy the
+    // `Storage` parameter of the upload entry points — nothing in the upload
+    // path may call back into it. The assertions below pin its real-return
+    // methods and verify every `unimplemented!()` stub still panics (so the
+    // regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    #[tokio::test]
+    async fn null_source_real_return_methods_behave_as_expected() {
+        let source = NullSource;
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn null_source_unimplemented_methods_panic() {
+        let source = NullSource;
+
+        assert_future_panics(source.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(NullSource),
+            "src",
+            0,
+            None,
+            GetObjectOutput::builder().build(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
 }

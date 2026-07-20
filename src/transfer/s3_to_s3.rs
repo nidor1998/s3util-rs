@@ -2534,4 +2534,243 @@ mod tests {
         // still None because the outcome is the default).
         assert_eq!(outcome.source_version_id, None);
     }
+
+    // ------------------------------------------------------------------
+    // Direct trait coverage for the branch-driving mocks above. Each one is
+    // built for a single `transfer()` branch, so the transfer-level tests
+    // touch only a handful of its methods; the pairs below pin the rest of
+    // the real-return methods and verify every `unimplemented!()` stub still
+    // panics (so the regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    #[tokio::test]
+    async fn empty_tagging_source_real_return_methods_behave_as_expected() {
+        let source = EmptyTaggingSource;
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        // HEAD advertises tags so the tagging path is not short-circuited...
+        let head = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.tag_count(), Some(2));
+        assert_eq!(head.content_length(), Some(4));
+        assert_eq!(head.e_tag(), Some("\"abc\""));
+
+        // ...but the tag set itself is empty, which is the whole point of
+        // this mock: the caller must resolve tagging to None.
+        let tagging = source.get_object_tagging("k", None).await.unwrap();
+        assert!(tagging.tag_set().is_empty());
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(4));
+        assert_eq!(get.e_tag(), Some("\"abc\""));
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn empty_tagging_source_unimplemented_methods_panic() {
+        let source = EmptyTaggingSource;
+
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(MockTarget),
+            "src",
+            0,
+            None,
+            dummy_get_object_output(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn no_etag_target_real_return_methods_behave_as_expected() {
+        let target = NoEtagTarget;
+
+        assert!(!target.is_local_storage());
+        assert!(!target.is_express_onezone_storage());
+
+        // The defining behaviour: a successful put that reports no ETag.
+        let put = target
+            .put_object(
+                "k",
+                Box::new(MockSource::new(None)),
+                "src",
+                0,
+                None,
+                dummy_get_object_output(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.e_tag(), None);
+
+        assert!(target.get_client().is_none());
+        assert!(target.get_rate_limit_bandwidth().is_none());
+        assert_eq!(target.get_local_path(), PathBuf::new());
+        let _tx = target.get_stats_sender();
+        target
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        target.set_warning();
+    }
+
+    #[tokio::test]
+    async fn no_etag_target_unimplemented_methods_panic() {
+        let target = NoEtagTarget;
+
+        assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.get_object_tagging("k", None)).await;
+        assert_future_panics(target.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(target.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(target.delete_object("k", None)).await;
+
+        assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn cancel_on_head_source_real_return_methods_behave_as_expected() {
+        let token = create_pipeline_cancellation_token();
+        let source = CancelOnHeadSource {
+            token: token.clone(),
+        };
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        // GET does not touch the token — only HEAD cancels.
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(4));
+        assert_eq!(get.e_tag(), Some("\"abc\""));
+        assert!(!token.is_cancelled(), "get_object must not cancel");
+
+        let head = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(4));
+        assert_eq!(head.e_tag(), Some("\"abc\""));
+        assert!(
+            token.is_cancelled(),
+            "head_object must cancel the token so the post-download guard trips"
+        );
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn cancel_on_head_source_unimplemented_methods_panic() {
+        let source = CancelOnHeadSource {
+            token: create_pipeline_cancellation_token(),
+        };
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(MockTarget),
+            "src",
+            0,
+            None,
+            dummy_get_object_output(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
 }
