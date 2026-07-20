@@ -1183,4 +1183,88 @@ mod tests {
             "a cancelled transfer must not report completion"
         );
     }
+
+    #[tokio::test]
+    async fn cancel_on_get_source_real_return_methods_behave_as_expected() {
+        let token = create_pipeline_cancellation_token();
+        let source = CancelOnGetSource {
+            token: token.clone(),
+        };
+
+        assert!(!source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        // HEAD leaves the token alone — only GET cancels.
+        let head = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(4));
+        assert_eq!(head.e_tag(), Some("\"abc\""));
+        assert!(!token.is_cancelled(), "head_object must not cancel");
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(4));
+        assert_eq!(get.e_tag(), Some("\"abc\""));
+        assert!(
+            token.is_cancelled(),
+            "get_object must cancel the token so the post-download guard trips"
+        );
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn cancel_on_get_source_unimplemented_methods_panic() {
+        let source = CancelOnGetSource {
+            token: create_pipeline_cancellation_token(),
+        };
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(MockTarget),
+            "src",
+            0,
+            None,
+            dummy_get_object_output(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
 }

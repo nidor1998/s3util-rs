@@ -887,4 +887,141 @@ mod if_none_match_tests {
         let streaming = run(config, vec![0x42; 4096]).await;
         assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
     }
+
+    // ------------------------------------------------------------------
+    // Direct mock-trait coverage. The transfer-level tests above only drive
+    // `put_object` / `put_object_stream`; the assertions below pin the
+    // remaining real-return methods and verify each `unimplemented!()` stub
+    // still panics (so the regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    #[tokio::test]
+    async fn recording_target_real_return_methods_behave_as_expected() {
+        let target = RecordingTarget::new();
+
+        assert!(!target.is_local_storage());
+        assert!(!target.is_express_onezone_storage());
+
+        // Nothing recorded until an upload actually runs.
+        assert_eq!(target.recorded().put_object_if_none_match, None);
+        assert_eq!(target.recorded().put_object_stream_if_none_match, None);
+
+        // Both upload entry points record the value they were handed and
+        // report success without an ETag.
+        let put = target
+            .put_object(
+                "k",
+                Box::new(RecordingTarget::new()),
+                "src",
+                0,
+                None,
+                GetObjectOutput::builder().build(),
+                None,
+                None,
+                Some("*".to_string()),
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.e_tag(), None);
+        assert_eq!(
+            target.recorded().put_object_if_none_match,
+            Some(Some("*".to_string()))
+        );
+
+        let stream = target
+            .put_object_stream("k", Box::new(tokio::io::empty()), None, None, None)
+            .await
+            .unwrap();
+        assert_eq!(stream.e_tag(), None);
+        assert_eq!(
+            target.recorded().put_object_stream_if_none_match,
+            Some(None)
+        );
+
+        assert!(target.get_client().is_none());
+        assert!(target.get_rate_limit_bandwidth().is_none());
+        assert_eq!(target.get_local_path(), PathBuf::new());
+        target
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        target.set_warning();
+    }
+
+    #[tokio::test]
+    async fn recording_target_unimplemented_methods_panic() {
+        let target = RecordingTarget::new();
+
+        assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.get_object_tagging("k", None)).await;
+        assert_future_panics(target.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(target.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(target.delete_object("k", None)).await;
+
+        // The annotation overrides are stubs too: a stdin upload never syncs
+        // annotations, so reaching any of them is a bug.
+        assert_future_panics(target.list_object_annotations("k", None, 1000)).await;
+        assert_future_panics(target.get_object_annotation("k", None, "name", None)).await;
+        assert_future_panics(target.copy_object_annotation(
+            "k",
+            None,
+            "name",
+            GetObjectAnnotationOutput::builder().build(),
+        ))
+        .await;
+        assert_future_panics(target.delete_object_annotation("k", None, "name")).await;
+
+        assert_call_panics(|| target.get_stats_sender());
+        assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
 }

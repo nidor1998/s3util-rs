@@ -551,4 +551,211 @@ mod tests {
             "an ETag-less put still completes the transfer"
         );
     }
+
+    // ------------------------------------------------------------------
+    // Direct mock-trait coverage. The transfer-level tests above only
+    // exercise the methods used by the production `transfer()` path; the
+    // assertions below pin the remaining real-return methods to their
+    // expected values and verify each `unimplemented!()` stub still panics
+    // (so the regression guard remains intact).
+    // ------------------------------------------------------------------
+
+    async fn assert_future_panics<F, T>(future: F)
+    where
+        F: std::future::Future<Output = T>,
+    {
+        use futures::FutureExt;
+        use std::panic::AssertUnwindSafe;
+        let result = AssertUnwindSafe(future).catch_unwind().await;
+        assert!(result.is_err(), "expected the future to panic");
+    }
+
+    fn assert_call_panics<F, R>(f: F)
+    where
+        F: FnOnce() -> R,
+    {
+        use std::panic::AssertUnwindSafe;
+        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
+        assert!(result.is_err(), "expected the call to panic");
+    }
+
+    fn dummy_get_object_output() -> GetObjectOutput {
+        GetObjectOutput::builder().build()
+    }
+
+    fn dummy_tagging() -> Tagging {
+        Tagging::builder()
+            .set_tag_set(Some(vec![]))
+            .build()
+            .unwrap()
+    }
+
+    fn no_sse_c_key() -> SseCustomerKey {
+        SseCustomerKey { key: None }
+    }
+
+    #[tokio::test]
+    async fn stub_source_real_return_methods_behave_as_expected() {
+        let source = StubSource {
+            cancel_on_get: None,
+        };
+
+        // Local-file-shaped source.
+        assert!(source.is_local_storage());
+        assert!(!source.is_express_onezone_storage());
+
+        let head = source
+            .head_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(head.content_length(), Some(4));
+        assert_eq!(head.e_tag(), None, "the local stub reports no ETag");
+
+        let get = source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert_eq!(get.content_length(), Some(4));
+        assert_eq!(get.e_tag(), Some("\"abc\""));
+
+        assert!(source.get_client().is_none());
+        assert!(source.get_rate_limit_bandwidth().is_none());
+        assert_eq!(source.get_local_path(), PathBuf::new());
+        let _tx = source.get_stats_sender();
+        source
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        source.set_warning();
+    }
+
+    #[tokio::test]
+    async fn stub_source_cancels_the_token_from_get_object_when_configured() {
+        // The `cancel_on_get` arm is what drives the post-read cancellation
+        // guard; without a token configured, GET must leave it untouched.
+        let token = create_pipeline_cancellation_token();
+        let source = StubSource {
+            cancel_on_get: Some(token.clone()),
+        };
+        assert!(!token.is_cancelled());
+
+        source
+            .get_object("k", None, None, None, None, no_sse_c_key(), None)
+            .await
+            .unwrap();
+        assert!(token.is_cancelled(), "get_object must cancel the token");
+    }
+
+    #[tokio::test]
+    async fn stub_source_unimplemented_methods_panic() {
+        let source = StubSource {
+            cancel_on_get: None,
+        };
+
+        assert_future_panics(source.get_object_tagging("k", None)).await;
+        assert_future_panics(source.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(source.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object(
+            "k",
+            Box::new(NoEtagTarget),
+            "src",
+            0,
+            None,
+            dummy_get_object_output(),
+            None,
+            None,
+            None,
+        ))
+        .await;
+        assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(source.delete_object("k", None)).await;
+
+        assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
+
+    #[tokio::test]
+    async fn no_etag_target_real_return_methods_behave_as_expected() {
+        let target = NoEtagTarget;
+
+        assert!(!target.is_local_storage());
+        assert!(!target.is_express_onezone_storage());
+
+        // The defining behaviour: a successful put that reports no ETag.
+        let put = target
+            .put_object(
+                "k",
+                Box::new(StubSource {
+                    cancel_on_get: None,
+                }),
+                "src",
+                0,
+                None,
+                dummy_get_object_output(),
+                None,
+                None,
+                None,
+            )
+            .await
+            .unwrap();
+        assert_eq!(put.e_tag(), None);
+
+        assert!(target.get_client().is_none());
+        assert!(target.get_rate_limit_bandwidth().is_none());
+        assert_eq!(target.get_local_path(), PathBuf::new());
+        let _tx = target.get_stats_sender();
+        target
+            .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
+            .await;
+        target.set_warning();
+    }
+
+    #[tokio::test]
+    async fn no_etag_target_unimplemented_methods_panic() {
+        let target = NoEtagTarget;
+
+        assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.get_object_tagging("k", None)).await;
+        assert_future_panics(target.head_object("k", None, None, None, None, no_sse_c_key(), None))
+            .await;
+        assert_future_panics(target.head_object_first_part(
+            "k",
+            None,
+            None,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.get_object_parts("k", None, None, no_sse_c_key(), None)).await;
+        assert_future_panics(target.get_object_parts_attributes(
+            "k",
+            None,
+            0,
+            None,
+            no_sse_c_key(),
+            None,
+        ))
+        .await;
+        assert_future_panics(target.put_object_tagging("k", None, dummy_tagging())).await;
+        assert_future_panics(target.delete_object("k", None)).await;
+
+        assert_call_panics(|| target.generate_copy_source_key("k", None));
+    }
 }
