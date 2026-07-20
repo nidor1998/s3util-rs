@@ -232,4 +232,75 @@ mod tests {
             "head-object without SSE-C flags must fail on an SSE-C object"
         );
     }
+
+    /// A missing BUCKET must exit 4 through the BucketNotFound arm, with the
+    /// bucket-specific message (distinct from the missing-key arm).
+    #[tokio::test]
+    async fn head_object_on_missing_bucket_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let bucket = TestHelper::generate_bucket_name();
+        let object_arg = format!("s3://{bucket}/any-key");
+        let output = run_s3util(&[
+            "head-object",
+            "--target-profile",
+            "s3util-e2e-test",
+            &object_arg,
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "head-object on a missing bucket must exit 4; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("not found"),
+            "expected a not-found message; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    /// A version-id that does not belong to the key must exit 4 through the
+    /// versioned NotFound arm (the message carries the versionId).
+    #[tokio::test]
+    async fn head_object_with_version_id_from_other_object_exits_4() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let _v_a = helper
+            .put_object_with_version(&bucket, "object-a", b"aaaa".to_vec())
+            .await;
+        let v_b = helper
+            .put_object_with_version(&bucket, "object-b", b"bbbb".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/object-a");
+        let output = run_s3util(&[
+            "head-object",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--source-version-id",
+            &v_b,
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "head-object with a foreign version-id must exit 4; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("versionId="),
+            "the versioned not-found message must carry the version id; stderr: {stderr}"
+        );
+    }
 }

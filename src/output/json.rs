@@ -4493,4 +4493,126 @@ mod tests {
             Value::String("legacy/".into())
         );
     }
+
+    // ----- absent-optional-field branches of the serializers -----
+
+    #[test]
+    fn get_bucket_encryption_rule_without_apply_default_serializes() {
+        use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
+        use aws_sdk_s3::types::{ServerSideEncryptionConfiguration, ServerSideEncryptionRule};
+        let rule = ServerSideEncryptionRule::builder()
+            .bucket_key_enabled(true)
+            .build();
+        let cfg = ServerSideEncryptionConfiguration::builder()
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketEncryptionOutput::builder()
+            .server_side_encryption_configuration(cfg)
+            .build();
+        let json = get_bucket_encryption_to_json(&out);
+        let r0 = &json["ServerSideEncryptionConfiguration"]["Rules"][0];
+        assert!(r0.get("ApplyServerSideEncryptionByDefault").is_none());
+        assert_eq!(r0["BucketKeyEnabled"], Value::Bool(true));
+    }
+
+    #[test]
+    fn get_bucket_website_routing_rule_without_redirect_serializes() {
+        use aws_sdk_s3::operation::get_bucket_website::GetBucketWebsiteOutput;
+        use aws_sdk_s3::types::{Condition, RoutingRule};
+        let cond = Condition::builder().key_prefix_equals("docs/").build();
+        let rule = RoutingRule::builder().condition(cond).build();
+        let out = GetBucketWebsiteOutput::builder()
+            .routing_rules(rule)
+            .build();
+        let json = get_bucket_website_to_json(&out);
+        let r0 = &json["RoutingRules"][0];
+        assert!(r0.get("Redirect").is_none());
+        assert_eq!(
+            r0["Condition"]["KeyPrefixEquals"],
+            Value::String("docs/".into())
+        );
+    }
+
+    #[test]
+    fn get_bucket_logging_target_grant_without_grantee_serializes() {
+        use aws_sdk_s3::operation::get_bucket_logging::GetBucketLoggingOutput;
+        use aws_sdk_s3::types::{BucketLogsPermission, LoggingEnabled, TargetGrant};
+        let grant = TargetGrant::builder()
+            .permission(BucketLogsPermission::Read)
+            .build();
+        let le = LoggingEnabled::builder()
+            .target_bucket("b")
+            .target_prefix("p/")
+            .target_grants(grant)
+            .build()
+            .unwrap();
+        let out = GetBucketLoggingOutput::builder()
+            .logging_enabled(le)
+            .build();
+        let json = get_bucket_logging_to_json(&out);
+        let g0 = &json["LoggingEnabled"]["TargetGrants"][0];
+        assert!(g0.get("Grantee").is_none());
+        assert_eq!(g0["Permission"], Value::String("READ".into()));
+    }
+
+    #[test]
+    fn get_bucket_notification_filter_without_key_serializes() {
+        use aws_sdk_s3::operation::get_bucket_notification_configuration::GetBucketNotificationConfigurationOutput;
+        use aws_sdk_s3::types::{Event, NotificationConfigurationFilter, QueueConfiguration};
+        let filter = NotificationConfigurationFilter::builder().build();
+        let queue = QueueConfiguration::builder()
+            .queue_arn("arn:aws:sqs:us-east-1:1:q")
+            .events(Event::from("s3:ObjectCreated:*"))
+            .filter(filter)
+            .build()
+            .unwrap();
+        let out = GetBucketNotificationConfigurationOutput::builder()
+            .queue_configurations(queue)
+            .build();
+        let json = get_bucket_notification_configuration_to_json(&out);
+        let f = &json["QueueConfigurations"][0]["Filter"];
+        assert!(
+            f.get("Key").is_none(),
+            "empty filter must serialize as {{}}"
+        );
+    }
+
+    #[test]
+    fn get_bucket_replication_metrics_without_event_threshold_serializes() {
+        use aws_sdk_s3::operation::get_bucket_replication::GetBucketReplicationOutput;
+        use aws_sdk_s3::types::{
+            Destination, Metrics, MetricsStatus, ReplicationConfiguration, ReplicationRule,
+            ReplicationRuleStatus,
+        };
+        let metrics = Metrics::builder()
+            .status(MetricsStatus::Enabled)
+            .build()
+            .unwrap();
+        let dest = Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .metrics(metrics)
+            .build()
+            .unwrap();
+        let rule = ReplicationRule::builder()
+            .status(ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = ReplicationConfiguration::builder()
+            .role("arn:aws:iam::1:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let m = &json["ReplicationConfiguration"]["Rules"][0]["Destination"]["Metrics"];
+        assert_eq!(m["Status"], Value::String("Enabled".into()));
+        assert!(
+            m.get("EventThreshold").is_none(),
+            "absent EventThreshold must stay absent: {m}"
+        );
+    }
 }

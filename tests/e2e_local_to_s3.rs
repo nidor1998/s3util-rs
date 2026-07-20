@@ -2804,4 +2804,50 @@ mod tests {
             "cp --dry-run --skip-existing must NOT modify the object"
         );
     }
+
+    /// A multipart upload with --disable-etag-verify must skip the post-upload
+    /// ETag verification entirely and still succeed.
+    #[tokio::test]
+    async fn local_to_s3_multipart_with_disable_etag_verify() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let upload_file =
+            TestHelper::create_sized_file(&local_dir, "no_verify.bin", 9 * 1024 * 1024);
+        let target = format!("s3://{}/no_verify.bin", bucket);
+
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args([
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--disable-etag-verify",
+                upload_file.to_str().unwrap(),
+                &target,
+            ])
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .output()
+            .expect("spawn s3util");
+
+        let uploaded = helper.is_object_exist(&bucket, "no_verify.bin", None).await;
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "multipart upload with --disable-etag-verify must exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            uploaded,
+            "the object must exist despite skipped verification"
+        );
+    }
 }

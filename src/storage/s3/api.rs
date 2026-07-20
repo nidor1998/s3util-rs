@@ -68,7 +68,7 @@ use aws_sdk_s3::types::{
     CorsConfiguration, CreateBucketConfiguration, DataRedundancy, LocationInfo, LocationType,
     NotificationConfiguration, PublicAccessBlockConfiguration, ReplicationConfiguration,
     RequestPayer, RequestPaymentConfiguration, RestoreRequest, ServerSideEncryptionConfiguration,
-    Tagging, VersioningConfiguration, WebsiteConfiguration,
+    Tagging, TransitionDefaultMinimumObjectSize, VersioningConfiguration, WebsiteConfiguration,
 };
 
 /// Error type for read wrappers that distinguish a 404 NotFound condition
@@ -238,6 +238,9 @@ pub struct HeadObjectOpts {
     /// When `true`, sets `ChecksumMode=ENABLED` so S3 includes the
     /// additional checksum in the response.
     pub enable_additional_checksum: bool,
+    /// Sends `x-amz-request-payer: requester`, required to read an object in
+    /// a Requester Pays bucket. Without it S3 answers 403.
+    pub request_payer: Option<RequestPayer>,
 }
 
 /// Issue `HeadObject` against `bucket`/`key`. Returns the SDK response on
@@ -267,6 +270,9 @@ pub async fn head_object(
     if opts.enable_additional_checksum {
         req = req.checksum_mode(ChecksumMode::Enabled);
     }
+    if let Some(rp) = opts.request_payer {
+        req = req.request_payer(rp);
+    }
 
     req.send().await.map_err(|e| {
         if e.as_service_error()
@@ -292,10 +298,14 @@ pub async fn delete_object(
     bucket: &str,
     key: &str,
     version_id: Option<&str>,
+    request_payer: Option<RequestPayer>,
 ) -> Result<DeleteObjectOutput> {
     let mut req = client.delete_object().bucket(bucket).key(key);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send()
         .await
@@ -313,10 +323,14 @@ pub async fn get_object_tagging(
     bucket: &str,
     key: &str,
     version_id: Option<&str>,
+    request_payer: Option<RequestPayer>,
 ) -> Result<GetObjectTaggingOutput, HeadError> {
     let mut req = client.get_object_tagging().bucket(bucket).key(key);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send().await.map_err(|e| {
         let code = e
@@ -381,6 +395,7 @@ pub async fn put_object_tagging(
     key: &str,
     version_id: Option<&str>,
     tagging: Tagging,
+    request_payer: Option<RequestPayer>,
 ) -> Result<PutObjectTaggingOutput> {
     let mut req = client
         .put_object_tagging()
@@ -389,6 +404,9 @@ pub async fn put_object_tagging(
         .tagging(tagging);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send()
         .await
@@ -964,11 +982,13 @@ pub async fn put_bucket_lifecycle_configuration(
     client: &Client,
     bucket: &str,
     cfg: BucketLifecycleConfiguration,
+    transition_default_minimum_object_size: Option<TransitionDefaultMinimumObjectSize>,
 ) -> Result<PutBucketLifecycleConfigurationOutput> {
     client
         .put_bucket_lifecycle_configuration()
         .bucket(bucket)
         .lifecycle_configuration(cfg)
+        .set_transition_default_minimum_object_size(transition_default_minimum_object_size)
         .send()
         .await
         .with_context(|| format!("put-bucket-lifecycle-configuration on s3://{bucket}"))
@@ -1510,6 +1530,7 @@ pub async fn restore_object(
     key: &str,
     version_id: Option<&str>,
     restore_request: RestoreRequest,
+    request_payer: Option<RequestPayer>,
 ) -> Result<RestoreObjectOutput, HeadError> {
     let mut req = client
         .restore_object()
@@ -1518,6 +1539,9 @@ pub async fn restore_object(
         .restore_request(restore_request);
     if let Some(v) = version_id {
         req = req.version_id(v);
+    }
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
     }
     req.send().await.map_err(|e| {
         let code = e
@@ -1592,18 +1616,28 @@ pub async fn rename_object(
 /// `expires_in`. The URL is produced locally from the SDK client's credentials
 /// and signing config — no S3 API call is made — so this only fails if the
 /// credentials are unresolvable or the signer rejects the request.
+///
+/// `request_payer` becomes a *signed header*, not a query parameter: the
+/// resulting URL carries `X-Amz-SignedHeaders=host;x-amz-request-payer`, so
+/// whoever uses it must send `x-amz-request-payer: requester` too or S3
+/// answers `SignatureDoesNotMatch`. That is unavoidable — S3 requires the
+/// header on every request to a Requester Pays bucket, and SigV4 requires any
+/// `x-amz-*` header to be signed — so the alternative is a URL that always
+/// gets a 403 from such a bucket.
 pub async fn presign_get_object(
     client: &Client,
     bucket: &str,
     key: &str,
     expires_in: Duration,
+    request_payer: Option<RequestPayer>,
 ) -> Result<String> {
     let presigning_config = PresigningConfig::expires_in(expires_in)
         .with_context(|| format!("invalid presigning config (expires_in={expires_in:?})"))?;
-    let presigned = client
-        .get_object()
-        .bucket(bucket)
-        .key(key)
+    let mut req = client.get_object().bucket(bucket).key(key);
+    if let Some(rp) = request_payer {
+        req = req.request_payer(rp);
+    }
+    let presigned = req
         .presigned(presigning_config)
         .await
         .with_context(|| format!("presign get-object on s3://{bucket}/{key}"))?;
@@ -1936,5 +1970,114 @@ mod tests {
     fn parse_directory_bucket_zone_rejects_empty_zone_id() {
         // `<base>----x-s3` parses to an empty zone-id segment.
         assert!(parse_directory_bucket_zone("base----x-s3").is_none());
+    }
+}
+
+/// Behavioural tests for pre-signing, which is pure local computation (the SDK
+/// signs from the client's credentials without contacting S3), so the resulting
+/// URL can be asserted on directly in a unit test.
+#[cfg(test)]
+mod presign_tests {
+    use super::*;
+    use aws_config::BehaviorVersion;
+    use aws_sdk_s3::config::{Credentials, Region};
+
+    fn offline_client() -> Client {
+        let conf = aws_sdk_s3::Config::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(Region::new("us-east-1"))
+            .credentials_provider(Credentials::new(
+                "AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                None,
+                None,
+                "presign-test",
+            ))
+            .build();
+        Client::from_conf(conf)
+    }
+
+    /// Without the flag the URL signs only `host`, so it can be fetched as-is.
+    #[tokio::test]
+    async fn presign_without_request_payer_signs_only_host() {
+        let url = presign_get_object(
+            &offline_client(),
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            None,
+        )
+        .await
+        .unwrap();
+
+        assert!(
+            url.contains("X-Amz-SignedHeaders=host&"),
+            "expected host-only SignedHeaders, got: {url}"
+        );
+        assert!(
+            !url.contains("x-amz-request-payer"),
+            "request-payer must not appear when the flag is off: {url}"
+        );
+    }
+
+    /// With the flag, `x-amz-request-payer` must be part of the signature.
+    /// It is a signed header rather than a query parameter, so the recipient
+    /// has to send the header too — asserted here so the documented contract
+    /// (README, `presign_get_object` docs) cannot drift silently.
+    #[tokio::test]
+    async fn presign_with_request_payer_signs_the_header() {
+        let url = presign_get_object(
+            &offline_client(),
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            Some(RequestPayer::Requester),
+        )
+        .await
+        .unwrap();
+
+        // The URL is percent-encoded: "host;x-amz-request-payer".
+        assert!(
+            url.contains("X-Amz-SignedHeaders=host%3Bx-amz-request-payer"),
+            "request-payer must be signed into the URL, otherwise a Requester \
+             Pays bucket answers 403; got: {url}"
+        );
+    }
+
+    /// The two URLs must differ in more than the header list: signing an extra
+    /// header changes the signature itself.
+    #[tokio::test]
+    async fn presign_request_payer_changes_the_signature() {
+        let client = offline_client();
+        let plain = presign_get_object(
+            &client,
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            None,
+        )
+        .await
+        .unwrap();
+        let payer = presign_get_object(
+            &client,
+            "my-bucket",
+            "my-key",
+            Duration::from_secs(3600),
+            Some(RequestPayer::Requester),
+        )
+        .await
+        .unwrap();
+
+        let sig = |u: &str| {
+            u.split("X-Amz-Signature=")
+                .nth(1)
+                .map(|s| s.split('&').next().unwrap().to_string())
+                .unwrap()
+        };
+        assert_ne!(
+            sig(&plain),
+            sig(&payer),
+            "signing an additional header must change the signature"
+        );
     }
 }

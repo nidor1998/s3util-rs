@@ -5,6 +5,112 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `put-bucket-lifecycle-configuration` gained `--transition-default-minimum-object-size`
+  (`varies_by_storage_class` or `all_storage_classes_128K`). S3 accepts this only as a request parameter, never as a
+  member of the lifecycle configuration itself, so there was previously no way to send it: feeding back the output of
+  `get-bucket-lifecycle-configuration` (which reports it at the top level) silently reset the bucket to S3's default of
+  `all_storage_classes_128K`, changing which small objects transition.
+
+### Fixed
+
+- `--help` no longer prints the values of exported credential environment variables. An option bound to an environment
+  variable renders as `[env: VAR=value]` in help, so running any subcommand's `--help` with `SOURCE_SECRET_ACCESS_KEY`,
+  `TARGET_SESSION_TOKEN`, an SSE-C key, or another secret-bearing variable exported wrote the secret to the terminal —
+  and to anything capturing it, such as CI logs. Help now shows only the variable name (`hide_env_values`) for access
+  keys, secret access keys, session tokens, and SSE-C keys and key MD5s, on every subcommand.
+- ETag and additional-checksum verification of a downloaded file no longer allocate a buffer sized from an unvalidated,
+  server-reported part size. When reproducing a multipart source's composite ETag or checksum, s3util reads the local
+  file in the part boundaries reported by the source's `GetObjectAttributes`/`HeadObject` response. A hostile or
+  non-compliant endpoint could report a negative part size (which wraps to a huge `usize`) or one far larger than the
+  file, sizing the read buffer past the file's actual bytes and aborting the process on the allocation (OOM) — reachable
+  in the default configuration, since ETag verification is on unless `--disable-etag-verify` is set. Each part size is
+  now checked against the bytes still unread before allocating; a negative or oversized part fails closed and the object
+  is reported as unverifiable, exactly like the existing part-list length check.
+- Two reachable panics in the transfer paths now return errors. Copying s3-to-s3 with `--auto-chunksize
+  --enable-additional-checksum` from a source of 5 MiB or more that was uploaded with a single `PutObject` and lacks the
+  requested checksum crashed the process on an empty parts list; per-part verification is now skipped with a warning. And
+  a failed chunk download while writing to local storage panicked inside the download task instead of reporting the
+  cause — which aborted the whole process under the `release-min-size` profile, where `panic = "abort"`. A chunk whose
+  length disagrees with the plan (a source modified mid-download) is now an error rather than a panic too.
+- Reads of a source object are pinned to the version observed by the initial `HeadObject`, for s3-to-s3, s3-to-local and
+  s3-to-stdout. Previously the first `GetObject` asked for the latest version, so an overwrite landing in that window
+  produced a copy of the new object truncated to the old object's length — undetected, because the range check compares
+  only the start and end offsets — or, when writing to stdout, interleaved bytes from two versions. Unversioned buckets
+  are unaffected, and `--source-version-id` still takes precedence.
+  **IAM impact:** the pinned reads carry a `versionId`, which S3 authorizes against `s3:GetObjectVersion` instead of
+  `s3:GetObject`. Reading from a bucket that has (or ever had) versioning enabled now requires `s3:GetObjectVersion`
+  (plus `s3:GetObjectVersionTagging` where tags are read, and `s3:DeleteObjectVersion` for `mv`); least-privilege
+  policies granting only the unversioned actions will start failing with `AccessDenied`.
+- An ETag mismatch is no longer reported as possible corruption when the source and target ETags simply have different
+  shapes. A source uploaded with a single `PutObject` but larger than `--multipart-threshold` is re-uploaded as
+  multipart, so a plain MD5 can never equal the composite; the message now explains the chunk-size cause and points at
+  `--auto-chunksize`. Two differing single-part ETags are still reported as corruption.
+- `--disable-additional-checksum-verify` is now honoured when downloading to local storage. The target-side verification
+  ran regardless, still warning on a mismatch and still failing hard on a full-object mismatch.
+- A single-part server-side copy no longer counts its bytes twice, which made the progress indicator and the summary
+  report twice the object size as transferred.
+
+- `--if-none-match` now applies to uploads from stdin. Both stdin paths passed a hard-coded "no condition" to the
+  target, so the documented overwrite protection did nothing and an existing object was silently replaced.
+- Uploading from stdin no longer drops `--cache-control`, `--content-disposition`, `--content-encoding`,
+  `--content-language`, `--expires`, `--website-redirect` and `--put-last-modified-metadata` when the input is large
+  enough to cross `--multipart-threshold`. Only the buffered (below-threshold) path applied them, so the same command
+  produced a differently-tagged object depending purely on how much data arrived on stdin.
+- `--target-request-payer` is now sent by `rm`, `head-object`, `get-object-tagging`, `put-object-tagging`,
+  `restore-object`, `presign`, and the target-exists probe used by `cp --skip-existing`. The flag was parsed and then
+  discarded by all of them, so each returned `403` against a Requester Pays bucket despite the documented option.
+  (`delete-object-tagging` and `head-bucket` also accept the flag, but the S3 API has no request-payer parameter for
+  `DeleteObjectTagging` or `HeadBucket`, so there is nothing to send.) For `presign`, the header becomes part of the
+  URL's signature, so the recipient must send `x-amz-request-payer: requester` as well — see the README.
+
+- ETag verification when copying an S3 object to stdout no longer reports spurious mismatches (exit code 3) on
+  byte-correct transfers. The computed single-part ETag was the hex of the concatenated per-chunk MD5 digests, which is
+  a valid ETag only when the body fit in a single chunk, and the format was chosen by comparing the body size against
+  `--multipart-threshold` rather than by looking at the source's own ETag. A zero-byte object (whose empty tail was
+  never hashed at all) and any single-part upload larger than `--multipart-chunksize` therefore always mismatched. The
+  whole-body MD5 is now computed incrementally and the format follows the source ETag's shape.
+- A multipart source is no longer split at the wrong part boundaries when the read that reaches end-of-file also
+  crosses a chunk boundary. The chunk drain stopped once the byte count reached the object size, so the remainder — more
+  than one chunk's worth — was hashed as a single oversized part, producing one part too few and an intermittent,
+  read-framing-dependent ETag mismatch.
+- Verifying a single-part or full-object additional checksum on an S3-to-stdout copy no longer buffers the entire object
+  in memory; the hasher is fed incrementally as the body streams, which yields the same digest.
+- A failed S3-to-stdout copy on the parallel path now exits 1 with the cause logged, instead of exiting 130 with no
+  message. The worker that hits a failed chunk download or a failed stdout write cancels the pipeline token to stop its
+  peers, and that cancellation was indistinguishable from a user pressing ctrl-c. The same failure on the serial path
+  already exited 1, so the two paths now agree.
+
+- JSON configuration files for the `put-*` subcommands now reject unknown fields instead of silently ignoring them,
+  matching the AWS CLI's "Unknown parameter" behaviour. Previously a misspelled or wrongly nested key was dropped and
+  the command replaced the whole bucket configuration with the truncated remainder. Most severely, piping the output of
+  `get-public-access-block` (which is wrapped in a `PublicAccessBlockConfiguration` key) straight back into
+  `put-public-access-block` parsed as "all four flags absent" and disabled every public-access protection on the bucket.
+- `mv` now refuses to move an object onto itself instead of deleting it. `s3util mv s3://bucket/key s3://bucket/key`
+  (and the directory-style `s3util mv s3://bucket/dir/key s3://bucket/dir/`, which resolves to the same key) copied the
+  object over itself and then deleted the source — destroying the object outright on an unversioned bucket while
+  reporting success. The check runs before the copy, so nothing is transferred or deleted. It fires only when both
+  sides resolve to the same object: with different `--source-endpoint-url` / `--target-endpoint-url` the same bucket
+  and key names are two distinct objects (e.g. migrating between storage services that share a bucket name), and an
+  explicit `--source-version-id` (other than the `null` pseudo-version) is a version promotion — the copy publishes
+  that version as the newest one and the delete removes only the copied version.
+- On Windows, a target path ending in `/` (rather than `\`) is now recognised as a directory by target validation and
+  key resolution, as it already was by the storage layer. Previously `s3util cp s3://bucket/key out/` against a
+  non-existent `out` directory silently wrote nothing and exited 0, and `s3util mv` additionally deleted the source
+  object.
+- Corrected `ONE-ZONE_IA` to `ONEZONE_IA` in the `--storage-class` option help and the invalid-storage-class error
+  message.
+- Stricter format validation of `--metadata`: the whole value must be comma-separated `key=value` pairs, so a leading
+  comma or two pairs without a separating comma (`a=bc=d`) are now rejected.
+- A source object's `Expires` header that cannot be parsed as an HTTP date no longer causes a panic; a warning is
+  reported and the value falls back to `None`.
+- When downloading to local storage, object verification now runs on the temporary file before it is persisted to the
+  final path, so an object that fails verification never becomes visible at the destination. The multipart download's
+  size-accounting check moved in front of the persist for the same reason.
+
 ## [1.7.1] - 2026-07-11
 
 ### Changed

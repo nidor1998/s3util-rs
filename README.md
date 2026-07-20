@@ -83,6 +83,7 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
+- [Security assumptions](#security-assumptions)
 - [Scope](#scope)
 - [Non-Goals](#non-goals)
 - [License](#license)
@@ -150,7 +151,7 @@ machinery.
 | `delete-bucket-tagging`  | Removes all tags from a bucket; silent on success                                             |
 | `put-bucket-versioning`  | Enables or suspends versioning (`--enabled` / `--suspended`, mutually exclusive); silent       |
 | `get-bucket-versioning`  | Prints versioning state as JSON (`{"Status": "Enabled"}`); silent when never configured (matches AWS CLI) |
-| `put-bucket-lifecycle-configuration`     | Sets lifecycle configuration from a JSON file path or `-` (stdin); silent on success |
+| `put-bucket-lifecycle-configuration`     | Sets lifecycle configuration from a JSON file path or `-` (stdin); `--transition-default-minimum-object-size` (`varies_by_storage_class` / `all_storage_classes_128K`) sets the small-object transition cutoff, which S3 accepts only as a request parameter, not in the JSON; silent on success |
 | `get-bucket-lifecycle-configuration`     | Prints lifecycle configuration as JSON (`{"Rules": […]}` matching `aws s3api`); exits 4 if no lifecycle is set |
 | `delete-bucket-lifecycle-configuration`  | Removes lifecycle configuration; silent on success                                  |
 | `put-bucket-encryption`                  | Sets default encryption from a JSON file path or `-` (stdin); silent on success     |
@@ -507,6 +508,8 @@ Options:
 |------|------|-------------|
 | `--expires-in <SECONDS>` | Integer | Seconds until the URL expires. Default `3600`; must be greater than `0` and at most `604800` (7 days, S3's maximum for a SigV4 pre-signed URL) |
 
+With `--target-request-payer`, `x-amz-request-payer` becomes part of the URL's signature (`X-Amz-SignedHeaders=host;x-amz-request-payer`), because S3 requires the header on every request to a Requester Pays bucket and SigV4 requires any `x-amz-*` header to be signed. Whoever uses the URL must therefore send that header as well — `curl -H 'x-amz-request-payer: requester' '<URL>'` — otherwise S3 rejects the request with `SignatureDoesNotMatch`. Without the flag, the URL is plain but a Requester Pays bucket answers `403`.
+
 Common options (e.g. `--target-region`, `--target-access-key`, `--target-profile`) apply the same way as for other subcommands. `presign` covers `GetObject` only — it does not pre-sign uploads or any other operation. If the signing credentials are temporary (for example STS or SSO session credentials), the URL stops working once those credentials expire, even if `--expires-in` has not elapsed. Because no request is sent to S3, `presign` has no `--dry-run` and never returns the not-found exit code `4`: it exits `0` once the URL is printed, or `1` / `2` on a signing or argument error.
 
 ### put-object-annotation
@@ -809,10 +812,16 @@ Required permissions depend on the transfer direction. "Source" and "target" bel
 **Source bucket** (any `cp`/`mv` reading from S3):
 
 - `s3:GetObject` — always. Covers `GetObject`, `HeadObject`, and `GetObjectAttributes`.
+- `s3:GetObjectVersion` — when the source bucket has (or ever had) versioning enabled, or when `--source-version-id`
+  is used. Reads are pinned to the version observed by the initial `HeadObject`, so the GETs carry a `versionId` and
+  S3 authorizes them against this action; a policy granting only `s3:GetObject` gets `AccessDenied` on a versioned
+  bucket.
 - `s3:GetObjectTagging` — when source tags are read. This is the default on S3→S3; suppressed by `--disable-tagging`.
-- `s3:GetObjectVersion` — when `--source-version-id` is used.
+- `s3:GetObjectVersionTagging` — when the tag read addresses a pinned version (versioned source bucket or
+  `--source-version-id`), same rule as `s3:GetObjectVersion`.
 - `s3:DeleteObject` — when running `mv` (the source is deleted on success).
-- `s3:DeleteObjectVersion` — when running `mv` with `--source-version-id`.
+- `s3:DeleteObjectVersion` — when running `mv` from a versioned source bucket or with `--source-version-id`
+  (`mv` deletes exactly the version it copied).
 
 **Target bucket** (any `cp`/`mv` writing to S3):
 
@@ -1246,6 +1255,33 @@ However, I intend to keep the AWS SDK for Rust and other dependencies up to date
 **Issue and PR lifecycle**
 
 To keep the tracker focused, an issue or PR with no activity for 30 days is labeled `stale` and closed 7 days later unless a new comment (or, for PRs, a new commit) is added. Items labeled `pinned` or `security` are exempt; PRs are also exempt from `pinned`. Closed items can always be reopened.
+
+## Security assumptions
+
+s3util is built on a fundamental security assumption: **both the object storage system and the specific bucket you
+operate on must be trusted.**
+
+Within this trust model, s3util implements the security measures you would reasonably expect of an S3 utility:
+encrypted transport (TLS/HTTPS) for data in transit, end-to-end integrity verification (ETag, MD5, SHA256, and CRC
+checksums), support for server-side encryption, and secure handling of credentials through the standard AWS credential
+providers. These measures protect the confidentiality and integrity of your data against transport-level and accidental
+threats.
+
+However, s3util assumes that the storage endpoint is honest and non-adversarial — that it correctly implements the S3
+API and returns the data, metadata, and checksum values it actually stores, without tampering. The integrity
+verification features are **not** a defense against a malicious or compromised storage backend that deliberately returns
+falsified data or forged checksums. Against such an adversarial endpoint, these guarantees do not hold.
+
+Crucially, trust must extend to the **bucket**, not just the storage provider. Even when the object storage system
+itself is fully trustworthy, a bucket can still be adversarial — for example, a bucket you do not control, a shared
+bucket writable by others, or one whose objects, metadata, or checksums were crafted by an attacker. If you copy or read
+*from* such a bucket, the data and metadata it serves are already untrusted at the source, and s3util's guarantees no
+longer apply. A trusted storage provider hosting an untrusted bucket is, for the purposes of this security model, an
+untrusted source.
+
+Operating on an untrusted, compromised, or non-conformant endpoint or bucket is outside s3util's security model.
+Selecting a trustworthy storage provider, and ensuring that every bucket you operate on is one you control or trust —
+including its credentials, encryption, and access policies — remains your responsibility.
 
 ## Scope
 

@@ -3,6 +3,7 @@ use crate::config::args::value_parser::{
     tagging, url,
 };
 use crate::config::{CLITimeoutConfig, ClientConfig, Config, RetryConfig};
+use crate::storage::local::fs_util;
 use crate::types::{
     AccessKeys, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath,
 };
@@ -138,15 +139,15 @@ It cannot work between different object storages or regions."#)]
     pub source_profile: Option<String>,
 
     /// Source access key
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_secret_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_secret_access_key", help_heading = "AWS Configuration")]
     pub source_access_key: Option<String>,
 
     /// Source secret access key
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
     pub source_secret_access_key: Option<String>,
 
     /// Source session token
-    #[arg(long, env, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["source_profile"], requires = "source_access_key", help_heading = "AWS Configuration")]
     pub source_session_token: Option<String>,
 
     /// Source region
@@ -190,15 +191,15 @@ It cannot work between different object storages or regions."#)]
     pub target_profile: Option<String>,
 
     /// Target access key
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_secret_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_secret_access_key", help_heading = "AWS Configuration")]
     pub target_access_key: Option<String>,
 
     /// Target secret access key
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
     pub target_secret_access_key: Option<String>,
 
     /// Target session token
-    #[arg(long, env, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
+    #[arg(long, env, hide_env_values = true, conflicts_with_all = ["target_profile"], requires = "target_access_key", help_heading = "AWS Configuration")]
     pub target_session_token: Option<String>,
 
     /// Target region
@@ -223,7 +224,7 @@ It cannot work between different object storages or regions."#)]
 
     #[arg(long, env, value_parser = storage_class::parse_storage_class, help_heading = "Target Options",
     long_help = r#"Type of storage to use for the target object.
-Valid choices: STANDARD | REDUCED_REDUNDANCY | STANDARD_IA | ONE-ZONE_IA | INTELLIGENT_TIERING | GLACIER |
+Valid choices: STANDARD | REDUCED_REDUNDANCY | STANDARD_IA | ONEZONE_IA | INTELLIGENT_TIERING | GLACIER |
                DEEP_ARCHIVE | GLACIER_IR | EXPRESS_ONEZONE"#)]
     pub storage_class: Option<String>,
 
@@ -364,13 +365,20 @@ If this option is enabled, extra API calls are required."#)]
     #[arg(
         long,
         env,
+        hide_env_values = true,
         requires = "source_sse_c_key_md5",
         help_heading = "Encryption"
     )]
     pub source_sse_c_key: Option<String>,
 
     /// Source base64 encoded MD5 digest of source_sse_c_key
-    #[arg(long, env, requires = "source_sse_c", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        hide_env_values = true,
+        requires = "source_sse_c",
+        help_heading = "Encryption"
+    )]
     pub source_sse_c_key_md5: Option<String>,
 
     /// Target SSE-C algorithm. Valid choices: AES256
@@ -381,13 +389,20 @@ If this option is enabled, extra API calls are required."#)]
     #[arg(
         long,
         env,
+        hide_env_values = true,
         requires = "target_sse_c_key_md5",
         help_heading = "Encryption"
     )]
     pub target_sse_c_key: Option<String>,
 
     /// Target base64 encoded MD5 digest of target-sse-c-key
-    #[arg(long, env, requires = "target_sse_c", help_heading = "Encryption")]
+    #[arg(
+        long,
+        env,
+        hide_env_values = true,
+        requires = "target_sse_c",
+        help_heading = "Encryption"
+    )]
     pub target_sse_c_key_md5: Option<String>,
 
     /// Trace verbosity(-v: show info, -vv: show debug, -vvv show trace)
@@ -580,9 +595,11 @@ pub(crate) fn check_target_local_directory_exists(target: &str) -> Result<(), St
         StoragePath::S3 { .. } | StoragePath::Stdio => return Ok(()),
     };
 
-    let ends_with_sep = target_path
-        .to_string_lossy()
-        .ends_with(std::path::MAIN_SEPARATOR);
+    // Must agree with the storage layer's directory test (fs_util), which
+    // treats a trailing '/' as a directory on every platform — otherwise a
+    // Windows target like `out/` is validated as a file, resolved to the
+    // literal key `out/`, and then silently written as nothing.
+    let ends_with_sep = fs_util::has_trailing_separator(&target_path.to_string_lossy());
 
     let effective_dir: PathBuf = if ends_with_sep {
         // e.g. "/tmp/" → "/tmp"

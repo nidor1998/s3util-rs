@@ -700,6 +700,36 @@ mod tests {
         );
     }
 
+    /// Same as above but spelled with a forward slash rather than the platform
+    /// separator. Windows accepts `/` as a separator and the storage layer treats
+    /// a trailing `/` as a directory on every platform, so validation must too —
+    /// otherwise `out/` is validated as a file, resolved to the literal key
+    /// `out/`, and then silently written as nothing (and `mv` deletes the source).
+    #[test]
+    fn target_nonexistent_directory_forward_slash_rejected_on_every_platform() {
+        let result = build_config_from_args(args_with(
+            "s3://my-bucket/key",
+            "/definitely/does/not/exist/abc123/",
+        ));
+        assert!(
+            result.is_err(),
+            "a forward-slash directory target that does not exist must be rejected"
+        );
+        let err = result.unwrap_err();
+        assert!(
+            err.contains(crate::config::args::TARGET_LOCAL_DIRECTORY_DOES_NOT_EXIST_PREFIX),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn target_existing_directory_forward_slash_passes_on_every_platform() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = format!("{}/", dir.path().to_string_lossy());
+        let result = build_config_from_args(args_with("s3://my-bucket/key", &target));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
     #[test]
     fn target_existing_directory_no_trailing_separator_passes() {
         let dir = tempfile::tempdir().unwrap();
@@ -1853,5 +1883,108 @@ mod tests {
         ]);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("both storage must be s3://"));
+    }
+
+    #[test]
+    fn credential_args_hide_env_values_in_every_subcommand() {
+        use clap::CommandFactory;
+
+        fn check(cmd: &clap::Command, path: &str, checked: &mut usize) {
+            for arg in cmd.get_arguments() {
+                let id = arg.get_id().as_str();
+                let sensitive = id.contains("access_key")
+                    || id.contains("session_token")
+                    || id.contains("sse_c_key");
+                if sensitive && arg.get_env().is_some() {
+                    *checked += 1;
+                    assert!(
+                        arg.is_hide_env_values_set() || arg.is_hide_env_set(),
+                        "{path} --{id}: env-backed credential arg must hide its env value in help output"
+                    );
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                check(sub, &format!("{path} {}", sub.get_name()), checked);
+            }
+        }
+
+        let cmd = Cli::command();
+        let mut checked = 0;
+        check(&cmd, cmd.get_name(), &mut checked);
+        // CommonArgs alone contributes 10 credential args per subcommand that
+        // flattens it; a low count means the walk went wrong.
+        assert!(checked >= 18, "only {checked} credential args found");
+    }
+
+    #[test]
+    fn full_object_checksum_without_algorithm_builds() {
+        // --full-object-checksum with no --additional-checksum-algorithm at
+        // all: the SHA1/SHA256 reject check must be skipped entirely.
+        let result = build_config_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &["--full-object-checksum"],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn annotation_sync_accepts_regular_buckets_on_both_sides() {
+        // Neither side is an express one-zone bucket, so both express checks
+        // fall through and the build succeeds.
+        let result = build_config_from_args(args_with_extra(
+            "s3://src-bucket/k",
+            "s3://dst-bucket/k",
+            &["--enable-sync-object-annotations"],
+        ));
+        assert!(result.is_ok(), "{:?}", result.err());
+    }
+
+    #[test]
+    fn cp_try_from_propagates_validation_failure() {
+        // Config::try_from(CpArgs) must surface validate_storage_config's
+        // rejection (full-object checksum with SHA256), not swallow it.
+        // (build_config_from_common itself cannot fail: its three fallible
+        // inputs — metadata, threshold, chunksize — are all clap-validated.)
+        let cli = parse_from_args(args_with_extra(
+            "/tmp/src",
+            "s3://b/k",
+            &[
+                "--full-object-checksum",
+                "--additional-checksum-algorithm",
+                "SHA256",
+            ],
+        ))
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        let err = Config::try_from(cp_args).unwrap_err();
+        assert!(
+            err.contains("full object checksum"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn mv_try_from_propagates_validation_failure() {
+        let cli = parse_from_args(vec![
+            "s3util".to_string(),
+            "mv".to_string(),
+            "/tmp/src".to_string(),
+            "s3://b/k".to_string(),
+            "--full-object-checksum".to_string(),
+            "--additional-checksum-algorithm".to_string(),
+            "SHA256".to_string(),
+        ])
+        .unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(
+            err.contains("full object checksum"),
+            "unexpected error: {err}"
+        );
     }
 }

@@ -668,4 +668,45 @@ mod tests {
             String::from_utf8_lossy(&output.stderr),
         );
     }
+
+    /// rename against a directory bucket that does not exist must exit 1
+    /// (consistent with the documented exit-code policy: unexpected
+    /// operational failure, not the NotFound query exit 4).
+    ///
+    /// On current AWS the failure arrives as a dispatch-wrapped NoSuchBucket
+    /// from the S3 Express CreateSession step (classified HeadError::Other),
+    /// so the CLI's dedicated BucketNotFound arm is defensive; the assertion
+    /// accepts either message shape and pins only the exit-1 policy.
+    #[tokio::test]
+    async fn rename_missing_bucket_exits_1() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        // Never created; shape passes the client-side directory-bucket check.
+        let bucket = format!(
+            "s3util-e2e-{}--{}--x-s3",
+            uuid::Uuid::new_v4().simple(),
+            EXPRESS_ONE_ZONE_AZ
+        );
+        let source_arg = format!("s3://{bucket}/src-key");
+        let target_arg = format!("s3://{bucket}/dst-key");
+        let output = run_s3util(&[
+            "rename",
+            "--source-profile",
+            "s3util-e2e-test",
+            &source_arg,
+            &target_arg,
+        ]);
+
+        assert_eq!(
+            output.status.code(),
+            Some(1),
+            "rename on a missing directory bucket must exit 1; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("not found") || stderr.contains("NoSuchBucket"),
+            "expected a bucket-related error message; stderr: {stderr}"
+        );
+    }
 }

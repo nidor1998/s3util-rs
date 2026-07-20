@@ -476,4 +476,71 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// The outfile may be a bare filename: it must be resolved against the
+    /// working directory (the temp-file-then-rename dance needs a usable
+    /// parent even when the path has no directory component).
+    ///
+    /// Note: the "integrity could not be verified" warning branch is not
+    /// reachable through real AWS — PutObjectAnnotation exposes no SSE
+    /// parameters and annotation objects do not inherit the bucket's default
+    /// KMS encryption, so a checksum-less annotation always carries a plain
+    /// MD5 ETag and verifies.
+    #[tokio::test]
+    async fn get_object_annotation_to_bare_filename_outfile_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        helper
+            .put_object(&bucket, "test_object", b"content".to_vec())
+            .await;
+        helper
+            .put_object_annotation(
+                &bucket,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                None,
+            )
+            .await;
+
+        let work_dir = TestHelper::create_temp_dir();
+        let object_arg = format!("s3://{bucket}/test_object");
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args([
+                "get-object-annotation",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--annotation-name",
+                TEST_ANNOTATION_NAME,
+                &object_arg,
+                "annotation_out.json",
+            ])
+            .current_dir(&work_dir)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn s3util");
+
+        let payload = std::fs::read_to_string(work_dir.join("annotation_out.json")).ok();
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&work_dir);
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "bare-filename outfile must work; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            payload.as_deref(),
+            Some(TEST_ANNOTATION_VALUE),
+            "the payload must be written to the bare-filename outfile"
+        );
+    }
 }

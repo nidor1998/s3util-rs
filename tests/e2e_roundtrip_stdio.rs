@@ -19,16 +19,8 @@ mod tests {
         let target = format!("s3://{}/stdin_roundtrip.txt", bucket);
         let test_content = b"stdin roundtrip verification data";
 
-        let mut child = std::process::Command::new("cargo")
-            .args([
-                "run",
-                "--",
-                "cp",
-                "--target-profile",
-                "s3util-e2e-test",
-                "-",
-                &target,
-            ])
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--target-profile", "s3util-e2e-test", "-", &target])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -75,16 +67,8 @@ mod tests {
 
         let source = format!("s3://{}/stdout_roundtrip.txt", bucket);
 
-        let output = std::process::Command::new("cargo")
-            .args([
-                "run",
-                "--",
-                "cp",
-                "--source-profile",
-                "s3util-e2e-test",
-                &source,
-                "-",
-            ])
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--source-profile", "s3util-e2e-test", &source, "-"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .output()

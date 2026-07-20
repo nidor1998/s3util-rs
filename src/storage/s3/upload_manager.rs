@@ -61,6 +61,67 @@ struct UploadMetadata {
     pub tagging: Option<String>,
 }
 
+/// Convert `--expires` into the SDK's `DateTime` for a stdin-sourced streaming
+/// upload. Split out from `upload_stream` (and kept free of `Config`) so the
+/// conversion is testable without an S3 client.
+fn stream_upload_expires(
+    expires: Option<chrono::DateTime<chrono::Utc>>,
+) -> Result<Option<DateTime>> {
+    match expires {
+        Some(expires) => Ok(Some(DateTime::from_str(
+            &expires.to_rfc3339(),
+            DateTimeFormat::DateTimeWithOffset,
+        )?)),
+        None => Ok(None),
+    }
+}
+
+/// Build the user-metadata map for a stdin-sourced streaming upload.
+///
+/// `--put-last-modified-metadata` normally records the source object's mtime.
+/// A stream has no source object, so — matching the buffered stdin path, whose
+/// synthetic `GetObjectOutput` carries the current time — `now` is recorded.
+/// Taking `now` as a parameter keeps this deterministic for tests.
+fn stream_upload_metadata(
+    configured_metadata: Option<&HashMap<String, String>>,
+    put_last_modified_metadata: bool,
+    now: chrono::DateTime<chrono::Utc>,
+) -> Option<HashMap<String, String>> {
+    if !put_last_modified_metadata {
+        return configured_metadata.cloned();
+    }
+
+    let mut metadata = configured_metadata.cloned().unwrap_or_default();
+    metadata.insert(
+        S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
+        now.to_rfc3339_opts(SecondsFormat::Secs, false),
+    );
+    Some(metadata)
+}
+
+/// Classify an ETag mismatch as a chunking artifact rather than corruption.
+///
+/// True whenever the two ETags have different SHAPES, not only when the source
+/// is multipart. A single-part source at or above `multipart_threshold` (S3
+/// accepts a single PUT up to 5 GiB) is re-uploaded here as multipart, so its
+/// plain MD5 can never equal the composite we compute — reporting that as
+/// "may be corrupted" was wrong for every such object, and the message it
+/// produced offered no way forward. Two plain MD5s that differ, by contrast,
+/// really are a content mismatch.
+///
+/// A locally-sourced object precalculates its ETag, so a mismatch there is
+/// always a genuine corruption and the caller errors before consulting this.
+fn is_chunksize_related_e_tag_mismatch(
+    source_remote_storage: bool,
+    source_e_tag: &Option<String>,
+    target_e_tag: &Option<String>,
+    auto_chunksize_enabled: bool,
+) -> bool {
+    let both_single_part =
+        !is_multipart_upload_e_tag(source_e_tag) && !is_multipart_upload_e_tag(target_e_tag);
+    source_remote_storage && !both_single_part && !auto_chunksize_enabled
+}
+
 pub struct MutipartEtags {
     pub digest: Vec<u8>,
     pub part_number: i32,
@@ -334,11 +395,26 @@ impl UploadManager {
                 self.config.content_type.clone()
             },
             expires: if self.config.expires.is_none() {
-                get_object_output_first_chunk
-                    .expires_string()
-                    .map(|expires_string| {
-                        DateTime::from_str(expires_string, DateTimeFormat::HttpDate).unwrap()
+                let raw_expires_string = get_object_output_first_chunk.expires_string();
+                let expires = raw_expires_string.and_then(|expires_string| {
+                    DateTime::from_str(expires_string, DateTimeFormat::HttpDate).ok()
+                });
+
+                if raw_expires_string.is_some() && expires.is_none() {
+                    self.send_stats(SyncWarning {
+                        key: key.to_string(),
                     })
+                    .await;
+                    self.has_warning.store(true, Ordering::SeqCst);
+
+                    let message = format!(
+                        "Invalid expires value {}, falling back to None",
+                        raw_expires_string.unwrap_or_default()
+                    );
+                    warn!(key = &key, message);
+                }
+
+                expires
             } else {
                 Some(DateTime::from_str(
                     &self.config.expires.unwrap().to_rfc3339(),
@@ -577,9 +653,12 @@ impl UploadManager {
                         "skip e_tag verification"
                     );
                 } else {
-                    let chunksize_related = source_remote_storage
-                        && is_multipart_upload_e_tag(source_e_tag)
-                        && !self.is_auto_chunksize_enabled();
+                    let chunksize_related = is_chunksize_related_e_tag_mismatch(
+                        source_remote_storage,
+                        source_e_tag,
+                        target_e_tag,
+                        self.is_auto_chunksize_enabled(),
+                    );
                     let message = if chunksize_related {
                         format!("{} {}", "e_tag", MISMATCH_WARNING_WITH_HELP)
                     } else {
@@ -1002,9 +1081,21 @@ impl UploadManager {
             None
         };
 
-        // Build minimal metadata from config. For stdin-sourced streams, there is
-        // no source GetObjectOutput to pull metadata from; we rely purely on what
-        // the user configured on the CLI.
+        // Build metadata from config. For stdin-sourced streams there is no
+        // source GetObjectOutput to pull metadata from, so every value comes
+        // from what the user configured on the CLI.
+        //
+        // These must match what the buffered stdin path applies via
+        // `UploadMetadata` in `singlepart_upload`: the same command must not
+        // produce a differently-tagged object just because the input crossed
+        // --multipart-threshold and took the streaming path instead.
+        let expires = stream_upload_expires(self.config.expires)?;
+        let metadata = stream_upload_metadata(
+            self.config.metadata.as_ref(),
+            self.config.put_last_modified_metadata,
+            chrono::Utc::now(),
+        );
+
         let create_output = self
             .client
             .create_multipart_upload()
@@ -1012,9 +1103,15 @@ impl UploadManager {
             .set_storage_class(self.config.storage_class.clone())
             .bucket(bucket)
             .key(key)
-            .set_metadata(self.config.metadata.clone())
+            .set_metadata(metadata)
             .set_tagging(self.tagging.clone())
             .set_content_type(self.config.content_type.clone())
+            .set_cache_control(self.config.cache_control.clone())
+            .set_content_disposition(self.config.content_disposition.clone())
+            .set_content_encoding(self.config.content_encoding.clone())
+            .set_content_language(self.config.content_language.clone())
+            .set_expires(expires)
+            .set_website_redirect_location(self.config.website_redirect.clone())
             .set_server_side_encryption(self.config.sse.clone())
             .set_ssekms_key_id(self.config.sse_kms_key_id.clone().id.clone())
             .set_sse_customer_algorithm(self.config.target_sse_c.clone())
@@ -1819,9 +1916,26 @@ impl UploadManager {
                 self.config.content_type.clone()
             },
             expires: if self.config.expires.is_none() {
-                get_object_output.expires_string().map(|expires_string| {
-                    DateTime::from_str(expires_string, DateTimeFormat::HttpDate).unwrap()
-                })
+                let raw_expires_string = get_object_output.expires_string();
+                let expires = raw_expires_string.and_then(|expires_string| {
+                    DateTime::from_str(expires_string, DateTimeFormat::HttpDate).ok()
+                });
+
+                if raw_expires_string.is_some() && expires.is_none() {
+                    self.send_stats(SyncWarning {
+                        key: key.to_string(),
+                    })
+                    .await;
+                    self.has_warning.store(true, Ordering::SeqCst);
+
+                    let message = format!(
+                        "Invalid expires value {}, falling back to None",
+                        raw_expires_string.unwrap_or_default()
+                    );
+                    warn!(key = &key, message);
+                }
+
+                expires
             } else {
                 Some(DateTime::from_str(
                     &self.config.expires.unwrap().to_rfc3339(),
@@ -1884,9 +1998,11 @@ impl UploadManager {
                 .set_if_none_match(self.if_none_match.clone())
                 .send()
                 .await?;
-            let _ = self
-                .stats_sender
-                .send_blocking(SyncStatistics::SyncBytes(source_total_size));
+            // No SyncBytes here: the unconditional send after this if/else
+            // covers both branches. Emitting it in the copy branch as well
+            // double-counted every single-part server-side copy, so the
+            // progress indicator and the summary reported twice the object
+            // size as transferred.
             convert_copy_to_put_object_output(copy_object_output, source_total_size as i64)
         } else {
             let builder = self
@@ -2584,5 +2700,555 @@ mod read_exact_or_eof_tests {
         let n = read_exact_or_eof(&mut reader, &mut buf).await.unwrap();
         assert_eq!(n, 64);
         assert_eq!(buf, vec![9u8; 64]);
+    }
+}
+
+/// Unit tests for the metadata that a stdin-sourced STREAMING upload sends.
+///
+/// The streaming path used to send none of this: it built its
+/// CreateMultipartUpload from storage class, metadata, tagging, content-type,
+/// SSE, ACL and checksum only, so `--expires` and
+/// `--put-last-modified-metadata` were silently dropped once the input crossed
+/// `--multipart-threshold`. The remaining header pass-throughs need a live S3
+/// client to observe and are covered by e2e; these two are computed values and
+/// are checkable here.
+#[cfg(test)]
+mod stream_upload_metadata_tests {
+    use super::{stream_upload_expires, stream_upload_metadata};
+    use chrono::{TimeZone, Utc};
+    use std::collections::HashMap;
+
+    fn fixed_now() -> chrono::DateTime<Utc> {
+        Utc.with_ymd_and_hms(2026, 7, 19, 12, 34, 56).unwrap()
+    }
+
+    #[test]
+    fn expires_is_none_when_flag_absent() {
+        assert!(stream_upload_expires(None).unwrap().is_none());
+    }
+
+    #[test]
+    fn expires_round_trips_through_the_sdk_datetime() {
+        let expires = Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap();
+        let converted = stream_upload_expires(Some(expires))
+            .unwrap()
+            .expect("expires must be converted, not dropped");
+        assert_eq!(converted.secs(), expires.timestamp());
+    }
+
+    #[test]
+    fn metadata_passes_through_untouched_without_the_last_modified_flag() {
+        let configured = HashMap::from([("k".to_string(), "v".to_string())]);
+        let built = stream_upload_metadata(Some(&configured), false, fixed_now())
+            .expect("configured metadata must survive");
+        assert_eq!(built, configured);
+        assert!(
+            !built.contains_key("s3sync_origin_last_modified"),
+            "the last-modified key must not appear unless the flag is set"
+        );
+    }
+
+    #[test]
+    fn metadata_is_none_when_nothing_is_configured() {
+        assert!(stream_upload_metadata(None, false, fixed_now()).is_none());
+    }
+
+    #[test]
+    fn last_modified_flag_adds_the_key_alongside_user_metadata() {
+        let configured = HashMap::from([("k".to_string(), "v".to_string())]);
+        let built = stream_upload_metadata(Some(&configured), true, fixed_now())
+            .expect("metadata must be present");
+
+        assert_eq!(
+            built.get("k").map(String::as_str),
+            Some("v"),
+            "user metadata must not be lost when the flag is set"
+        );
+        assert_eq!(
+            built.get("s3sync_origin_last_modified").map(String::as_str),
+            Some("2026-07-19T12:34:56+00:00"),
+            "the recorded time must be the upload time, matching the buffered path"
+        );
+    }
+
+    #[test]
+    fn last_modified_flag_works_without_any_user_metadata() {
+        let built = stream_upload_metadata(None, true, fixed_now())
+            .expect("the flag alone must produce a metadata map");
+        assert_eq!(built.len(), 1);
+        assert!(built.contains_key("s3sync_origin_last_modified"));
+    }
+}
+
+#[cfg(test)]
+mod e_tag_mismatch_classification_tests {
+    use super::is_chunksize_related_e_tag_mismatch;
+
+    fn single(v: &str) -> Option<String> {
+        Some(format!("\"{v}\""))
+    }
+    fn multipart(v: &str, parts: u32) -> Option<String> {
+        Some(format!("\"{v}-{parts}\""))
+    }
+
+    /// The case this fix is about: a source uploaded with a single PutObject
+    /// but larger than --multipart-threshold is re-uploaded as multipart, so
+    /// the ETags cannot match however healthy the copy is. Reporting it as
+    /// "may be corrupted" was wrong; it is a chunking artifact.
+    #[test]
+    fn single_part_source_copied_as_multipart_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            false,
+        ));
+    }
+
+    /// The reverse shape difference is equally structural.
+    #[test]
+    fn multipart_source_copied_as_single_part_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 3),
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            false,
+        ));
+    }
+
+    /// The originally-handled case: both multipart, different part layouts.
+    #[test]
+    fn multipart_source_with_different_layout_is_chunksize_related() {
+        assert!(is_chunksize_related_e_tag_mismatch(
+            true,
+            &multipart("aaa", 2),
+            &multipart("bbb", 3),
+            false,
+        ));
+    }
+
+    /// Two plain MD5s that differ really are a content mismatch — the fix must
+    /// not turn genuine corruption into a chunk-size hint.
+    #[test]
+    fn two_differing_single_part_e_tags_are_real_corruption() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &single("098f6bcd4621d373cade4e832627b4f6"),
+            false,
+        ));
+    }
+
+    /// --auto-chunksize reproduces the source's own part layout, so a mismatch
+    /// under it is not explainable by chunk size.
+    #[test]
+    fn auto_chunksize_rules_out_the_chunksize_explanation() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            true,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            true,
+        ));
+    }
+
+    /// A local source precalculates its ETag, so the chunk-size explanation
+    /// never applies (the caller errors out before reaching the warning).
+    #[test]
+    fn local_source_is_never_chunksize_related() {
+        assert!(!is_chunksize_related_e_tag_mismatch(
+            false,
+            &single("5d41402abc4b2a76b9719d911017c592"),
+            &multipart("098f6bcd4621d373cade4e832627b4f6", 2),
+            false,
+        ));
+    }
+}
+
+/// Pre-flight error paths of `upload` / `upload_with_auto_chunksize` /
+/// `singlepart_upload` / `multipart_upload` that fire before (or instead of)
+/// any successful S3 round trip. The client points at an unreachable endpoint
+/// with one attempt, so paths that do reach S3 fail fast with a dispatch
+/// error — letting the tests pin everything that happens before it.
+#[cfg(test)]
+mod upload_error_path_tests {
+    use super::*;
+    use crate::config::args::{Commands, parse_from_args};
+    use crate::storage::StorageTrait;
+    use crate::types::SseCustomerKey;
+    use crate::types::token::create_pipeline_cancellation_token;
+    use async_trait::async_trait;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+    use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+    use aws_sdk_s3::types::{ChecksumMode, Tagging};
+    use aws_smithy_types::body::SdkBody;
+    use leaky_bucket::RateLimiter;
+    use std::path::PathBuf;
+
+    #[derive(Clone)]
+    struct NullSource;
+
+    #[async_trait]
+    impl StorageTrait for NullSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn dead_endpoint_config() -> Config {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "cp",
+            "test_data/5byte.dat",
+            "s3://target-bucket/key",
+            "--target-endpoint-url",
+            "http://127.0.0.1:1",
+            "--target-access-key",
+            "AKIAIOSFODNN7EXAMPLE",
+            "--target-secret-access-key",
+            "wJalrXUtnFEMIK7MDENG",
+            "--target-region",
+            "us-east-1",
+            "--aws-max-attempts",
+            "1",
+        ])
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    struct TestManager {
+        manager: UploadManager,
+        stats_receiver: async_channel::Receiver<SyncStatistics>,
+        has_warning: Arc<AtomicBool>,
+    }
+
+    async fn manager_with(
+        config: Config,
+        object_parts: Option<Vec<ObjectPart>>,
+        source_total_size: Option<u64>,
+    ) -> TestManager {
+        let client = Arc::new(
+            config
+                .target_client_config
+                .clone()
+                .unwrap()
+                .create_client()
+                .await,
+        );
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let has_warning = Arc::new(AtomicBool::new(false));
+        TestManager {
+            manager: UploadManager::new(
+                client,
+                config,
+                None,
+                create_pipeline_cancellation_token(),
+                stats_sender,
+                None,
+                object_parts,
+                false,
+                Box::new(NullSource),
+                "source-key".to_string(),
+                source_total_size,
+                None,
+                None,
+                has_warning.clone(),
+            ),
+            stats_receiver,
+            has_warning,
+        }
+    }
+
+    fn small_body_chunk() -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(4)
+            .body(ByteStream::from(b"data".to_vec()))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn upload_auto_chunksize_rejects_first_part_size_mismatch() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        let parts = vec![ObjectPart::builder().size(5).build()];
+        let mut t = manager_with(config, Some(parts), Some(7)).await;
+
+        // Single-part source (plain ETag) whose size disagrees with the
+        // reported first part — must fail before any S3 call.
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(7)
+                    .e_tag("\"0123456789abcdef0123456789abcdef\"")
+                    .body(ByteStream::from(vec![b'x'; 7]))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.to_string()
+                .contains("does not match the first object part size"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    #[should_panic(expected = "Illegal object_parts state")]
+    async fn upload_with_auto_chunksize_panics_on_empty_parts() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        let mut t = manager_with(config, Some(Vec::new()), Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload_with_auto_chunksize("target-bucket", "key", small_body_chunk())
+            .await;
+    }
+
+    #[tokio::test]
+    async fn singlepart_body_read_failure_is_retryable_error() {
+        let mut t = manager_with(dead_endpoint_config(), None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::new(SdkBody::taken()))
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn singlepart_invalid_source_expires_warns_and_falls_back() {
+        let mut t = manager_with(dead_endpoint_config(), None, Some(4)).await;
+
+        // Unparseable Expires header: the fallback-to-None warning must fire,
+        // then the upload proceeds and dies on the unreachable endpoint.
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::from(b"data".to_vec()))
+                    .expires_string("not-an-http-date")
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("dispatch failure"),
+            "expected the upload itself to fail on the endpoint: {err:#}"
+        );
+        assert!(
+            t.has_warning.load(Ordering::SeqCst),
+            "invalid Expires must set the warning flag"
+        );
+        let mut saw_warning_stat = false;
+        while let Ok(stat) = t.stats_receiver.try_recv() {
+            if matches!(stat, SyncStatistics::SyncWarning { .. }) {
+                saw_warning_stat = true;
+            }
+        }
+        assert!(saw_warning_stat, "expected a SyncWarning stat");
+    }
+
+    #[tokio::test]
+    async fn singlepart_converts_configured_expires() {
+        let mut config = dead_endpoint_config();
+        config.expires = Some(chrono::Utc::now());
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        // The configured --expires converts cleanly; the only failure left is
+        // the endpoint itself.
+        assert!(
+            format!("{err:#}").contains("dispatch failure"),
+            "unexpected error: {err:#}"
+        );
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn multipart_invalid_source_expires_warns_and_falls_back() {
+        let mut config = dead_endpoint_config();
+        // Force the multipart path for a small object.
+        config.transfer_config.multipart_threshold = 4;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload(
+                "target-bucket",
+                "key",
+                GetObjectOutput::builder()
+                    .content_length(4)
+                    .body(ByteStream::from(b"data".to_vec()))
+                    .expires_string("not-an-http-date")
+                    .build(),
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("create_multipart_upload"),
+            "expected create_multipart_upload to be what fails: {err:#}"
+        );
+        assert!(
+            t.has_warning.load(Ordering::SeqCst),
+            "invalid Expires must set the warning flag"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_converts_configured_expires_and_storage_class() {
+        let mut config = dead_endpoint_config();
+        config.transfer_config.multipart_threshold = 4;
+        config.expires = Some(chrono::Utc::now());
+        config.storage_class = Some(StorageClass::Glacier);
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("create_multipart_upload"),
+            "expected create_multipart_upload to be what fails: {err:#}"
+        );
+        assert!(!t.has_warning.load(Ordering::SeqCst));
     }
 }

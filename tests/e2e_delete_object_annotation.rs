@@ -406,4 +406,40 @@ mod tests {
             String::from_utf8_lossy(&out.stderr)
         );
     }
+
+    /// Deleting an annotation that was never created (object exists) is
+    /// idempotent on real S3: the API answers success rather than
+    /// NoSuchAnnotation, so the CLI must exit 0. (The AnnotationNotFound
+    /// arm in the CLI stays as defensive handling for services that do
+    /// report it.)
+    #[tokio::test]
+    async fn delete_object_annotation_missing_annotation_is_idempotent() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper
+            .put_object(&bucket, "test_object", b"content".to_vec())
+            .await;
+
+        let object_arg = format!("s3://{bucket}/test_object");
+        let output = run_s3util(&[
+            "delete-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            "never_created",
+            &object_arg,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "deleting a missing annotation is idempotent and must exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
 }

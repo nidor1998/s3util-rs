@@ -33,12 +33,27 @@ pub fn set_last_modified_for_path(path: &PathBuf, seconds: i64, nanos: u32) -> s
     set_file_mtime(path, FileTime::from_unix_time(seconds, nanos))
 }
 
-pub fn is_key_a_directory(key: &str) -> bool {
-    if cfg!(windows) && key.ends_with('\\') {
+/// True when `path` ends with a component separator, i.e. the user spelled a
+/// directory-style target such as `out/` (or, on Windows, `out\`).
+///
+/// Windows accepts `/` as a separator just like `\`, so a bare
+/// `ends_with(MAIN_SEPARATOR)` test misses `out/` there. Every place that
+/// decides "is this target a directory?" must agree, because the storage layer
+/// (see [`is_key_a_directory`]) treats a trailing `/` as a directory on all
+/// platforms: when target validation and key resolution disagreed with it,
+/// `cp`/`mv` to a non-existent `out/` on Windows passed validation, kept the
+/// literal key `out/`, and then silently wrote nothing — which for `mv` also
+/// deleted the source.
+pub fn has_trailing_separator(path: &str) -> bool {
+    if cfg!(windows) && path.ends_with('\\') {
         return true;
     }
 
-    key.ends_with('/')
+    path.ends_with('/')
+}
+
+pub fn is_key_a_directory(key: &str) -> bool {
+    has_trailing_separator(key)
 }
 
 /// Returns the parent directory of `path`, falling back to the current
@@ -236,6 +251,53 @@ mod tests {
         // (cfg!(windows) is false). This locks in the platform contract.
         assert!(!is_key_a_directory("dir\\"));
         assert!(!is_key_a_directory("\\dir1\\dir2\\"));
+    }
+
+    /// Target validation (config layer) and key resolution (cli layer) both call
+    /// `has_trailing_separator`, while the storage layer calls
+    /// `is_key_a_directory`. If those two ever disagree, a directory-style target
+    /// is validated and resolved as a file but then written as a directory —
+    /// i.e. nothing is written at all, and `mv` deletes the source anyway.
+    /// A forward slash is what made them diverge on Windows.
+    #[test]
+    fn directory_predicates_never_diverge() {
+        for path in [
+            "out/",
+            "out",
+            "dir/sub/",
+            "dir/sub",
+            "/",
+            "",
+            "out\\",
+            "dir\\sub\\",
+            "a/b\\",
+        ] {
+            assert_eq!(
+                has_trailing_separator(path),
+                is_key_a_directory(path),
+                "directory predicates disagree for {path:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn has_trailing_separator_treats_forward_slash_as_directory_on_every_platform() {
+        assert!(has_trailing_separator("out/"));
+        assert!(has_trailing_separator("dir/sub/"));
+        assert!(!has_trailing_separator("out"));
+        assert!(!has_trailing_separator("dir/sub"));
+        assert!(!has_trailing_separator(""));
+    }
+
+    #[test]
+    #[cfg(target_family = "windows")]
+    fn has_trailing_separator_accepts_both_windows_separators() {
+        // The bug this guards: `out/` on Windows was treated as a file by
+        // validation and key resolution, but as a directory by the storage
+        // layer, so `cp` wrote nothing and `mv` deleted the source.
+        assert!(has_trailing_separator("out/"));
+        assert!(has_trailing_separator("out\\"));
+        assert!(!has_trailing_separator("out"));
     }
 
     #[tokio::test]

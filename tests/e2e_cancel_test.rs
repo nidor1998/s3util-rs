@@ -32,10 +32,8 @@ mod tests {
         let target = format!("s3://{}/cancel_test.bin", bucket);
 
         // Spawn the cp as a child process
-        let child = std::process::Command::new("cargo")
+        let child = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--",
                 "cp",
                 "--target-profile",
                 "s3util-e2e-test",
@@ -112,10 +110,8 @@ mod tests {
         let target_key = "cancel_mpu.bin";
         let target = format!("s3://{}/{}", bucket, target_key);
 
-        let child = std::process::Command::new("cargo")
+        let child = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--",
                 "cp",
                 "--target-profile",
                 "s3util-e2e-test",

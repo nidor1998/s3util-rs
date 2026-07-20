@@ -20,16 +20,8 @@ mod tests {
         let target = format!("s3://{}/stdin_test.txt", bucket);
 
         // Use a child process to pipe data through s3util
-        let child = std::process::Command::new("cargo")
-            .args([
-                "run",
-                "--",
-                "cp",
-                "--target-profile",
-                "s3util-e2e-test",
-                "-",
-                &target,
-            ])
+        let child = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--target-profile", "s3util-e2e-test", "-", &target])
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
@@ -71,16 +63,8 @@ mod tests {
 
         let source = format!("s3://{}/stdout_test.txt", bucket);
 
-        let output = std::process::Command::new("cargo")
-            .args([
-                "run",
-                "--",
-                "cp",
-                "--source-profile",
-                "s3util-e2e-test",
-                &source,
-                "-",
-            ])
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--source-profile", "s3util-e2e-test", &source, "-"])
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::null())
             .output();
@@ -210,5 +194,59 @@ mod tests {
         assert_eq!(stdout_bytes, v1_content);
 
         helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Streaming stdin upload (above the multipart threshold) with
+    /// --disable-etag-verify: the streamed multipart completes and the
+    /// post-complete verification is skipped.
+    #[tokio::test]
+    async fn stdin_to_s3_streaming_with_disable_etag_verify() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/stdin_no_verify.bin", bucket);
+        let payload = vec![0x5A_u8; 9 * 1024 * 1024];
+
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args([
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--disable-etag-verify",
+                "-",
+                &target,
+            ])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .expect("spawn s3util");
+
+        {
+            use std::io::Write;
+            let mut stdin = child.stdin.take().expect("stdin must be piped");
+            stdin.write_all(&payload).expect("write payload");
+        }
+        let output = child.wait_with_output().expect("wait for s3util");
+
+        let uploaded = helper
+            .is_object_exist(&bucket, "stdin_no_verify.bin", None)
+            .await;
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "streaming stdin upload with --disable-etag-verify must exit 0; stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(uploaded, "the streamed object must exist");
     }
 }

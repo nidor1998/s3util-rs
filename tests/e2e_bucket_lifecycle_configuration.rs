@@ -168,6 +168,90 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// `--transition-default-minimum-object-size` must reach S3 and survive a
+    /// get round-trip.
+    ///
+    /// The value is reported at the top level of `get-bucket-lifecycle-configuration`
+    /// output but S3 accepts it only as a request parameter, so before the flag
+    /// existed there was no way to send it: putting back a configuration that
+    /// had been read from a `varies_by_storage_class` bucket silently reset it
+    /// to S3's default of `all_storage_classes_128K`, changing which small
+    /// objects transition.
+    #[tokio::test]
+    async fn transition_default_minimum_object_size_round_trips() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+        let tmp_dir = TestHelper::create_temp_dir();
+        let config_file = TestHelper::create_test_file(
+            &tmp_dir,
+            "lifecycle.json",
+            sample_lifecycle_json().as_bytes(),
+        );
+        let config_file_str = config_file.to_str().unwrap();
+
+        let put_out = run_s3util(&[
+            "put-bucket-lifecycle-configuration",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--transition-default-minimum-object-size",
+            "varies_by_storage_class",
+            &bucket_arg,
+            config_file_str,
+        ]);
+        assert!(
+            put_out.status.success(),
+            "put should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_out.stderr)
+        );
+
+        let get_out = run_s3util(&[
+            "get-bucket-lifecycle-configuration",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        assert!(get_out.status.success());
+        let json: serde_json::Value =
+            serde_json::from_slice(&get_out.stdout).expect("get stdout must be JSON");
+        assert_eq!(
+            json["TransitionDefaultMinimumObjectSize"], "varies_by_storage_class",
+            "the configured value must survive the round-trip; got: {json}"
+        );
+
+        // Putting the same configuration back WITHOUT the flag is what used to
+        // reset the bucket silently; that is S3's documented default, so assert
+        // the observable consequence rather than pretending it does not happen.
+        let put_again = run_s3util(&[
+            "put-bucket-lifecycle-configuration",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            config_file_str,
+        ]);
+        assert!(put_again.status.success());
+        let get_again = run_s3util(&[
+            "get-bucket-lifecycle-configuration",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+        ]);
+        let json_again: serde_json::Value =
+            serde_json::from_slice(&get_again.stdout).expect("get stdout must be JSON");
+        assert_eq!(
+            json_again["TransitionDefaultMinimumObjectSize"], "all_storage_classes_128K",
+            "omitting the flag applies S3's default — this is why the flag is needed \
+             to preserve a varies_by_storage_class bucket"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        std::fs::remove_dir_all(&tmp_dir).ok();
+    }
+
     #[tokio::test]
     async fn get_on_bucket_without_lifecycle_exits_4() {
         TestHelper::init_dummy_tracing_subscriber();

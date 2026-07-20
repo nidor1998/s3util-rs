@@ -53,11 +53,8 @@ mod tests {
         let test_file = TestHelper::create_sized_file(&local_dir, "ok.bin", 1024);
         let target = format!("s3://{}/ok.bin", bucket);
 
-        let status = std::process::Command::new("cargo")
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 "--target-profile",
                 "s3util-e2e-test",
@@ -91,11 +88,8 @@ mod tests {
         let test_file = TestHelper::create_sized_file(&local_dir, "err.bin", 1024);
         let target = format!("s3://{}/err.bin", bucket);
 
-        let status = std::process::Command::new("cargo")
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 "--target-profile",
                 "s3util-e2e-test",
@@ -128,15 +122,8 @@ mod tests {
     /// check.
     #[tokio::test]
     async fn auto_complete_shell_emits_script_and_exits_zero() {
-        let output = std::process::Command::new("cargo")
-            .args([
-                "run",
-                "--quiet",
-                "--",
-                "cp",
-                "--auto-complete-shell",
-                "bash",
-            ])
+        let output = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args(["cp", "--auto-complete-shell", "bash"])
             .stderr(std::process::Stdio::null())
             .output()
             .unwrap();
@@ -224,11 +211,8 @@ mod tests {
         let local_dir = TestHelper::create_temp_dir();
         let test_file = TestHelper::create_sized_file(&local_dir, "x.bin", 64);
 
-        let status = std::process::Command::new("cargo")
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 // 1KiB is below the documented 5 MiB minimum → value parser rejects.
                 "--multipart-threshold",
@@ -259,11 +243,8 @@ mod tests {
     /// variants — see the `EXIT_CODE_CLAP_ARG_ERROR` doc comment.
     #[tokio::test]
     async fn unknown_flag_exits_with_clap_arg_error() {
-        let status = std::process::Command::new("cargo")
+        let status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 "--this-flag-does-not-exist",
                 "local.txt",
@@ -303,11 +284,8 @@ mod tests {
 
         // Step 1: upload with non-default chunksize so the stored ETag is built
         // from 5 MiB parts.
-        let upload_status = std::process::Command::new("cargo")
+        let upload_status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 "--target-profile",
                 "s3util-e2e-test",
@@ -331,11 +309,8 @@ mod tests {
         // Step 2: download without chunksize override. Local ETag recompute will
         // use defaults and won't match the stored multipart ETag → warning.
         let dl_file = local_dir.join("warn_dl.bin");
-        let dl_status = std::process::Command::new("cargo")
+        let dl_status = std::process::Command::new(env!("CARGO_BIN_EXE_s3util"))
             .args([
-                "run",
-                "--quiet",
-                "--",
                 "cp",
                 "--source-profile",
                 "s3util-e2e-test",

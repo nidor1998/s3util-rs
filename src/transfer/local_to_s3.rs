@@ -169,3 +169,386 @@ pub async fn transfer(
 
     Ok(TransferOutcome::default())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::args::{Commands, parse_from_args};
+    use crate::storage::StorageTrait;
+    use crate::types::SseCustomerKey;
+    use crate::types::token::{PipelineCancellationToken, create_pipeline_cancellation_token};
+    use async_trait::async_trait;
+    use aws_sdk_s3::Client;
+    use aws_sdk_s3::operation::delete_object::DeleteObjectOutput;
+    use aws_sdk_s3::operation::get_object::GetObjectOutput;
+    use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
+    use aws_sdk_s3::operation::head_object::HeadObjectOutput;
+    use aws_sdk_s3::operation::put_object::PutObjectOutput;
+    use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
+    use aws_sdk_s3::primitives::{ByteStream, DateTime};
+    use aws_sdk_s3::types::{ChecksumMode, ObjectPart, Tagging};
+    use leaky_bucket::RateLimiter;
+    use std::path::PathBuf;
+    use std::sync::Arc;
+
+    /// Local-file-shaped source: HEAD and GET answer a 4-byte object, and the
+    /// optional token is cancelled from inside `get_object` to drive the
+    /// post-read cancellation guard.
+    #[derive(Clone)]
+    struct StubSource {
+        cancel_on_get: Option<PipelineCancellationToken>,
+    }
+
+    #[async_trait]
+    impl StorageTrait for StubSource {
+        fn is_local_storage(&self) -> bool {
+            true
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            if let Some(token) = &self.cancel_on_get {
+                token.cancel();
+            }
+            Ok(GetObjectOutput::builder()
+                .body(ByteStream::from(b"data".to_vec()))
+                .content_length(4)
+                .e_tag("\"abc\"")
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            Ok(HeadObjectOutput::builder()
+                .content_length(4)
+                .last_modified(DateTime::from_secs(0))
+                .build())
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Target whose put succeeds but reports no ETag — drives the
+    /// "transfer completed but no ETag returned" warning branch.
+    #[derive(Clone)]
+    struct NoEtagTarget;
+
+    #[async_trait]
+    impl StorageTrait for NoEtagTarget {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            Ok(PutObjectOutput::builder().build())
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    fn config() -> Config {
+        let cli = parse_from_args(vec![
+            "s3util",
+            "cp",
+            "test_data/5byte.dat",
+            "s3://target-bucket/key",
+        ])
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    #[tokio::test]
+    async fn transfer_returns_default_when_cancelled_at_entry() {
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let source: Storage = Box::new(StubSource {
+            cancel_on_get: None,
+        });
+        let target: Storage = Box::new(NoEtagTarget);
+        let (stats_tx, stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config(),
+            source,
+            target,
+            "src/file",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.source_version_id, None);
+        assert!(stats_rx.try_recv().is_err(), "nothing may be reported");
+    }
+
+    #[tokio::test]
+    async fn transfer_returns_default_when_cancelled_during_read() {
+        let token = create_pipeline_cancellation_token();
+        let source: Storage = Box::new(StubSource {
+            cancel_on_get: Some(token.clone()),
+        });
+        let target: Storage = Box::new(NoEtagTarget);
+        let (stats_tx, stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let outcome = transfer(
+            &config(),
+            source,
+            target,
+            "src/file",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+        assert_eq!(outcome.source_version_id, None);
+        assert!(
+            stats_rx.try_recv().is_err(),
+            "a cancelled transfer must not report completion"
+        );
+    }
+
+    #[tokio::test]
+    async fn transfer_completes_with_warning_when_put_returns_no_e_tag() {
+        let token = create_pipeline_cancellation_token();
+        let source: Storage = Box::new(StubSource {
+            cancel_on_get: None,
+        });
+        let target: Storage = Box::new(NoEtagTarget);
+        let (stats_tx, stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        transfer(
+            &config(),
+            source,
+            target,
+            "src/file",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await
+        .unwrap();
+
+        let mut saw_complete = false;
+        while let Ok(stat) = stats_rx.try_recv() {
+            if matches!(stat, SyncStatistics::SyncComplete { .. }) {
+                saw_complete = true;
+            }
+        }
+        assert!(
+            saw_complete,
+            "an ETag-less put still completes the transfer"
+        );
+    }
+}
