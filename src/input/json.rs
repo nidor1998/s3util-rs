@@ -316,16 +316,23 @@ impl AbortIncompleteMultipartUploadJson {
 
 fn parse_rfc3339(s: &str) -> Result<DateTime> {
     // S3 documents Lifecycle/Transition `Date` as ISO 8601, which admits
-    // bare `YYYY-MM-DD`; the smithy parser only accepts full RFC 3339, so
-    // promote a date-only string to midnight UTC before delegating.
+    // bare `YYYY-MM-DD`; promote a date-only string to midnight UTC first.
     let bytes = s.as_bytes();
     let normalised = if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' {
         format!("{s}T00:00:00Z")
     } else {
         s.to_string()
     };
-    DateTime::from_str(&normalised, aws_smithy_types::date_time::Format::DateTime)
-        .map_err(|e| anyhow::anyhow!("invalid ISO 8601 timestamp {s:?}: {e}"))
+    // Parse with chrono rather than the smithy `Format::DateTime` parser:
+    // the latter accepts only a trailing `Z`, but ISO 8601 also admits
+    // numeric offsets — and `get-bucket-lifecycle-configuration` itself
+    // emits `+00:00`, so the smithy parser broke the GET -> PUT round-trip.
+    let dt = chrono::DateTime::parse_from_rfc3339(&normalised)
+        .map_err(|e| anyhow::anyhow!("invalid ISO 8601 timestamp {s:?}: {e}"))?;
+    Ok(DateTime::from_secs_and_nanos(
+        dt.timestamp(),
+        dt.timestamp_subsec_nanos(),
+    ))
 }
 
 /// Mirror of `ServerSideEncryptionConfiguration` for the AWS-CLI input shape.
@@ -2907,6 +2914,42 @@ mod tests {
             .expect("expiration")
             .date()
             .expect("date set");
+        assert_eq!(date.secs(), 1_893_553_445);
+    }
+
+    #[test]
+    fn lifecycle_expiration_rfc3339_with_utc_offset_parses() {
+        // `get-bucket-lifecycle-configuration` emits `+00:00` rather than
+        // `Z`; feeding its output back in must round-trip.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Expiration":{"Date":"2030-01-02T03:04:05+00:00"}
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0]
+            .expiration()
+            .expect("expiration")
+            .date()
+            .expect("date set");
+        assert_eq!(date.secs(), 1_893_553_445);
+    }
+
+    #[test]
+    fn lifecycle_transition_rfc3339_with_non_utc_offset_normalises_to_utc() {
+        // Any ISO 8601 numeric offset is accepted and converted to UTC:
+        // 2030-01-02T12:04:05+09:00 == 2030-01-02T03:04:05Z.
+        let json = r#"{
+          "Rules":[{
+            "Status":"Enabled",
+            "Transitions":[{"Date":"2030-01-02T12:04:05+09:00","StorageClass":"GLACIER"}]
+          }]
+        }"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let date = cfg.rules()[0].transitions()[0].date().expect("date set");
         assert_eq!(date.secs(), 1_893_553_445);
     }
 

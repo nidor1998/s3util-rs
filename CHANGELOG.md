@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `put-bucket-lifecycle-configuration` now accepts lifecycle `Date` values carrying an ISO 8601 numeric UTC offset
+  (e.g. `2030-01-02T03:04:05+00:00`) in addition to `Z`; a non-zero offset is converted to UTC.
+  `get-bucket-lifecycle-configuration` emits dates with `+00:00`, so feeding its output back into
+  `put-bucket-lifecycle-configuration` failed with `invalid ISO 8601 timestamp` for any date-based rule.
+
 ### Changed
 
 - [Breaking change] The positional source/target arguments no longer read their values from the `SOURCE`/`TARGET`
