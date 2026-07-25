@@ -28,7 +28,6 @@ pub(crate) const NOT_EXPRESS_ONEZONE: &str =
 #[derive(Parser, Clone, Debug)]
 pub struct RenameArgs {
     #[arg(
-        env,
         help = "s3://<BUCKET_NAME>/<KEY>",
         value_parser = storage_path::check_storage_path,
         required_unless_present = "auto_complete_shell"
@@ -36,7 +35,6 @@ pub struct RenameArgs {
     pub source: Option<String>,
 
     #[arg(
-        env,
         help = "s3://<BUCKET_NAME>/<KEY>",
         value_parser = storage_path::check_storage_path,
         required_unless_present = "auto_complete_shell"

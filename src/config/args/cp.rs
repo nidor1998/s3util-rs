@@ -13,10 +13,10 @@ const SKIP_EXISTING_INCOMPATIBLE_WITH_IF_NONE_MATCH: &str =
 
 #[derive(Parser, Clone, Debug)]
 pub struct CpArgs {
-    #[arg(env, help = "s3://<BUCKET_NAME>[/prefix], local path, or - for stdin/stdout", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
+    #[arg(help = "s3://<BUCKET_NAME>[/prefix], local path, or - for stdin/stdout", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
     pub source: Option<String>,
 
-    #[arg(env, help = "s3://<BUCKET_NAME>[/prefix], local path, or - for stdin/stdout", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
+    #[arg(help = "s3://<BUCKET_NAME>[/prefix], local path, or - for stdin/stdout", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
     pub target: Option<String>,
 
     #[command(flatten)]

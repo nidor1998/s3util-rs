@@ -8,10 +8,10 @@ const STDIO_NOT_SUPPORTED: &str = "stdin/stdout (-) is not supported by mv\n";
 
 #[derive(Parser, Clone, Debug)]
 pub struct MvArgs {
-    #[arg(env, help = "s3://<BUCKET_NAME>[/prefix] or local path", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
+    #[arg(help = "s3://<BUCKET_NAME>[/prefix] or local path", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
     pub source: Option<String>,
 
-    #[arg(env, help = "s3://<BUCKET_NAME>[/prefix] or local path", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
+    #[arg(help = "s3://<BUCKET_NAME>[/prefix] or local path", value_parser = storage_path::check_storage_path, required_unless_present = "auto_complete_shell")]
     pub target: Option<String>,
 
     #[command(flatten)]

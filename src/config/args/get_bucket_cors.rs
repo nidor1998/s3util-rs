@@ -10,7 +10,6 @@ const TARGET_HAS_KEY_OR_PREFIX: &str =
 #[derive(Parser, Clone, Debug)]
 pub struct GetBucketCorsArgs {
     #[arg(
-        env,
         help = "s3://<BUCKET_NAME>",
         value_parser = storage_path::check_storage_path,
         required_unless_present = "auto_complete_shell"
