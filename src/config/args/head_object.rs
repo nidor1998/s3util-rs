@@ -9,7 +9,6 @@ const TARGET_KEY_EMPTY: &str = "head-object target must include a key (s3://<BUC
 #[derive(Parser, Clone, Debug)]
 pub struct HeadObjectArgs {
     #[arg(
-        env,
         help = "s3://<BUCKET_NAME>/<KEY>",
         value_parser = storage_path::check_storage_path,
         required_unless_present = "auto_complete_shell"
