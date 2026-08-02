@@ -5,6 +5,8 @@ use s3util_rs::config::args::list_object_annotations::ListObjectAnnotationsArgs;
 use s3util_rs::output::json::list_object_annotations_to_json;
 use s3util_rs::storage::s3::api::{self, HeadError, ListObjectAnnotationsParams};
 
+use crate::pipe_safe::println_pipe_safe;
+
 use super::ExitStatus;
 
 /// Runtime entry for
@@ -38,7 +40,7 @@ pub async fn run_list_object_annotations(
         Ok(out) => {
             let json = list_object_annotations_to_json(&out);
             let pretty = serde_json::to_string_pretty(&json)?;
-            println!("{pretty}");
+            println_pipe_safe(&pretty)?;
             Ok(ExitStatus::Success)
         }
         Err(HeadError::BucketNotFound) => {
