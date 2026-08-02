@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.2] - 2026-08-02
+
+### Fixed
+
+- Piping report output to a consumer that exits without reading it no longer panics. The reported case was
+  `s3util get-bucket-versioning s3://bucket | head 1`: `head` treats `1` as a file name, fails to open it, and exits
+  without reading its input at all, so the pipe is already closed when s3util prints its JSON and the process crashed
+  with `failed printing to stdout: Broken pipe (os error 32)`. Any consumer that stops reading before the output ends
+  does the same — `head -1` when the output is larger than the pipe buffer, `grep -q`, a pager closed early. Every
+  subcommand that prints a JSON report or a URL to stdout was affected (the `get-bucket-*` family,
+  `get-public-access-block`, `head-object`, `head-bucket`, `get-object-tagging`, `list-object-annotations`,
+  `get-object-annotation`, `put-object-annotation`, and `presign`). A closed pipe is now treated as the normal end of
+  a pipeline: the S3 operation has already completed, so the command exits 0 — note that under `set -o pipefail` such
+  pipelines now succeed where the panic previously failed them. Any other stdout write failure (e.g. disk full on a
+  redirect) now exits 1 with an error message instead of panicking. `cp` streaming an object to stdout is unchanged:
+  a download truncated by a vanished reader is still reported as a failure (exit 1), because there the bytes are the
+  object itself, not a report about a completed operation.
+- Generating shell completions into a closed pipe (`s3util cp --auto-complete-shell bash | head -1`) panicked inside
+  clap_complete with `failed to write completion file`. The completion script is now rendered to an in-memory buffer
+  and written pipe-safely, so an early-exiting reader yields exit 0 there too.
+- The transfer result lines `cp`/`mv` print to stderr on completion panicked when stderr was a closed pipe
+  (e.g. `2>&1 | head`). They are now written best-effort, matching the tracing output, which already ignored a
+  closed stderr.
+
 ## [1.9.1] - 2026-07-26
 
 ### Changed
