@@ -959,6 +959,10 @@ mod tests {
             Some(ChecksumAlgorithm::Xxhash64)
         );
 
+        // No checksum of any kind → None.
+        let source_annotation = GetObjectAnnotationOutput::builder().build();
+        assert_eq!(get_annotation_checksum_algorithm(&source_annotation), None);
+
         let source_annotation = GetObjectAnnotationOutput::builder()
             .set_checksum_xxhash3(Some("xxhash3".to_string()))
             .build();
@@ -1163,5 +1167,166 @@ mod tests {
             Arc::new(AtomicBool::new(false)),
         )
         .await;
+    }
+
+    // ------------------------------------------------------------------
+    // Pagination against a local stub endpoint. Real AWS cannot be made
+    // to paginate on demand (GetObjectAttributes needs >1000 real parts),
+    // but both loops honor the caller's page size, so a two-page stub
+    // proves the marker/token handoff between pages.
+    // ------------------------------------------------------------------
+
+    /// Serve a sequence of canned XML bodies, one per request, in order.
+    /// Returns the endpoint address. Requests beyond the last page get 400.
+    fn spawn_paged_stub(pages: Vec<String>) -> String {
+        use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind stub listener");
+        let addr = listener.local_addr().expect("stub local addr").to_string();
+        let counter = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        std::thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let page = counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let body = pages.get(page).cloned();
+                std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    let mut line = String::new();
+                    if reader.read_line(&mut line).is_err() || line.is_empty() {
+                        return;
+                    }
+                    let mut content_length: usize = 0;
+                    loop {
+                        let mut header = String::new();
+                        match reader.read_line(&mut header) {
+                            Ok(0) => return,
+                            Ok(_) => {
+                                let header = header.trim_end();
+                                if header.is_empty() {
+                                    break;
+                                }
+                                if let Some((name, value)) = header.split_once(':')
+                                    && name.eq_ignore_ascii_case("content-length")
+                                    && let Ok(len) = value.trim().parse()
+                                {
+                                    content_length = len;
+                                }
+                            }
+                            Err(_) => return,
+                        }
+                    }
+                    if content_length > 0 {
+                        let mut body = vec![0u8; content_length];
+                        if reader.read_exact(&mut body).is_err() {
+                            return;
+                        }
+                    }
+                    let mut stream = reader.into_inner();
+                    let (status, body) = match body {
+                        Some(body) => (200, body.into_bytes()),
+                        None => (400, Vec::new()),
+                    };
+                    let head = format!(
+                        "HTTP/1.1 {status} stub\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                        body.len()
+                    );
+                    let _ = stream.write_all(head.as_bytes());
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                });
+            }
+        });
+        addr
+    }
+
+    async fn s3_storage_against_stub(addr: &str) -> S3Storage {
+        let credentials = aws_sdk_s3::config::Credentials::new(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMIK7MDENG",
+            None,
+            None,
+            "stub",
+        );
+        let sdk_config = aws_sdk_s3::config::Builder::new()
+            .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+            .region(aws_sdk_s3::config::Region::new("us-east-1"))
+            .endpoint_url(format!("http://{addr}"))
+            .credentials_provider(credentials)
+            .force_path_style(true)
+            .build();
+        let mut storage = s3_storage_for_test("target-bucket");
+        storage.client = Some(Arc::new(Client::from_conf(sdk_config)));
+        storage
+    }
+
+    #[tokio::test]
+    async fn get_object_parts_attributes_follows_the_part_number_marker() {
+        let page1 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <GetObjectAttributesResponse>\
+            <ObjectParts>\
+            <IsTruncated>true</IsTruncated>\
+            <NextPartNumberMarker>1</NextPartNumberMarker>\
+            <Part><PartNumber>1</PartNumber><Size>4</Size></Part>\
+            </ObjectParts>\
+            </GetObjectAttributesResponse>"
+            .to_string();
+        let page2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <GetObjectAttributesResponse>\
+            <ObjectParts>\
+            <IsTruncated>false</IsTruncated>\
+            <Part><PartNumber>2</PartNumber><Size>6</Size></Part>\
+            </ObjectParts>\
+            </GetObjectAttributesResponse>"
+            .to_string();
+        let addr = spawn_paged_stub(vec![page1, page2]);
+        let storage = s3_storage_against_stub(&addr).await;
+
+        let parts = storage
+            .get_object_parts_attributes("key", None, 1, None, SseCustomerKey { key: None }, None)
+            .await
+            .unwrap();
+        let sizes: Vec<i64> = parts.iter().map(|p| p.size().unwrap()).collect();
+        assert_eq!(
+            sizes,
+            vec![4, 6],
+            "both pages' parts must be collected in order"
+        );
+    }
+
+    #[tokio::test]
+    async fn list_object_annotations_follows_the_continuation_token() {
+        let page1 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <ListObjectAnnotationsOutput>\
+            <Annotations><AnnotationEntry>\
+            <AnnotationName>note-1</AnnotationName>\
+            <LastModified>2026-01-01T00:00:00.000Z</LastModified>\
+            <Size>3</Size>\
+            </AnnotationEntry></Annotations>\
+            <NextContinuationToken>tok-1</NextContinuationToken>\
+            </ListObjectAnnotationsOutput>"
+            .to_string();
+        let page2 = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+            <ListObjectAnnotationsOutput>\
+            <Annotations><AnnotationEntry>\
+            <AnnotationName>note-2</AnnotationName>\
+            <LastModified>2026-01-01T00:00:00.000Z</LastModified>\
+            <Size>5</Size>\
+            </AnnotationEntry></Annotations>\
+            </ListObjectAnnotationsOutput>"
+            .to_string();
+        let addr = spawn_paged_stub(vec![page1, page2]);
+        let storage = s3_storage_against_stub(&addr).await;
+
+        let annotations = storage
+            .list_object_annotations("key", None, 1)
+            .await
+            .unwrap();
+        assert_eq!(
+            annotations.len(),
+            2,
+            "annotations from both pages must be merged"
+        );
+        assert!(annotations.contains_key("note-1"));
+        assert!(annotations.contains_key("note-2"));
     }
 }

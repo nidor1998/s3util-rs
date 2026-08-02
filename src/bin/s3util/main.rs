@@ -1,3 +1,4 @@
+use std::io::Write;
 use std::process::ExitCode;
 
 use clap::{CommandFactory, Parser};
@@ -8,6 +9,7 @@ use s3util_rs::config::args::{Cli, Commands};
 
 mod cli;
 mod help;
+mod pipe_safe;
 mod tracing_init;
 
 #[tokio::main]
@@ -34,8 +36,7 @@ async fn main() -> ExitCode {
             // for shell-completion generation, and try_from would otherwise reject
             // the missing paths.
             if let Some(shell) = cp_args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let config = match Config::try_from(cp_args) {
@@ -62,8 +63,7 @@ async fn main() -> ExitCode {
         }
         Commands::Mv(mv_args) => {
             if let Some(shell) = mv_args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
             let config = match Config::try_from(mv_args) {
                 Ok(config) => config,
@@ -88,8 +88,7 @@ async fn main() -> ExitCode {
         }
         Commands::Rename(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
             if let Err(e) = args.validate() {
                 let _ = clap::Error::raw(clap::error::ErrorKind::ValueValidation, e).print();
@@ -111,8 +110,7 @@ async fn main() -> ExitCode {
         }
         Commands::Presign(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -133,8 +131,7 @@ async fn main() -> ExitCode {
         }
         Commands::CreateBucket(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -155,8 +152,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucket(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -177,8 +173,7 @@ async fn main() -> ExitCode {
         }
         Commands::Rm(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -199,8 +194,7 @@ async fn main() -> ExitCode {
         }
         Commands::HeadObject(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -221,8 +215,7 @@ async fn main() -> ExitCode {
         }
         Commands::HeadBucket(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -243,8 +236,7 @@ async fn main() -> ExitCode {
         }
         Commands::ListObjectAnnotations(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -265,8 +257,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetObjectAnnotation(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -287,8 +278,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetObjectTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -309,8 +299,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutObjectTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -331,8 +320,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -353,8 +341,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteObjectTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -375,8 +362,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -397,8 +383,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketVersioning(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -419,8 +404,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketPolicy(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -441,8 +425,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketPolicy(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -463,8 +446,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketPolicy(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -485,8 +467,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketLifecycleConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -508,8 +489,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketLifecycleConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -531,8 +511,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketLifecycleConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -554,8 +533,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketEncryption(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -576,8 +554,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketEncryption(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -598,8 +575,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketEncryption(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -620,8 +596,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketCors(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -642,8 +617,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketCors(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -664,8 +638,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketCors(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -686,8 +659,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutPublicAccessBlock(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -708,8 +680,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetPublicAccessBlock(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -730,8 +701,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeletePublicAccessBlock(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -752,8 +722,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketVersioning(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -774,8 +743,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketTagging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -796,8 +764,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketWebsite(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -818,8 +785,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketWebsite(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -840,8 +806,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketWebsite(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -862,8 +827,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketLogging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -884,8 +848,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketLogging(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -906,8 +869,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketNotificationConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -929,8 +891,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketNotificationConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -952,8 +913,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketReplication(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -974,8 +934,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketReplication(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -996,8 +955,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteBucketReplication(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1018,8 +976,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketAccelerateConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1041,8 +998,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketAccelerateConfiguration(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -1064,8 +1020,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutBucketRequestPayment(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1086,8 +1041,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketRequestPayment(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -1108,8 +1062,7 @@ async fn main() -> ExitCode {
         }
         Commands::GetBucketPolicyStatus(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config();
@@ -1130,8 +1083,7 @@ async fn main() -> ExitCode {
         }
         Commands::DeleteObjectAnnotation(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1152,8 +1104,7 @@ async fn main() -> ExitCode {
         }
         Commands::PutObjectAnnotation(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1174,8 +1125,7 @@ async fn main() -> ExitCode {
         }
         Commands::RestoreObject(args) => {
             if let Some(shell) = args.auto_complete_shell() {
-                generate(shell, &mut Cli::command(), "s3util", &mut std::io::stdout());
-                return ExitCode::SUCCESS;
+                return print_completion_script(shell);
             }
 
             let tracing_config = args.common.build_tracing_config_dry_run(args.dry_run);
@@ -1193,6 +1143,30 @@ async fn main() -> ExitCode {
                 }
             };
             return ExitCode::from(exit_code as u8);
+        }
+    }
+}
+
+/// Render the shell-completion script for `shell` and print it pipe-safely.
+///
+/// clap_complete's generators panic on writer errors ("failed to write
+/// completion file"), so they never touch stdout directly: the script is
+/// rendered into an infallible in-memory buffer and written in one
+/// pipe-safe pass. A reader that exits early
+/// (`s3util cp --auto-complete-shell bash | head`) yields exit 0; any other
+/// stdout write error is reported on stderr with exit 1.
+fn print_completion_script(shell: clap_complete::shells::Shell) -> ExitCode {
+    let mut script = Vec::new();
+    generate(shell, &mut Cli::command(), "s3util", &mut script);
+    match pipe_safe::write_all_pipe_safe(&script) {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            // Tracing is never initialized on this path; best-effort stderr.
+            let _ = writeln!(
+                std::io::stderr(),
+                "error: failed to write completion script: {e}"
+            );
+            ExitCode::from(cli::EXIT_CODE_ERROR as u8)
         }
     }
 }

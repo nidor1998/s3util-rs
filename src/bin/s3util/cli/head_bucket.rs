@@ -5,6 +5,8 @@ use s3util_rs::config::args::head_bucket::HeadBucketArgs;
 use s3util_rs::output::json::head_bucket_to_json;
 use s3util_rs::storage::s3::api::{self, HeadError};
 
+use crate::pipe_safe::println_pipe_safe;
+
 use super::ExitStatus;
 
 /// Runtime entry for `s3util head-bucket s3://<BUCKET>`.
@@ -26,7 +28,7 @@ pub async fn run_head_bucket(
         Ok(out) => {
             let json = head_bucket_to_json(&out);
             let pretty = serde_json::to_string_pretty(&json)?;
-            println!("{pretty}");
+            println_pipe_safe(&pretty)?;
             Ok(ExitStatus::Success)
         }
         Err(HeadError::BucketNotFound) | Err(HeadError::NotFound) => {

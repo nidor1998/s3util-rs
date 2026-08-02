@@ -80,3 +80,53 @@ impl TryFrom<MvArgs> for Config {
         Ok(config)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::args::{Commands, parse_from_args};
+
+    fn mv_args_from(extra: &[&str]) -> MvArgs {
+        let mut args: Vec<String> = vec!["s3util".to_string(), "mv".to_string()];
+        for e in extra {
+            args.push((*e).to_string());
+        }
+        let cli = parse_from_args(args).unwrap();
+        let Commands::Mv(mv_args) = cli.command else {
+            panic!("expected Mv variant");
+        };
+        mv_args
+    }
+
+    #[test]
+    fn stdio_source_is_rejected() {
+        let mv_args = mv_args_from(&["-", "s3://b/k"]);
+        let err = mv_args.validate_storage_config().unwrap_err();
+        assert!(
+            err.contains("not supported by mv"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn no_fail_on_verify_error_reaches_config() {
+        let mv_args = mv_args_from(&["--no-fail-on-verify-error", "s3://a/k", "s3://b/k"]);
+        let config = Config::try_from(mv_args).unwrap();
+        assert!(config.no_fail_on_verify_error);
+    }
+
+    #[test]
+    fn build_config_error_propagates_through_try_from() {
+        // clap validates --multipart-threshold before it ever reaches
+        // build_config_from_common, so corrupt the already-parsed args the
+        // way a programmatic caller could: validation passes, the build
+        // itself must be the step that fails.
+        let mut mv_args = mv_args_from(&["s3://a/k", "s3://b/k"]);
+        mv_args.common.multipart_threshold = "not-a-size".to_string();
+        let err = Config::try_from(mv_args).unwrap_err();
+        assert!(
+            err.contains("is not a number"),
+            "expected a human-bytes parse error: {err}"
+        );
+    }
+}

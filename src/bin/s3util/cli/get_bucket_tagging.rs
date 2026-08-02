@@ -5,6 +5,8 @@ use s3util_rs::config::args::get_bucket_tagging::GetBucketTaggingArgs;
 use s3util_rs::output::json::get_bucket_tagging_to_json;
 use s3util_rs::storage::s3::api::{self, HeadError};
 
+use crate::pipe_safe::println_pipe_safe;
+
 use super::ExitStatus;
 
 /// Runtime entry for `s3util get-bucket-tagging s3://<BUCKET>`.
@@ -28,7 +30,7 @@ pub async fn run_get_bucket_tagging(
         Ok(out) => {
             let json = get_bucket_tagging_to_json(&out);
             let pretty = serde_json::to_string_pretty(&json)?;
-            println!("{pretty}");
+            println_pipe_safe(&pretty)?;
             Ok(ExitStatus::Success)
         }
         Err(HeadError::BucketNotFound) => {

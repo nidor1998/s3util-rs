@@ -1,3 +1,5 @@
+use std::io::Write;
+
 use async_channel::Receiver;
 use indicatif::{HumanBytes, ProgressBar, ProgressDrawTarget, ProgressStyle};
 use s3util_rs::types::SyncStatistics;
@@ -135,7 +137,10 @@ pub fn show_indicator(
                     progress_text.finish_and_clear();
 
                     if show_result && total_error_count == 0 {
-                        eprintln!("-> {resolved_target}");
+                        // eprintln! panics when stderr is a closed pipe
+                        // (`s3util ... 2>&1 | head`); result lines are
+                        // best-effort, like the tracing PipeSafeWriter.
+                        let _ = writeln!(std::io::stderr(), "-> {resolved_target}");
 
                         let mut parts = vec![format!(
                             "Transferred: {} | {}/sec",
@@ -153,7 +158,7 @@ pub fn show_indicator(
                         parts.push(format!("additional checksum verify: {checksum_status}"));
 
                         let result_message = parts.join(", ");
-                        eprintln!("{result_message}");
+                        let _ = writeln!(std::io::stderr(), "{result_message}");
                     }
 
                     return;

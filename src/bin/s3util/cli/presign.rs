@@ -6,6 +6,8 @@ use s3util_rs::config::ClientConfig;
 use s3util_rs::config::args::presign::PresignArgs;
 use s3util_rs::storage::s3::api;
 
+use crate::pipe_safe::println_pipe_safe;
+
 use super::ExitStatus;
 
 /// Runtime entry for `s3util presign s3://<BUCKET>/<KEY> [--expires-in N]`.
@@ -28,6 +30,6 @@ pub async fn run_presign(args: PresignArgs, client_config: ClientConfig) -> Resu
         client_config.request_payer.clone(),
     )
     .await?;
-    println!("{url}");
+    println_pipe_safe(&url)?;
     Ok(ExitStatus::Success)
 }

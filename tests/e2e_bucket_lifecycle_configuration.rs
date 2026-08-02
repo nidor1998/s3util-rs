@@ -168,6 +168,33 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Lifecycle configuration reads are eventually consistent: a get issued
+    /// right after a put can still answer with the previous configuration.
+    /// Poll until `TransitionDefaultMinimumObjectSize` reports `expected` (or
+    /// a bounded window elapses) and return the last-seen JSON either way, so
+    /// the caller's assertion fails on the settled value — not a stale read.
+    async fn get_transition_default_with_retry(
+        bucket_arg: &str,
+        expected: &str,
+    ) -> serde_json::Value {
+        let mut last = serde_json::Value::Null;
+        for _ in 0..15 {
+            let get_out = run_s3util(&[
+                "get-bucket-lifecycle-configuration",
+                "--target-profile",
+                "s3util-e2e-test",
+                bucket_arg,
+            ]);
+            assert!(get_out.status.success());
+            last = serde_json::from_slice(&get_out.stdout).expect("get stdout must be JSON");
+            if last["TransitionDefaultMinimumObjectSize"] == expected {
+                return last;
+            }
+            tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+        }
+        last
+    }
+
     /// `--transition-default-minimum-object-size` must reach S3 and survive a
     /// get round-trip.
     ///
@@ -209,15 +236,7 @@ mod tests {
             String::from_utf8_lossy(&put_out.stderr)
         );
 
-        let get_out = run_s3util(&[
-            "get-bucket-lifecycle-configuration",
-            "--target-profile",
-            "s3util-e2e-test",
-            &bucket_arg,
-        ]);
-        assert!(get_out.status.success());
-        let json: serde_json::Value =
-            serde_json::from_slice(&get_out.stdout).expect("get stdout must be JSON");
+        let json = get_transition_default_with_retry(&bucket_arg, "varies_by_storage_class").await;
         assert_eq!(
             json["TransitionDefaultMinimumObjectSize"], "varies_by_storage_class",
             "the configured value must survive the round-trip; got: {json}"
@@ -234,14 +253,8 @@ mod tests {
             config_file_str,
         ]);
         assert!(put_again.status.success());
-        let get_again = run_s3util(&[
-            "get-bucket-lifecycle-configuration",
-            "--target-profile",
-            "s3util-e2e-test",
-            &bucket_arg,
-        ]);
-        let json_again: serde_json::Value =
-            serde_json::from_slice(&get_again.stdout).expect("get stdout must be JSON");
+        let json_again =
+            get_transition_default_with_retry(&bucket_arg, "all_storage_classes_128K").await;
         assert_eq!(
             json_again["TransitionDefaultMinimumObjectSize"], "all_storage_classes_128K",
             "omitting the flag applies S3's default — this is why the flag is needed \

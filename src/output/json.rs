@@ -3123,6 +3123,42 @@ mod tests {
     }
 
     #[test]
+    fn get_bucket_replication_destination_replication_time_without_time_value() {
+        // S3 models ReplicationTime.Time as optional: a status-only value must
+        // serialize with "Status" and no "Time" key (not an empty object).
+        let rt = aws_sdk_s3::types::ReplicationTime::builder()
+            .status(aws_sdk_s3::types::ReplicationTimeStatus::Enabled)
+            .build()
+            .unwrap();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::dest-bucket")
+            .replication_time(rt)
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/replication")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let rt_json =
+            &json["ReplicationConfiguration"]["Rules"][0]["Destination"]["ReplicationTime"];
+        assert_eq!(rt_json["Status"], Value::String("Enabled".into()));
+        assert!(
+            rt_json.get("Time").is_none(),
+            "a status-only ReplicationTime must not emit a Time key: {rt_json}"
+        );
+    }
+
+    #[test]
     fn get_bucket_replication_rule_with_id_priority_filter_prefix() {
         let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
             .prefix("logs/")

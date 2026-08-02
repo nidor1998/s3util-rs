@@ -8,6 +8,8 @@ use s3util_rs::output::json::put_object_annotation_to_json;
 use s3util_rs::storage::annotation;
 use s3util_rs::storage::s3::api::{self, HeadError, PutObjectAnnotationParams};
 
+use crate::pipe_safe::println_pipe_safe;
+
 use super::ExitStatus;
 
 /// Runtime entry for
@@ -87,7 +89,7 @@ pub async fn run_put_object_annotation(
         Ok(out) => {
             annotation::verify_crc64nvme(&crc64, out.checksum_crc64_nvme())?;
             let json = put_object_annotation_to_json(&out);
-            println!("{}", serde_json::to_string_pretty(&json)?);
+            println_pipe_safe(&serde_json::to_string_pretty(&json)?)?;
             info!(
                 bucket = %bucket,
                 key = %key,

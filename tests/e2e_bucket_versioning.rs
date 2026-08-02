@@ -142,6 +142,68 @@ mod tests {
         );
     }
 
+    /// The reported repro: `s3util get-bucket-versioning s3://bucket | head 1`,
+    /// where `head` fails to open the file `1` and exits without reading its
+    /// input, leaving the pipe reader-less before s3util prints. Closing the
+    /// read end of the child's stdout pipe before the child starts reproduces
+    /// that state deterministically: the JSON print hits EPIPE — the command
+    /// must still exit 0
+    /// (the S3 call succeeded) instead of panicking with "failed printing to
+    /// stdout: Broken pipe" or dying of SIGPIPE (status.code() == None).
+    #[tokio::test]
+    async fn get_versioning_with_closed_stdout_exits_zero() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let bucket_arg = format!("s3://{bucket}");
+
+        // Enable versioning so get-bucket-versioning has JSON to print.
+        let put_enabled = run_s3util(&[
+            "put-bucket-versioning",
+            "--target-profile",
+            "s3util-e2e-test",
+            &bucket_arg,
+            "--enabled",
+        ]);
+        assert!(
+            put_enabled.status.success(),
+            "put-bucket-versioning --enabled should succeed; stderr: {}",
+            String::from_utf8_lossy(&put_enabled.stderr)
+        );
+
+        let (reader, writer) = std::io::pipe().expect("failed to create pipe");
+        drop(reader); // no readers left -> every stdout write yields EPIPE
+        let output = Command::new(env!("CARGO_BIN_EXE_s3util"))
+            .args([
+                "get-bucket-versioning",
+                "--target-profile",
+                "s3util-e2e-test",
+                &bucket_arg,
+            ])
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(writer))
+            .stderr(Stdio::piped())
+            .output()
+            .expect("spawn s3util");
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !stderr.contains("panicked"),
+            "get-bucket-versioning must not panic on a closed stdout pipe; stderr: {stderr}"
+        );
+        assert_eq!(
+            output.status.code(),
+            Some(0),
+            "get-bucket-versioning must exit 0 on a closed stdout pipe \
+             (None = killed by SIGPIPE); stderr: {stderr}"
+        );
+    }
+
     /// put-bucket-versioning on a non-existent bucket should fail with exit code 1.
     #[tokio::test]
     async fn put_versioning_on_missing_bucket_exits_non_zero() {
