@@ -4,8 +4,8 @@
 //! end-to-end: `--expires` conversion on the auto-chunksize path,
 //! `--disable-additional-checksum-verify` on a multipart s3→s3 copy,
 //! the chunk-size-mismatch + `--disable-multipart-verify` silent skip,
-//! and the "integrity could NOT be verified" outcome for an annotation
-//! stored without any checksum on an SSE-KMS bucket.
+//! and the verified outcome for a KMS-encrypted annotation stored without
+//! any client checksum (S3's automatically computed CRC64NVME takes over).
 
 #[cfg(test)]
 mod common;
@@ -265,12 +265,17 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
-    /// An annotation stored WITHOUT any checksum (raw SDK put) on a bucket
-    /// whose default encryption is SSE-KMS: the ETag is not an MD5 and no
-    /// additional checksum exists, so get-object-annotation must warn that
-    /// integrity could not be verified, still write the payload, and exit 0.
+    /// An annotation stored WITHOUT any client checksum (raw SDK put) on a
+    /// bucket whose default encryption is SSE-KMS: the ETag is not an MD5,
+    /// but S3's default data-integrity protections compute and store a
+    /// CRC64NVME checksum for uploads that carry none — so
+    /// get-object-annotation still verifies the payload via that checksum
+    /// and exits 0 with "written and verified". (The truly-unverifiable
+    /// outcome needs a service that returns neither an AES256 MD5 ETag nor
+    /// any checksum; real AWS cannot produce that, so it is pinned by the
+    /// stub test in `cli_stub_server.rs` instead.)
     #[tokio::test]
-    async fn get_object_annotation_on_kms_bucket_without_checksum_warns_unverifiable() {
+    async fn get_object_annotation_on_kms_bucket_verifies_via_s3_computed_checksum() {
         TestHelper::init_dummy_tracing_subscriber();
 
         let helper = TestHelper::new().await;
@@ -304,8 +309,8 @@ mod tests {
             .await;
 
         // Seed the annotation with the raw SDK — deliberately WITHOUT the
-        // CRC64NVME checksum the s3util CLI always attaches — so nothing but
-        // the (non-MD5, KMS) ETag is available for verification.
+        // client-side CRC64NVME the s3util CLI always attaches — so the only
+        // checksum left is the one S3 computes on its own.
         let payload = b"kms annotation payload";
         helper
             .client
@@ -338,22 +343,27 @@ mod tests {
         assert_eq!(
             out.status.code(),
             Some(0),
-            "an unverifiable payload must still succeed; stderr: {}",
+            "the get must succeed; stderr: {}",
             String::from_utf8_lossy(&out.stderr)
         );
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
-            stderr.contains("payload integrity could not be verified"),
-            "expected the unverifiable warning; got: {stderr}"
+            stderr.contains("written and verified"),
+            "S3's auto-computed checksum must verify the payload; got: {stderr}"
+        );
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            stdout.contains("aws:kms"),
+            "the annotation must actually be KMS-encrypted (no MD5 ETag available); got: {stdout}"
         );
         assert!(
-            stderr.contains("written, but integrity could NOT be verified"),
-            "expected the unverified outcome log; got: {stderr}"
+            stdout.contains("ChecksumCRC64NVME"),
+            "the S3-computed CRC64NVME must be present — it is what verified the payload; got: {stdout}"
         );
         assert_eq!(
             std::fs::read(&outfile).unwrap(),
             payload,
-            "the payload must still be written"
+            "the payload must be written"
         );
         let _ = std::fs::remove_dir_all(&tmp_dir);
     }

@@ -355,7 +355,10 @@ fn annotation_response(
 
 /// SSE-KMS payload: `verify_etag_md5` only applies to AES256, and with no
 /// additional checksum present nothing else can verify the payload — the CLI
-/// must warn, still write the file, and exit 0.
+/// must warn, still write the file, and exit 0. Real AWS cannot produce this
+/// response anymore: it computes and stores a CRC64NVME for uploads that
+/// carry no client checksum (see the KMS test in
+/// `e2e_multipart_verify_variants.rs`), so the branch is pinned here.
 #[test]
 fn get_object_annotation_kms_payload_unverifiable_warns_and_exits_0() {
     let addr = spawn_stub(annotation_response(
