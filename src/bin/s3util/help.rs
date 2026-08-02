@@ -253,6 +253,43 @@ mod tests {
         ]));
     }
 
+    /// A writer that fails after a fixed number of successful writes, so the
+    /// loop below can drive `print_categorized_help` into an I/O error at
+    /// every write it performs — pinning that each `?` propagates.
+    struct CountdownWriter {
+        remaining: usize,
+    }
+
+    impl Write for CountdownWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            if self.remaining == 0 {
+                return Err(std::io::Error::other("synthetic writer failure"));
+            }
+            self.remaining -= 1;
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn print_categorized_help_propagates_every_writer_error() {
+        let mut budget = 0usize;
+        loop {
+            let mut writer = CountdownWriter { remaining: budget };
+            match print_categorized_help(&mut writer) {
+                Err(_) => budget += 1,
+                Ok(()) => break,
+            }
+            assert!(
+                budget < 10_000,
+                "help must eventually print successfully with a large enough write budget"
+            );
+        }
+        assert!(budget > 0, "at least one write must happen");
+    }
+
     #[test]
     fn every_categorized_name_is_a_real_subcommand() {
         let cmd = Cli::command();

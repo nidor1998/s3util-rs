@@ -159,6 +159,21 @@ mod tests {
     }
 
     #[test]
+    fn build_config_error_propagates_through_try_from() {
+        // clap validates --multipart-threshold before it ever reaches
+        // build_config_from_common, so corrupt the already-parsed args the
+        // way a programmatic caller could: validation passes, the build
+        // itself must be the step that fails.
+        let mut cp_args = cp_args_from(&["s3://a/k", "s3://b/k"]);
+        cp_args.common.multipart_threshold = "not-a-size".to_string();
+        let err = Config::try_from(cp_args).unwrap_err();
+        assert!(
+            err.contains("is not a number"),
+            "expected a human-bytes parse error: {err}"
+        );
+    }
+
+    #[test]
     fn skip_existing_with_if_none_match_rejected() {
         let cp_args = cp_args_from(&["--skip-existing", "--if-none-match", "/tmp/a", "s3://b/k"]);
         let err = cp_args.validate_storage_config().unwrap_err();

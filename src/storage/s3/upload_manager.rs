@@ -2737,6 +2737,15 @@ mod stream_upload_metadata_tests {
     }
 
     #[test]
+    fn expires_conversion_error_propagates() {
+        // RFC 3339 requires a 4-digit year; chrono renders year 99999 as
+        // "+99999-…", which the SDK's DateTimeWithOffset parser rejects. The
+        // conversion error must surface instead of being swallowed.
+        let expires = Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap();
+        assert!(stream_upload_expires(Some(expires)).is_err());
+    }
+
+    #[test]
     fn metadata_passes_through_untouched_without_the_last_modified_flag() {
         let configured = HashMap::from([("k".to_string(), "v".to_string())]);
         let built = stream_upload_metadata(Some(&configured), false, fixed_now())
@@ -3350,5 +3359,1157 @@ mod upload_error_path_tests {
         assert_future_panics(source.delete_object("k", None)).await;
 
         assert_call_panics(|| source.generate_copy_source_key("k", None));
+    }
+
+    // ------------------------------------------------------------------
+    // Stub-S3-backed multipart tests. A minimal local HTTP endpoint lets
+    // CreateMultipartUpload succeed so the paths *behind* it become
+    // reachable: per-part failures, verification mismatches after a
+    // crafted CompleteMultipartUpload answer, abort failures, and
+    // cancellation observed while joining part uploads — none of which a
+    // dead endpoint or real S3 can produce deterministically.
+    // ------------------------------------------------------------------
+
+    use std::io::{BufRead as _, BufReader, Read as _, Write as _};
+    use std::net::TcpListener;
+    use std::thread;
+
+    use chrono::TimeZone as _;
+
+    use crate::types::token::PipelineCancellationToken;
+
+    /// Canned multipart behavior for the stub endpoint.
+    #[derive(Clone)]
+    struct MultipartStub {
+        /// Status for UploadPart (200 = success with an ETag header).
+        part_status: u16,
+        /// ETag element in the CompleteMultipartUploadResult body.
+        complete_e_tag: String,
+        /// Optional ChecksumCRC32 element in the complete body.
+        complete_checksum_crc32: Option<String>,
+        /// Status for AbortMultipartUpload (204 = success).
+        abort_status: u16,
+    }
+
+    impl Default for MultipartStub {
+        fn default() -> Self {
+            MultipartStub {
+                part_status: 200,
+                complete_e_tag: "\"cov-complete-etag\"".to_string(),
+                complete_checksum_crc32: None,
+                abort_status: 204,
+            }
+        }
+    }
+
+    fn xml_error_body(code: &str) -> Vec<u8> {
+        format!(
+            "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+             <Error><Code>{code}</Code><Message>stub {code}</Message>\
+             <RequestId>stub-request-id</RequestId></Error>"
+        )
+        .into_bytes()
+    }
+
+    /// Answer one HTTP request on `stream` according to the stub's routing.
+    fn serve_multipart_request(stream: std::net::TcpStream, stub: &MultipartStub) {
+        let mut reader = BufReader::new(stream);
+        let mut request_line = String::new();
+        if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+            return;
+        }
+        let method = request_line
+            .split_whitespace()
+            .next()
+            .unwrap_or("")
+            .to_string();
+        let target = request_line
+            .split_whitespace()
+            .nth(1)
+            .unwrap_or("")
+            .to_string();
+
+        let mut content_length: usize = 0;
+        loop {
+            let mut header = String::new();
+            match reader.read_line(&mut header) {
+                Ok(0) => return,
+                Ok(_) => {
+                    let header = header.trim_end();
+                    if header.is_empty() {
+                        break;
+                    }
+                    if let Some((name, value)) = header.split_once(':')
+                        && name.eq_ignore_ascii_case("content-length")
+                        && let Ok(len) = value.trim().parse()
+                    {
+                        content_length = len;
+                    }
+                }
+                Err(_) => return,
+            }
+        }
+        if content_length > 0 {
+            let mut body = vec![0u8; content_length];
+            if reader.read_exact(&mut body).is_err() {
+                return;
+            }
+        }
+
+        let (status, extra_headers, body): (u16, Vec<(&str, String)>, Vec<u8>) =
+            if method == "POST" && target.contains("uploads") {
+                let body = b"<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                    <InitiateMultipartUploadResult>\
+                    <Bucket>target-bucket</Bucket><Key>key</Key>\
+                    <UploadId>cov-upload-id</UploadId>\
+                    </InitiateMultipartUploadResult>"
+                    .to_vec();
+                (200, vec![], body)
+            } else if method == "PUT" && target.contains("partNumber=") {
+                if stub.part_status == 200 {
+                    (
+                        200,
+                        vec![("etag", "\"cov-part-etag\"".to_string())],
+                        Vec::new(),
+                    )
+                } else {
+                    (stub.part_status, vec![], xml_error_body("InternalError"))
+                }
+            } else if method == "DELETE" {
+                if stub.abort_status == 204 {
+                    (204, vec![], Vec::new())
+                } else {
+                    (stub.abort_status, vec![], xml_error_body("NoSuchUpload"))
+                }
+            } else if method == "POST" && target.contains("uploadId=") {
+                let checksum = stub
+                    .complete_checksum_crc32
+                    .as_ref()
+                    .map(|value| format!("<ChecksumCRC32>{value}</ChecksumCRC32>"))
+                    .unwrap_or_default();
+                let body = format!(
+                    "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                     <CompleteMultipartUploadResult>\
+                     <Bucket>target-bucket</Bucket><Key>key</Key>\
+                     <ETag>{}</ETag>{checksum}\
+                     </CompleteMultipartUploadResult>",
+                    stub.complete_e_tag
+                )
+                .into_bytes();
+                (200, vec![], body)
+            } else {
+                (400, vec![], xml_error_body("BadRequest"))
+            };
+
+        let mut stream = reader.into_inner();
+        let mut head = format!(
+            "HTTP/1.1 {status} stub\r\ncontent-length: {}\r\nconnection: close\r\n",
+            body.len()
+        );
+        for (name, value) in extra_headers {
+            head.push_str(&format!("{name}: {value}\r\n"));
+        }
+        head.push_str("\r\n");
+        let _ = stream.write_all(head.as_bytes());
+        let _ = stream.write_all(&body);
+        let _ = stream.flush();
+    }
+
+    /// Start the stub endpoint; the accept loop runs detached for the rest of
+    /// the test process (each test binds its own ephemeral port).
+    fn spawn_multipart_stub(stub: MultipartStub) -> String {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub listener");
+        let addr = listener.local_addr().expect("stub local addr").to_string();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let stub = stub.clone();
+                thread::spawn(move || serve_multipart_request(stream, &stub));
+            }
+        });
+        addr
+    }
+
+    /// Like `dead_endpoint_config`, but pointing at a live stub endpoint.
+    fn stub_endpoint_config(addr: &str) -> Config {
+        let endpoint = format!("http://{addr}");
+        let cli = parse_from_args(vec![
+            "s3util",
+            "cp",
+            "test_data/5byte.dat",
+            "s3://target-bucket/key",
+            "--target-endpoint-url",
+            &endpoint,
+            "--target-access-key",
+            "AKIAIOSFODNN7EXAMPLE",
+            "--target-secret-access-key",
+            "wJalrXUtnFEMIK7MDENG",
+            "--target-region",
+            "us-east-1",
+            "--aws-max-attempts",
+            "1",
+        ])
+        .unwrap();
+        let Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        let mut config = Config::try_from(cp_args).unwrap();
+        // Two 4-byte parts for an 8-byte object: small enough to be fast,
+        // large enough to exercise the parts-2+ source-fetch path.
+        config.transfer_config.multipart_threshold = 4;
+        config.transfer_config.multipart_chunksize = 4;
+        config
+    }
+
+    /// How `RangedSource` answers the part-2+ `get_object` range request.
+    #[derive(Clone)]
+    enum RangedMode {
+        /// Well-formed ranged answer.
+        Normal,
+        /// Drop the Content-Range header entirely.
+        NoContentRange,
+        /// Answer with a Content-Range that does not match the request.
+        WrongContentRange,
+        /// Correct headers but a body shorter than content-length.
+        ShortBody,
+        /// Correct range but a lying content-length (drives the
+        /// total-upload-size accounting mismatch).
+        WrongContentLength,
+        /// Cancel the pipeline token, then answer normally — the part
+        /// upload succeeds and the join loop observes the cancellation.
+        CancelThenNormal(PipelineCancellationToken),
+    }
+
+    /// Source storage serving ranged reads out of an in-memory buffer.
+    #[derive(Clone)]
+    struct RangedSource {
+        data: Vec<u8>,
+        mode: RangedMode,
+    }
+
+    #[async_trait]
+    impl StorageTrait for RangedSource {
+        fn is_local_storage(&self) -> bool {
+            false
+        }
+        fn is_express_onezone_storage(&self) -> bool {
+            false
+        }
+        async fn get_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<GetObjectOutput> {
+            let range = range.expect("part uploads always request a range");
+            let spec = range
+                .strip_prefix("bytes=")
+                .expect("range must be of the form bytes=a-b");
+            let (start, end) = spec.split_once('-').expect("range must be a-b");
+            let start: usize = start.parse().unwrap();
+            let end: usize = end.parse().unwrap();
+            let slice = self.data[start..=end].to_vec();
+            let total = self.data.len();
+
+            let mut builder = GetObjectOutput::builder().content_length(slice.len() as i64);
+            match &self.mode {
+                RangedMode::Normal => {
+                    builder = builder
+                        .content_range(format!("bytes {start}-{end}/{total}"))
+                        .body(ByteStream::from(slice));
+                }
+                RangedMode::NoContentRange => {
+                    builder = builder.body(ByteStream::from(slice));
+                }
+                RangedMode::WrongContentRange => {
+                    builder = builder
+                        .content_range(format!("bytes 0-{}/{total}", slice.len() - 1))
+                        .body(ByteStream::from(slice));
+                }
+                RangedMode::ShortBody => {
+                    let short = slice[..slice.len() / 2].to_vec();
+                    builder = builder
+                        .content_range(format!("bytes {start}-{end}/{total}"))
+                        .body(ByteStream::from(short));
+                }
+                RangedMode::WrongContentLength => {
+                    builder = GetObjectOutput::builder()
+                        .content_length((slice.len() / 2) as i64)
+                        .content_range(format!("bytes {start}-{end}/{total}"))
+                        .body(ByteStream::from(slice));
+                }
+                RangedMode::CancelThenNormal(token) => {
+                    token.cancel();
+                    builder = builder
+                        .content_range(format!("bytes {start}-{end}/{total}"))
+                        .body(ByteStream::from(slice));
+                }
+            }
+            Ok(builder.build())
+        }
+        async fn get_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<GetObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn head_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _range: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn head_object_first_part(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _checksum_mode: Option<ChecksumMode>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<HeadObjectOutput> {
+            unimplemented!()
+        }
+        async fn get_object_parts(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn get_object_parts_attributes(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _max_parts: i32,
+            _sse_c: Option<String>,
+            _sse_c_key: SseCustomerKey,
+            _sse_c_key_md5: Option<String>,
+        ) -> Result<Vec<ObjectPart>> {
+            unimplemented!()
+        }
+        async fn put_object(
+            &self,
+            _key: &str,
+            _source: Storage,
+            _source_key: &str,
+            _source_size: u64,
+            _source_additional_checksum: Option<String>,
+            _get_object_output_first_chunk: GetObjectOutput,
+            _tagging: Option<String>,
+            _object_checksum: Option<crate::types::ObjectChecksum>,
+            _if_none_match: Option<String>,
+        ) -> Result<PutObjectOutput> {
+            unimplemented!()
+        }
+        async fn put_object_tagging(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+            _tagging: Tagging,
+        ) -> Result<PutObjectTaggingOutput> {
+            unimplemented!()
+        }
+        async fn delete_object(
+            &self,
+            _key: &str,
+            _version_id: Option<String>,
+        ) -> Result<DeleteObjectOutput> {
+            unimplemented!()
+        }
+        fn get_client(&self) -> Option<Arc<Client>> {
+            None
+        }
+        fn get_stats_sender(&self) -> Sender<SyncStatistics> {
+            async_channel::unbounded().0
+        }
+        async fn send_stats(&self, _stats: SyncStatistics) {}
+        fn get_local_path(&self) -> PathBuf {
+            PathBuf::new()
+        }
+        fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
+            None
+        }
+        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
+            unimplemented!()
+        }
+        fn set_warning(&self) {}
+    }
+
+    /// Full-control manager constructor: external cancellation token, custom
+    /// source, and a source-side additional checksum.
+    async fn manager_with_full(
+        config: Config,
+        object_parts: Option<Vec<ObjectPart>>,
+        source_total_size: Option<u64>,
+        source_additional_checksum: Option<String>,
+        cancellation_token: PipelineCancellationToken,
+        source: Storage,
+    ) -> TestManager {
+        let client = Arc::new(
+            config
+                .target_client_config
+                .clone()
+                .unwrap()
+                .create_client()
+                .await,
+        );
+        let (stats_sender, stats_receiver) = async_channel::unbounded();
+        let has_warning = Arc::new(AtomicBool::new(false));
+        TestManager {
+            manager: UploadManager::new(
+                client,
+                config,
+                None,
+                cancellation_token,
+                stats_sender,
+                None,
+                object_parts,
+                false,
+                source,
+                "source-key".to_string(),
+                source_total_size,
+                source_additional_checksum,
+                None,
+                has_warning.clone(),
+            ),
+            stats_receiver,
+            has_warning,
+        }
+    }
+
+    /// 8-byte payload split into two 4-byte parts by `stub_endpoint_config`.
+    const PART_DATA: &[u8; 8] = b"aaaabbbb";
+
+    fn ranged_source(mode: RangedMode) -> Storage {
+        Box::new(RangedSource {
+            data: PART_DATA.to_vec(),
+            mode,
+        })
+    }
+
+    /// First chunk of a remote (S3) source: carries an ETag.
+    fn remote_first_chunk(e_tag: &str) -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(4)
+            .e_tag(e_tag)
+            .body(ByteStream::from(PART_DATA[..4].to_vec()))
+            .build()
+    }
+
+    /// First chunk of a local/stdin source: no ETag, so the manager
+    /// computes a synthetic one from the uploaded parts.
+    fn local_first_chunk() -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(4)
+            .body(ByteStream::from(PART_DATA[..4].to_vec()))
+            .build()
+    }
+
+    #[tokio::test]
+    async fn multipart_success_skips_disabled_verifications() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_etag_verify = true;
+        config.disable_additional_checksum_verify = true;
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let output = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap();
+        assert_eq!(output.e_tag().unwrap(), "\"cov-complete-etag\"");
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn multipart_part_failure_aborts_and_a_failing_abort_does_not_mask_it() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            part_status: 500,
+            abort_status: 404,
+            ..MultipartStub::default()
+        });
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        // The part failure must be what surfaces, not the abort failure.
+        assert!(
+            format!("{err:#}").contains("upload_part() failed"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part2_without_content_range_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::NoContentRange),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("returned no content range"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part2_with_mismatched_content_range_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::WrongContentRange),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("unexpected content range"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part2_short_body_is_retryable_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::ShortBody),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_part1_short_first_chunk_body_is_retryable_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        // First chunk claims 4 bytes but carries only 2: part 1's read_exact
+        // must fail and be classified retryable.
+        let first_chunk = GetObjectOutput::builder()
+            .content_length(4)
+            .e_tag("\"cafe-2\"")
+            .body(ByteStream::from(PART_DATA[..2].to_vec()))
+            .build();
+        let err = t
+            .manager
+            .upload("target-bucket", "key", first_chunk)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_total_size_mismatch_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::WrongContentLength),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("multipart upload size mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_cancellation_is_observed_while_joining_parts() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let token = create_pipeline_cancellation_token();
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            Some(8),
+            None,
+            token.clone(),
+            ranged_source(RangedMode::CancelThenNormal(token)),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_local_source_e_tag_mismatch_is_an_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_additional_checksum_verify = true;
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        // No source ETag → the manager computes one from the uploaded parts;
+        // the stub answers with an unrelated ETag → corruption error.
+        let err = t
+            .manager
+            .upload("target-bucket", "key", local_first_chunk())
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("e_tag mismatch. file in the target storage may be corrupted."),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn multipart_checksum_mismatch_is_skipped_when_multipart_verify_disabled() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            complete_checksum_crc32: Some("BBBB-2".to_string()),
+            ..MultipartStub::default()
+        });
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_etag_verify = true;
+        config.disable_multipart_verify = true;
+        config.additional_checksum_algorithm = Some(ChecksumAlgorithm::Crc32);
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            Some("AAAA-2".to_string()),
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        // Remote source with a multipart-style ETag + --disable-multipart-verify:
+        // the checksum mismatch must be skipped, not fatal.
+        let output = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap();
+        assert_eq!(output.e_tag().unwrap(), "\"cov-complete-etag\"");
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn multipart_remote_checksum_mismatch_with_single_part_e_tag_warns() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            // Same ETag the source reports, so ETag verification passes and
+            // only the additional checksum disagrees.
+            complete_e_tag: "\"cafebabe\"".to_string(),
+            complete_checksum_crc32: Some("BBBB-2".to_string()),
+            ..MultipartStub::default()
+        });
+        let mut config = stub_endpoint_config(&addr);
+        config.additional_checksum_algorithm = Some(ChecksumAlgorithm::Crc32);
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            Some("AAAA-2".to_string()),
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        // Non-multipart source ETag → the mismatch cannot be chunk-size
+        // related → "may be corrupted" warning, but a remote non-full-object
+        // checksum stays a warning, not an error.
+        t.manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafebabe\""))
+            .await
+            .unwrap();
+        assert!(t.has_warning.load(Ordering::SeqCst));
+        let mut saw_checksum_mismatch = false;
+        while let Ok(stat) = t.stats_receiver.try_recv() {
+            if matches!(stat, SyncStatistics::ChecksumMismatch { .. }) {
+                saw_checksum_mismatch = true;
+            }
+        }
+        assert!(saw_checksum_mismatch, "expected a ChecksumMismatch stat");
+    }
+
+    #[tokio::test]
+    async fn multipart_local_source_checksum_mismatch_is_an_error() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            complete_checksum_crc32: Some("BBBB".to_string()),
+            ..MultipartStub::default()
+        });
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_etag_verify = true;
+        config.additional_checksum_algorithm = Some(ChecksumAlgorithm::Crc32);
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            Some("AAAA".to_string()),
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", local_first_chunk())
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("additional checksum mismatch"),
+            "unexpected error: {message}"
+        );
+    }
+
+    // ---- upload_with_auto_chunksize variants of the part-task guards ----
+
+    fn auto_chunksize_config(addr: &str) -> (Config, Vec<ObjectPart>) {
+        let mut config = stub_endpoint_config(addr);
+        config.transfer_config.auto_chunksize = true;
+        let parts = vec![
+            ObjectPart::builder().size(4).build(),
+            ObjectPart::builder().size(4).build(),
+        ];
+        (config, parts)
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_cancelled_before_parts_fails_with_cancelled() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            token,
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_part1_short_first_chunk_body_is_retryable_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let first_chunk = GetObjectOutput::builder()
+            .content_length(4)
+            .e_tag("\"cafe-2\"")
+            .body(ByteStream::from(PART_DATA[..2].to_vec()))
+            .build();
+        let err = t
+            .manager
+            .upload("target-bucket", "key", first_chunk)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_part2_without_content_range_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::NoContentRange),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("returned no content range"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_part2_with_mismatched_content_range_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::WrongContentRange),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("unexpected content range"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_part2_short_body_is_retryable_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::ShortBody),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::DownloadForceRetryableError)
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_total_size_mismatch_fails() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::WrongContentLength),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("multipart upload(auto-chunksize) size mismatch"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_cancellation_is_observed_while_joining_parts() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let (config, parts) = auto_chunksize_config(&addr);
+        let token = create_pipeline_cancellation_token();
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            token.clone(),
+            ranged_source(RangedMode::CancelThenNormal(token)),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_expires_conversion_error_propagates() {
+        // The conversion runs while building the CreateMultipartUpload
+        // attributes, before any request — a dead endpoint proves it.
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        config.expires = Some(chrono::Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap());
+        let parts = vec![
+            ObjectPart::builder().size(4).build(),
+            ObjectPart::builder().size(4).build(),
+        ];
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert!(
+            !format!("{err:#}").contains("dispatch failure"),
+            "the conversion must fail before any request is sent: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn singlepart_expires_conversion_error_propagates() {
+        let mut config = dead_endpoint_config();
+        config.expires = Some(chrono::Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap());
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        assert!(
+            !format!("{err:#}").contains("dispatch failure"),
+            "the conversion must fail before any request is sent: {err:#}"
+        );
+    }
+
+    // ---- upload_stream (stdin-sourced streaming multipart) ----
+
+    /// MD5-of-part-MD5s for `PART_DATA` split into two 4-byte parts — the
+    /// ETag the streaming path computes and expects S3 to answer with.
+    const PART_DATA_STREAM_E_TAG: &str = "\"c76df0106dd092005bd076cca185d7cd-2\"";
+
+    #[tokio::test]
+    async fn upload_stream_success_skips_disabled_checksum_verification() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            complete_e_tag: PART_DATA_STREAM_E_TAG.to_string(),
+            ..MultipartStub::default()
+        });
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_additional_checksum_verify = true;
+        let mut t = manager_with_full(
+            config,
+            None,
+            None,
+            None,
+            create_pipeline_cancellation_token(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let reader = Box::new(std::io::Cursor::new(PART_DATA.to_vec()));
+        let output = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap();
+        assert_eq!(output.e_tag().unwrap(), PART_DATA_STREAM_E_TAG);
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn upload_stream_part_failure_aborts_and_returns_the_error() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            part_status: 500,
+            ..MultipartStub::default()
+        });
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            None,
+            None,
+            create_pipeline_cancellation_token(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let reader = Box::new(std::io::Cursor::new(PART_DATA.to_vec()));
+        let err = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("upload_part() failed"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_stream_empty_reader_aborts_with_no_parts_error() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            None,
+            None,
+            create_pipeline_cancellation_token(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let reader = Box::new(tokio::io::empty());
+        let err = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("no parts uploaded"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_stream_cancelled_before_parts_fails_with_cancelled() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let token = create_pipeline_cancellation_token();
+        token.cancel();
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            None,
+            None,
+            token,
+            Box::new(NullSource),
+        )
+        .await;
+
+        let reader = Box::new(std::io::Cursor::new(PART_DATA.to_vec()));
+        let err = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
     }
 }

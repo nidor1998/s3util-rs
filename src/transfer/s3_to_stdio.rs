@@ -2622,6 +2622,42 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn parallel_worker_finishing_after_a_peer_failure_discards_its_chunk() {
+        let chunksize = 8 * 1024 * 1024usize;
+        let body: Vec<u8> = vec![0xCC; 3 * chunksize];
+        // Chunk 1 is mid-GET (delayed) when chunk 2 fails instantly. When the
+        // delayed worker's GET completes, the shared state already records the
+        // failure, so its bytes must be discarded at the ready-handoff instead
+        // of being written after the transfer is doomed.
+        let mock = MockSource::new(body.clone())
+            .delay_get_at(chunksize as u64, Duration::from_millis(300))
+            .fail_get_at(2 * chunksize as u64);
+        let config = test_config(4, 8 * 1024 * 1024, chunksize as u64);
+
+        let (result, captured, _events) = run_transfer(config, mock).await;
+
+        let err = result.unwrap_err();
+        assert!(
+            format!("{err:#}").contains("simulated GET failure"),
+            "the root cause must stay the failing chunk, got: {err:#}"
+        );
+        assert!(
+            !crate::types::error::is_cancelled_error(&err),
+            "a chunk-GET failure must not be reported as a cancellation, got: {err:#}"
+        );
+        // Only chunk 0 may have reached stdout; the delayed chunk 1 must not
+        // have been flushed after the failure.
+        assert!(
+            captured.len() <= chunksize,
+            "chunks completing after a peer failure must be discarded"
+        );
+        assert!(
+            body.starts_with(&captured),
+            "stdout output is not a prefix of the source body"
+        );
+    }
+
+    #[tokio::test]
     async fn parallel_returns_err_when_head_fails() {
         let body: Vec<u8> = vec![0; 16 * 1024 * 1024];
         let mock = MockSource::new(body).fail_head();

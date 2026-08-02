@@ -198,4 +198,15 @@ mod tests {
             "expected internal error, got: {msg}"
         );
     }
+
+    #[tokio::test]
+    #[should_panic(expected = "validate_storage_config rejects --skip-existing with stdout target")]
+    async fn target_exists_stdio_target_is_unreachable() {
+        // validate_storage_config rejects --skip-existing with a stdout
+        // target, so this combination can only mean a validation bug — the
+        // guard must panic rather than answer.
+        let mut config = build_local_target_config("ignored");
+        config.target = StoragePath::Stdio;
+        let _ = target_exists(&config).await;
+    }
 }

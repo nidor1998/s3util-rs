@@ -717,6 +717,12 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "expected S3 storage path")]
+    fn empty_s3_storage_path_panics_on_non_s3_path() {
+        let _ = empty_s3_storage_path(&StoragePath::Stdio);
+    }
+
+    #[test]
     fn get_path_strings_formats_each_storage_kind() {
         let s3_with_prefix = StoragePath::S3 {
             bucket: "b".to_string(),
