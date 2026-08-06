@@ -5,6 +5,19 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.9.3] - 2026-08-06
+
+### Fixed
+
+- `cp`/`mv` interrupted by Ctrl+C (SIGINT) now always exit with code 130 (128 + SIGINT, the conventional shell
+  encoding for termination by signal). Most interrupted runs already did, but when the forced shutdown itself
+  surfaced a non-cancellation error — for example a body read blocked on a dead connection that stalled-stream
+  protection failed only after the signal arrived — the run was misreported as a transfer failure (`copy failed.`,
+  exit 1). Ctrl+C now takes precedence over any error produced by the shutdown it triggered, so scripts that
+  distinguish "interrupted by the user" from "failed" see the interruption. Uninterrupted runs are unaffected, a
+  worker failure that cancels the pipeline without a SIGINT is still reported as a failure (exit 1), and an
+  interrupted `mv` still never deletes the source object.
+
 ## [1.9.2] - 2026-08-02
 
 ### Fixed
