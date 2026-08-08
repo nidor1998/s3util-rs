@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.1] - 2026-08-08
+
+### Fixed
+
+- Some `cp`/`mv` argument-validation error messages were printed without a trailing newline, leaving the shell
+  prompt on the same line as the error (e.g. `error: source S3 URL ending in '/' is not supported: ...developer@host:~$`).
+  Affected were the messages rejecting a source S3 URL that ends in `/` and a source key whose final segment is
+  `.` or `..`; most other validation messages already ended correctly. All validation errors re-raised through
+  clap (`cp`/`mv` config validation and `rename` validation) are now guaranteed to end with exactly one newline.
+  Exit codes and the message texts themselves are unchanged.
+
 ## [1.10.0] - 2026-08-06
 
 ### Fixed
