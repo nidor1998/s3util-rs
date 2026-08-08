@@ -42,9 +42,7 @@ async fn main() -> ExitCode {
             let config = match Config::try_from(cp_args) {
                 Ok(config) => config,
                 Err(error_message) => {
-                    let _ =
-                        clap::Error::raw(clap::error::ErrorKind::ValueValidation, error_message)
-                            .print();
+                    print_validation_error(error_message);
                     return ExitCode::from(2);
                 }
             };
@@ -68,9 +66,7 @@ async fn main() -> ExitCode {
             let config = match Config::try_from(mv_args) {
                 Ok(config) => config,
                 Err(error_message) => {
-                    let _ =
-                        clap::Error::raw(clap::error::ErrorKind::ValueValidation, error_message)
-                            .print();
+                    print_validation_error(error_message);
                     return ExitCode::from(2);
                 }
             };
@@ -91,7 +87,7 @@ async fn main() -> ExitCode {
                 return print_completion_script(shell);
             }
             if let Err(e) = args.validate() {
-                let _ = clap::Error::raw(clap::error::ErrorKind::ValueValidation, e).print();
+                print_validation_error(e);
                 return ExitCode::from(2);
             }
             let tracing_config = args.build_tracing_config_dry_run(args.dry_run);
@@ -1145,6 +1141,18 @@ async fn main() -> ExitCode {
             return ExitCode::from(exit_code as u8);
         }
     }
+}
+
+/// Print a validation error to stderr in clap's error style.
+///
+/// `clap::Error::raw` prints the message verbatim — unlike clap's own
+/// formatted errors it does not append a trailing newline, so add one when
+/// the message lacks it.
+fn print_validation_error(mut error_message: String) {
+    if !error_message.ends_with('\n') {
+        error_message.push('\n');
+    }
+    let _ = clap::Error::raw(clap::error::ErrorKind::ValueValidation, error_message).print();
 }
 
 /// Render the shell-completion script for `shell` and print it pipe-safely.

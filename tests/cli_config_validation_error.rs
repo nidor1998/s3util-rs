@@ -42,6 +42,40 @@ fn both_local_paths_exit_non_zero_with_validation_message_on_stderr() {
 }
 
 #[test]
+fn validation_error_message_ends_with_exactly_one_newline() {
+    let bin = env!("CARGO_BIN_EXE_s3util");
+
+    // The trailing-'/' source message is one of the validation strings without
+    // a hand-embedded '\n'. clap::Error::raw prints the message verbatim, so
+    // without normalization in print_validation_error the shell prompt would
+    // land on the same line as the error.
+    let output = Command::new(bin)
+        .args(["cp", "s3://bucket/dir/", "/tmp/"])
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to spawn s3util binary");
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+
+    assert!(
+        !output.status.success(),
+        "trailing-'/' source must exit non-zero.\n--- stderr ---\n{stderr}"
+    );
+    assert!(
+        stderr.contains("not a prefix"),
+        "expected the trailing-'/' validation message on stderr.\n\
+         --- stderr ---\n{stderr}"
+    );
+    assert!(
+        stderr.ends_with('\n') && !stderr.ends_with("\n\n"),
+        "validation message must end with exactly one newline.\n\
+         --- stderr ---\n{stderr:?}"
+    );
+}
+
+#[test]
 fn source_no_sign_request_env_var_triggers_conflict_at_parse_time() {
     // Regression guard for the `env` attribute on `--source-no-sign-request`.
     //
