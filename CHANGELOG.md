@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-08-21
+
+Monthly update.
+
+### Security
+
+- Updated the transitive `h2` dependency to `v0.4.18`, remediating [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
+  ("h2 unbounded empty DATA frames"). `h2` reaches s3util through `hyper`, which the AWS SDK's HTTP client uses for the
+  HTTP/2 connections it opens to Amazon S3. Affected versions of `h2` accepted and queued empty HTTP/2 DATA frames
+  without any limit, so a peer that streamed them at a connection whose streams were not being actively drained could
+  drive unbounded memory growth in the client, or a panic if the queued length overflowed. Reaching that state requires
+  a hostile or compromised endpoint on the other side of the connection, which makes the practical exposure for s3util
+  talking to Amazon S3 low, and the advisory is rated low severity upstream. No s3util behavior, option, or output
+  changes.
+
+### Fixed
+
+- The JSON report from `put-object-annotation` and `get-object-annotation` omitted most of the checksums S3 can
+  return. `put-object-annotation` emitted only `ChecksumCRC64NVME`, dropping the other nine `x-amz-checksum-*` values,
+  and `get-object-annotation` omitted `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and
+  `ChecksumXXHASH128` — the algorithms s3util cannot recompute locally, which it already detects and reports on
+  elsewhere. An annotation written by another client under one of those algorithms therefore showed no checksum in the
+  report. Both commands now emit every checksum S3 returns, matching what `head-object` has always done. Only the JSON
+  report changes; the integrity verification both commands perform is unaffected.
+- `list-object-annotations` omitted `MaxAnnotationResults` and `ContinuationToken` from its JSON report. Both are
+  returned by S3, and without them a caller that sees `IsTruncated: true` cannot tell what page size was in effect or
+  which token produced the page it is holding. Both keys are now emitted, as explicit `null` when absent — matching how
+  the report already treats `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`, and `NextContinuationToken`.
+- `put-bucket-lifecycle-configuration` rejected `Date` values that are valid ISO 8601 and accepted by `aws s3api`. S3
+  documents the Lifecycle `Expiration`/`Transition` `Date` as ISO 8601, but only the RFC 3339 subset of it was
+  accepted, so the basic format (`20300102T030405Z`, `20300102`), offsets written without a colon (`+0900`) or as
+  hours only (`+09`), and a date-time carrying no offset at all (`2030-01-02T03:04:05`, read as UTC) all failed with
+  `invalid ISO 8601 timestamp`. All are now accepted and normalised to UTC. Validation is otherwise unchanged:
+  malformed values such as `2030-1-2`, and well-shaped but impossible ones such as `20301301` or `20300230T000000Z`,
+  are still rejected — and the error message now shows examples of the shapes that are accepted.
+
+### Changed
+
+- aws-sdk-s3 `v1.140.0 -> v1.143.0`
+- Updated other dependencies
+
 ## [1.10.1] - 2026-08-08
 
 ### Fixed

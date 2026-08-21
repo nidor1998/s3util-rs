@@ -129,9 +129,43 @@ pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
     if let Some(v) = out.e_tag() {
         map.insert("ETag".to_string(), Value::String(v.to_string()));
     }
+    // Every `x-amz-checksum-*` header S3 can echo back, not just the
+    // CRC64NVME this tool sends — the annotation may have been written by
+    // another client under a different algorithm. Same set as
+    // `head_object_to_json`.
+    if let Some(v) = out.checksum_crc32() {
+        map.insert("ChecksumCRC32".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_crc32_c() {
+        map.insert("ChecksumCRC32C".to_string(), Value::String(v.to_string()));
+    }
     if let Some(v) = out.checksum_crc64_nvme() {
         map.insert(
             "ChecksumCRC64NVME".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
+    if let Some(v) = out.checksum_sha1() {
+        map.insert("ChecksumSHA1".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_sha256() {
+        map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_sha512() {
+        map.insert("ChecksumSHA512".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_md5() {
+        map.insert("ChecksumMD5".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash64() {
+        map.insert("ChecksumXXHASH64".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash3() {
+        map.insert("ChecksumXXHASH3".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash128() {
+        map.insert(
+            "ChecksumXXHASH128".to_string(),
             Value::String(v.to_string()),
         );
     }
@@ -193,6 +227,27 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
     if let Some(v) = out.checksum_sha256() {
         map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
     }
+    // Algorithms s3util cannot recompute locally are still reported — the
+    // annotation may carry one, and `detect_checksum` in the get-object-annotation
+    // command relies on the same set being visible to the caller.
+    if let Some(v) = out.checksum_sha512() {
+        map.insert("ChecksumSHA512".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_md5() {
+        map.insert("ChecksumMD5".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash64() {
+        map.insert("ChecksumXXHASH64".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash3() {
+        map.insert("ChecksumXXHASH3".to_string(), Value::String(v.to_string()));
+    }
+    if let Some(v) = out.checksum_xxhash128() {
+        map.insert(
+            "ChecksumXXHASH128".to_string(),
+            Value::String(v.to_string()),
+        );
+    }
     if let Some(v) = out.checksum_type() {
         map.insert(
             "ChecksumType".to_string(),
@@ -226,11 +281,14 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
 /// Build AWS-CLI-shape JSON for a `ListObjectAnnotations` response.
 ///
 /// Unlike the sparse `get_*_to_json` serializers, this emits a stable key set:
-/// `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`, and
-/// `NextContinuationToken` are explicit `null` when absent, and `Bucket`, `Key`,
-/// `AnnotationCount`, `Annotations`, `IsTruncated` are always present.
+/// `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`,
+/// `MaxAnnotationResults`, `ContinuationToken`, and `NextContinuationToken` are
+/// explicit `null` when absent, and `Bucket`, `Key`, `AnnotationCount`,
+/// `Annotations`, `IsTruncated` are always present.
 /// `IsTruncated`/`NextContinuationToken` reflect that the wrapper makes a single
-/// request and does not follow pagination, so callers can detect a partial listing.
+/// request and does not follow pagination, so callers can detect a partial listing;
+/// `MaxAnnotationResults`/`ContinuationToken` echo the page bounds S3 applied, so
+/// a truncated listing can be resumed without re-deriving them.
 pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Value {
     let mut map = Map::new();
 
@@ -288,6 +346,17 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
             map.insert("AnnotationPrefix".to_string(), Value::Null);
         }
     }
+    match out.max_annotation_results() {
+        Some(v) => {
+            map.insert(
+                "MaxAnnotationResults".to_string(),
+                Value::Number(serde_json::Number::from(v)),
+            );
+        }
+        None => {
+            map.insert("MaxAnnotationResults".to_string(), Value::Null);
+        }
+    }
     match out.bucket() {
         Some(v) => {
             map.insert("Bucket".to_string(), Value::String(v.to_string()));
@@ -321,6 +390,17 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
         }
         None => {
             map.insert("RequestCharged".to_string(), Value::Null);
+        }
+    }
+    match out.continuation_token() {
+        Some(v) => {
+            map.insert(
+                "ContinuationToken".to_string(),
+                Value::String(v.to_string()),
+            );
+        }
+        None => {
+            map.insert("ContinuationToken".to_string(), Value::Null);
         }
     }
     // Truncation signal: the wrapper issues a single request (max 1000 results)
@@ -4458,6 +4538,94 @@ mod tests {
         assert_eq!(json["IsTruncated"], Value::Bool(true));
         // No annotations set → empty array (not null).
         assert_eq!(json["Annotations"], Value::Array(vec![]));
+    }
+
+    /// Every `x-amz-checksum-*` header S3 can return must reach the JSON, not
+    /// just the CRC64NVME this tool happens to send: an annotation written by
+    /// another client can carry any of them.
+    #[test]
+    fn put_object_annotation_to_json_emits_every_checksum_algorithm() {
+        use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
+
+        let out = PutObjectAnnotationOutput::builder()
+            .checksum_crc32("c32")
+            .checksum_crc32_c("c32c")
+            .checksum_crc64_nvme("c64")
+            .checksum_sha1("s1")
+            .checksum_sha256("s256")
+            .checksum_sha512("s512")
+            .checksum_md5("md5")
+            .checksum_xxhash64("x64")
+            .checksum_xxhash3("x3")
+            .checksum_xxhash128("x128")
+            .build();
+        let json = put_object_annotation_to_json(&out);
+
+        for (key, want) in [
+            ("ChecksumCRC32", "c32"),
+            ("ChecksumCRC32C", "c32c"),
+            ("ChecksumCRC64NVME", "c64"),
+            ("ChecksumSHA1", "s1"),
+            ("ChecksumSHA256", "s256"),
+            ("ChecksumSHA512", "s512"),
+            ("ChecksumMD5", "md5"),
+            ("ChecksumXXHASH64", "x64"),
+            ("ChecksumXXHASH3", "x3"),
+            ("ChecksumXXHASH128", "x128"),
+        ] {
+            assert_eq!(json[key], Value::String(want.into()), "{key} missing");
+        }
+    }
+
+    /// The algorithms s3util cannot recompute locally (SHA512, MD5, the XXHASH
+    /// family) are exactly the ones `detect_checksum` in the get-object-annotation
+    /// command looks for, so they must be visible in the JSON too.
+    #[test]
+    fn get_object_annotation_to_json_emits_unverifiable_checksum_algorithms() {
+        use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
+        use aws_sdk_s3::primitives::ByteStream;
+
+        let out = GetObjectAnnotationOutput::builder()
+            .annotation_payload(ByteStream::from_static(b""))
+            .checksum_sha512("s512")
+            .checksum_md5("md5")
+            .checksum_xxhash64("x64")
+            .checksum_xxhash3("x3")
+            .checksum_xxhash128("x128")
+            .build();
+        let json = get_object_annotation_to_json(&out);
+
+        for (key, want) in [
+            ("ChecksumSHA512", "s512"),
+            ("ChecksumMD5", "md5"),
+            ("ChecksumXXHASH64", "x64"),
+            ("ChecksumXXHASH3", "x3"),
+            ("ChecksumXXHASH128", "x128"),
+        ] {
+            assert_eq!(json[key], Value::String(want.into()), "{key} missing");
+        }
+    }
+
+    /// The page bounds S3 applied are part of the stable key set: without them
+    /// a caller that sees `IsTruncated: true` cannot tell what page size was in
+    /// effect or which token produced the page it is holding.
+    #[test]
+    fn list_object_annotations_to_json_echoes_page_bounds() {
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+
+        let out = ListObjectAnnotationsOutput::builder()
+            .max_annotation_results(100)
+            .continuation_token("tok-abc")
+            .build();
+        let json = list_object_annotations_to_json(&out);
+        assert_eq!(json["MaxAnnotationResults"], Value::Number(100.into()));
+        assert_eq!(json["ContinuationToken"], Value::String("tok-abc".into()));
+
+        // Absent on the first page → explicit null, like the other stable keys.
+        let first = ListObjectAnnotationsOutput::builder().build();
+        let json = list_object_annotations_to_json(&first);
+        assert_eq!(json["MaxAnnotationResults"], Value::Null);
+        assert_eq!(json["ContinuationToken"], Value::Null);
     }
 
     #[test]
