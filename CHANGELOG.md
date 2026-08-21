@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.2] - 2026-08-21
+
+Monthly update.
+
+### Security
+
+- Updated the transitive `h2` dependency to `v0.4.18`, remediating [RUSTSEC-2026-0258](https://rustsec.org/advisories/RUSTSEC-2026-0258)
+  ("h2 unbounded empty DATA frames"). `h2` reaches s3util through `hyper`, which the AWS SDK's HTTP client uses for the
+  HTTP/2 connections it opens to Amazon S3. Affected versions of `h2` accepted and queued empty HTTP/2 DATA frames
+  without any limit, so a peer that streamed them at a connection whose streams were not being actively drained could
+  drive unbounded memory growth in the client, or a panic if the queued length overflowed. Reaching that state requires
+  a hostile or compromised endpoint on the other side of the connection, which makes the practical exposure for s3util
+  talking to Amazon S3 low, and the advisory is rated low severity upstream. No s3util behavior, option, or output
+  changes.
+
+### Changed
+
+- aws-sdk-s3 `v1.140.0 -> v1.143.0`
+- Updated other dependencies
+
 ## [1.10.1] - 2026-08-08
 
 ### Fixed
