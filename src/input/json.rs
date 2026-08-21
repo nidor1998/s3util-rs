@@ -315,24 +315,109 @@ impl AbortIncompleteMultipartUploadJson {
 }
 
 fn parse_rfc3339(s: &str) -> Result<DateTime> {
-    // S3 documents Lifecycle/Transition `Date` as ISO 8601, which admits
-    // bare `YYYY-MM-DD`; promote a date-only string to midnight UTC first.
-    let bytes = s.as_bytes();
-    let normalised = if bytes.len() == 10 && bytes[4] == b'-' && bytes[7] == b'-' {
-        format!("{s}T00:00:00Z")
-    } else {
-        s.to_string()
-    };
-    // Parse with chrono rather than the smithy `Format::DateTime` parser:
-    // the latter accepts only a trailing `Z`, but ISO 8601 also admits
-    // numeric offsets — and `get-bucket-lifecycle-configuration` itself
-    // emits `+00:00`, so the smithy parser broke the GET -> PUT round-trip.
-    let dt = chrono::DateTime::parse_from_rfc3339(&normalised)
-        .map_err(|e| anyhow::anyhow!("invalid ISO 8601 timestamp {s:?}: {e}"))?;
+    let dt = parse_iso8601(s).ok_or_else(|| {
+        anyhow::anyhow!(
+            "invalid ISO 8601 timestamp {s:?}: expected a date (\"2024-01-01\") or a date-time \
+             (\"2024-01-01T00:00:00Z\", \"2024-01-01T00:00:00+09:00\")"
+        )
+    })?;
     Ok(DateTime::from_secs_and_nanos(
         dt.timestamp(),
         dt.timestamp_subsec_nanos(),
     ))
+}
+
+/// Parse the ISO 8601 profiles S3 documents for Lifecycle/Transition `Date`,
+/// normalising to UTC.
+///
+/// Parsing is done with chrono rather than the smithy `Format::DateTime`
+/// parser: the latter accepts only a trailing `Z`, but ISO 8601 also admits
+/// numeric offsets — and `get-bucket-lifecycle-configuration` itself emits
+/// `+00:00`, so the smithy parser broke the GET -> PUT round-trip.
+///
+/// RFC 3339 alone is not enough either: it is a strict subset of ISO 8601 and
+/// rejects the basic format (`20240101T000000Z`), colon-less offsets
+/// (`+0000`), and a date-time with no offset at all — all of which the AWS CLI
+/// accepts, so rejecting them would turn valid input into an error.
+fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    // The common case, and what our own `get-bucket-lifecycle-configuration`
+    // emits.
+    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
+        return Some(dt);
+    }
+    chrono::DateTime::parse_from_rfc3339(&normalise_iso8601(s)?).ok()
+}
+
+/// Rewrite the ISO 8601 spellings RFC 3339 rejects into RFC 3339 form, so that
+/// a single strict parser still validates every accepted input. Handles the
+/// basic format (`20240101`, `20240101T000000Z`), offsets written `+09` or
+/// `+0900`, and a date-time with no offset at all (read as UTC — what the AWS
+/// CLI does, and the only zone S3 renders the field in).
+///
+/// Returns `None` when the input is not one of those forms. Rewriting only
+/// moves separators around: the result is still handed to the RFC 3339 parser,
+/// so a well-shaped but nonsensical value such as `20241301` is rejected there
+/// rather than smuggled through, and loose spellings like `2030-1-2` — which
+/// ISO 8601 does not admit — keep failing as before.
+fn normalise_iso8601(s: &str) -> Option<String> {
+    fn all_digits(b: &[u8]) -> bool {
+        b.iter().all(u8::is_ascii_digit)
+    }
+    /// Split a time-of-day from its trailing zone designator, if any.
+    fn split_offset(tail: &str) -> (&str, &str) {
+        if tail.ends_with(['Z', 'z']) {
+            return (&tail[..tail.len() - 1], "Z");
+        }
+        // A time-of-day never contains `+`/`-`, so either introduces the offset.
+        match tail.rfind(['+', '-']) {
+            Some(i) => (&tail[..i], &tail[i..]),
+            None => (tail, ""),
+        }
+    }
+
+    let expand_date = |d: &str| -> String {
+        if d.len() == 8 && all_digits(d.as_bytes()) {
+            format!("{}-{}-{}", &d[0..4], &d[4..6], &d[6..8])
+        } else {
+            d.to_string()
+        }
+    };
+
+    // A bare calendar date, basic or extended: promote to midnight UTC.
+    let b = s.as_bytes();
+    if (b.len() == 8 && all_digits(b)) || (b.len() == 10 && b[4] == b'-' && b[7] == b'-') {
+        return Some(format!("{}T00:00:00Z", expand_date(s)));
+    }
+
+    let (date, tail) = s.split_once('T')?;
+    let (time, offset) = split_offset(tail);
+
+    // `HHMMSS[.frac]` -> `HH:MM:SS[.frac]`.
+    let time = if !time.contains(':') && time.len() >= 6 && all_digits(&time.as_bytes()[..6]) {
+        format!(
+            "{}:{}:{}{}",
+            &time[0..2],
+            &time[2..4],
+            &time[4..6],
+            &time[6..]
+        )
+    } else {
+        time.to_string()
+    };
+
+    // The digit guards keep the slicing on ASCII boundaries — the offset is
+    // arbitrary user input, so a multi-byte char here would otherwise panic —
+    // and anything that fails them falls through to the RFC 3339 parser, which
+    // rejects it.
+    let ob = offset.as_bytes();
+    let offset = match ob.len() {
+        0 => "Z".to_string(),                                 // no zone given
+        3 if all_digits(&ob[1..3]) => format!("{offset}:00"), // `+09`
+        5 if all_digits(&ob[1..5]) => format!("{}:{}", &offset[..3], &offset[3..]), // `+0900`
+        _ => offset.to_string(),                              // `Z`, `+09:00`, …
+    };
+
+    Some(format!("{}T{}{}", expand_date(date), time, offset))
 }
 
 /// Mirror of `ServerSideEncryptionConfiguration` for the AWS-CLI input shape.
@@ -2951,6 +3036,108 @@ mod tests {
         let cfg = parsed.into_sdk().unwrap();
         let date = cfg.rules()[0].transitions()[0].date().expect("date set");
         assert_eq!(date.secs(), 1_893_553_445);
+    }
+
+    // ----- ISO 8601 spellings RFC 3339 alone rejects -----
+
+    /// Every one of these is valid ISO 8601 and accepted by `aws s3api`, so
+    /// rejecting them would turn valid input into an error. All denote the
+    /// same instant as `2030-01-02T03:04:05Z` (epoch 1_893_553_445).
+    #[test]
+    fn lifecycle_expiration_accepts_iso8601_beyond_rfc3339() {
+        for date in [
+            "2030-01-02T03:04:05Z",     // RFC 3339 (baseline)
+            "2030-01-02T03:04:05",      // no offset -> read as UTC
+            "2030-01-02T03:04:05+0000", // offset without a colon
+            "2030-01-02T03:04:05+00",   // hour-only offset
+            "20300102T030405Z",         // basic format
+            "20300102T030405",          // basic format, no offset
+            "20300102T030405+0000",     // basic format, colon-less offset
+            "2030-01-02T12:04:05+0900", // colon-less non-UTC offset
+            "20300102T120405+0900",     // basic format, non-UTC offset
+        ] {
+            let json =
+                format!(r#"{{"Rules":[{{"Status":"Enabled","Expiration":{{"Date":"{date}"}}}}]}}"#);
+            let parsed: LifecycleConfigurationJson = serde_json::from_str(&json).unwrap();
+            let cfg = parsed
+                .into_sdk()
+                .unwrap_or_else(|e| panic!("{date} must be accepted: {e}"));
+            assert_eq!(
+                cfg.rules()[0].expiration().unwrap().date().unwrap().secs(),
+                1_893_553_445,
+                "{date} must normalise to 2030-01-02T03:04:05Z"
+            );
+        }
+    }
+
+    /// A bare calendar date in the basic format is midnight UTC, matching the
+    /// extended-format `2030-01-02` behaviour.
+    #[test]
+    fn lifecycle_expiration_basic_format_date_only_is_midnight_utc() {
+        let json = r#"{"Rules":[{"Status":"Enabled","Expiration":{"Date":"20300102"}}]}"#;
+        let parsed: LifecycleConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        assert_eq!(
+            cfg.rules()[0].expiration().unwrap().date().unwrap().secs(),
+            1_893_542_400
+        );
+    }
+
+    /// Normalising must not become a way to smuggle nonsense past validation:
+    /// the rewritten string is still parsed strictly.
+    #[test]
+    fn lifecycle_well_shaped_but_invalid_dates_still_error() {
+        for date in [
+            "20301301",              // month 13, basic format
+            "20300230T000000Z",      // 30 February
+            "2030-01-02T25:04:05Z",  // hour 25
+            "20300102T030405+9999",  // impossible offset
+            "2030-01-02T03:04:05+0", // truncated offset
+            "T030405Z",              // no date
+            "2030-01-02T",           // no time
+            "20300102030405",        // no date/time separator
+        ] {
+            let json =
+                format!(r#"{{"Rules":[{{"Status":"Enabled","Expiration":{{"Date":"{date}"}}}}]}}"#);
+            let parsed: LifecycleConfigurationJson = serde_json::from_str(&json).unwrap();
+            assert!(
+                parsed.into_sdk().is_err(),
+                "{date} must be rejected, not silently normalised"
+            );
+        }
+    }
+
+    /// `Date` is arbitrary user input, so the normaliser must never panic —
+    /// notably it must not byte-slice through a multi-byte char.
+    #[test]
+    fn lifecycle_hostile_dates_error_without_panicking() {
+        for date in [
+            // 5-byte offsets whose byte 3 falls *inside* a char: the exact
+            // shape that panics if the slicing is done unguarded.
+            "2030-01-02T00:00:00+a\u{20ac}", // `+` + `a` + 3-byte `\u{20ac}`
+            "2030-01-02T00:00:00+\u{1f600}", // `+` + 4-byte emoji
+            "2030-01-02T00:00:00-a\u{20ac}", // same, negative offset
+            "2030-01-02T00:00:00+\u{e9}\u{e9}", // 5-byte offset, boundary-aligned
+            "2030-01-02T00:00:00\u{e9}",     // multi-byte where a zone would go
+            "2030-01-02T\u{e9}\u{e9}\u{e9}Z", // multi-byte time-of-day
+            "\u{e9}\u{e9}\u{e9}\u{e9}T000000Z", // 8-byte non-ASCII "date"
+            "\u{1f600}\u{1f600}",            // emoji only
+            "T",
+            "",
+            "Z",
+            "----------",
+            "++++++++T++++++",
+        ] {
+            let parsed = LifecycleExpirationJson {
+                Date: Some(date.to_string()),
+                Days: None,
+                ExpiredObjectDeleteMarker: None,
+            };
+            assert!(
+                parsed.into_sdk().is_err(),
+                "{date:?} must error, not panic or parse"
+            );
+        }
     }
 
     #[test]

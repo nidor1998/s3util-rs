@@ -20,6 +20,27 @@ Monthly update.
   talking to Amazon S3 low, and the advisory is rated low severity upstream. No s3util behavior, option, or output
   changes.
 
+### Fixed
+
+- The JSON report from `put-object-annotation` and `get-object-annotation` omitted most of the checksums S3 can
+  return. `put-object-annotation` emitted only `ChecksumCRC64NVME`, dropping the other nine `x-amz-checksum-*` values,
+  and `get-object-annotation` omitted `ChecksumSHA512`, `ChecksumMD5`, `ChecksumXXHASH64`, `ChecksumXXHASH3`, and
+  `ChecksumXXHASH128` — the algorithms s3util cannot recompute locally, which it already detects and reports on
+  elsewhere. An annotation written by another client under one of those algorithms therefore showed no checksum in the
+  report. Both commands now emit every checksum S3 returns, matching what `head-object` has always done. Only the JSON
+  report changes; the integrity verification both commands perform is unaffected.
+- `list-object-annotations` omitted `MaxAnnotationResults` and `ContinuationToken` from its JSON report. Both are
+  returned by S3, and without them a caller that sees `IsTruncated: true` cannot tell what page size was in effect or
+  which token produced the page it is holding. Both keys are now emitted, as explicit `null` when absent — matching how
+  the report already treats `AnnotationPrefix`, `ObjectVersionId`, `RequestCharged`, and `NextContinuationToken`.
+- `put-bucket-lifecycle-configuration` rejected `Date` values that are valid ISO 8601 and accepted by `aws s3api`. S3
+  documents the Lifecycle `Expiration`/`Transition` `Date` as ISO 8601, but only the RFC 3339 subset of it was
+  accepted, so the basic format (`20300102T030405Z`, `20300102`), offsets written without a colon (`+0900`) or as
+  hours only (`+09`), and a date-time carrying no offset at all (`2030-01-02T03:04:05`, read as UTC) all failed with
+  `invalid ISO 8601 timestamp`. All are now accepted and normalised to UTC. Validation is otherwise unchanged:
+  malformed values such as `2030-1-2`, and well-shaped but impossible ones such as `20301301` or `20300230T000000Z`,
+  are still rejected — and the error message now shows examples of the shapes that are accepted.
+
 ### Changed
 
 - aws-sdk-s3 `v1.140.0 -> v1.143.0`
