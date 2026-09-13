@@ -1121,73 +1121,86 @@ A careful operator should treat exit code 3 as an unresolved verification result
 <details>
 <summary>Click to expand the full assessment</summary>
 
-Assessment date: 2026-07-21.
+- **LLM:** Gemini
+- **Model:** Gemini 3.8 Flash
+- **Effort:** High
+- **Assessment Date:** 2026-09-13
+- **Assessed Version:** 1.10.2 (branch `main`, commit `16ffe39`)
 
-Assessed version: 1.8.0 (branch `main`, commit `bc1d9ad`).
-
-Scope & Methodology: This assessment was executed from scratch at v1.8.0 with a comprehensive evaluation of all 165 Rust source files under `src/` (~57,744 lines of code), 115 test files under `tests/` and `src/` (2,853 total test annotations), dependency graph (`Cargo.lock`, `deny.toml`), GitHub Actions workflows (`.github/workflows/`), and coverage reports (`llvm-cov-report.txt` and `lcov.info` generated from a combined unit + CLI + `--cfg e2e_test` live-AWS run).
+**Scope & Methodology:** This assessment was conducted from scratch for v1.10.2 without referencing previous AI evaluations. The audit evaluated the entire codebase without omission: all 166 Rust source files under `src/` (59,895 lines of code), 120 test files under `tests/` and `src/` (2,934 total test annotations), dependency definitions (`Cargo.toml`, `Cargo.lock`, `deny.toml`), CI/CD workflows (`.github/workflows/`), and coverage reports (`llvm-cov-report.txt` and `lcov.info` generated from a combined unit + CLI + `--cfg e2e_test` live-AWS run).
 
 #### 1. Quantitative Quality & Test Metrics
 
-- **Production Code Surface:** ~57,744 lines of Rust across 165 source files in `src/`.
-- **Test Corpus Volume:** 2,853 test annotations across 115 test files:
-  - **Unit Tests:** 1,554 `#[test]` / `#[tokio::test]` annotations embedded within `src/`.
-  - **CLI Integration Tests:** 466 annotations across 58 files (`tests/cli_*.rs`), executing offline process invocations to verify argument parsing, exit codes, stderr formatting, and clap env binding.
-  - **Live-AWS E2E Tests:** 833 annotations across 57 files (`tests/e2e_*.rs`), gated behind `#![cfg(e2e_test)]` for live Amazon S3 validation.
+- **Production Code Surface:** 59,895 lines of Rust across 166 source files in `src/`.
+- **Test Corpus Volume:** 2,934 test annotations across 120 test files:
+  - **Embedded Unit Tests:** 1,611 `#[test]` / `#[tokio::test]` annotations within `src/`.
+  - **CLI Integration Tests:** 485 annotations across 61 files (`tests/cli_*.rs`), executing offline process invocations verifying argument parsing, clap validation, env binding, exit codes, stderr/stdout formatting, and pipe safety.
+  - **Live-AWS E2E Tests:** 838 annotations across 58 files (`tests/e2e_*.rs`), gated behind `#![cfg(e2e_test)]` for live Amazon S3 validation.
 - **Combined Code Coverage (`llvm-cov-report.txt`):**
-  - **Line Coverage:** 98.64% (35,228 / 35,714 lines covered; 486 missed).
-  - **Region Coverage:** 97.71% (49,888 / 51,055 regions covered; 1,167 missed).
-  - **Function Coverage:** 96.46% (3,512 / 3,641 functions covered; 129 missed).
+  - **Line Coverage:** 98.61% (36,673 / 37,189 lines covered; 516 missed).
+  - **Region Coverage:** 97.74% (51,899 / 53,100 regions covered; 1,201 missed).
+  - **Function Coverage:** 96.15% (3,644 / 3,790 functions executed; 146 missed).
 - **Critical Subsystem Coverage Highlights:**
-  - Digest & Checksum implementations (`storage/checksum/*`): **100.00%** region and line coverage across CRC32, CRC32C, CRC64NVME, SHA1, and SHA256 modules.
+  - Digest & Checksum implementations (`storage/checksum/*`): **100.00%** region, function, and line coverage across CRC32, CRC32C, CRC64NVME, SHA1, SHA256, and algorithm dispatcher modules.
+  - Annotation helpers (`storage/annotation.rs`): **100.00%** region, function, and line coverage (235 regions, 23 functions, 145 lines).
   - Verification modules: `storage/e_tag_verify.rs` (98.76% region, 99.42% line), `storage/additional_checksum_verify.rs` (98.51% region, 99.26% line).
-  - Transfer engine: `transfer/` modules range from **98.08%** to **100.00%** region coverage; `upload_manager.rs` achieves **95.91%** region and **95.07%** line coverage.
-  - API & Serde layers: `storage/s3/api.rs` (99.01% region, 99.70% line), `input/json.rs` (98.34% region, 99.95% line), `output/json.rs` (99.23% region, 99.69% line).
-- **Static Analysis & Supply Chain Controls:** 0 clippy warnings (`cargo clippy --all-features`), 0 formatting diffs (`cargo fmt --all --check`), clean dependency check via `cargo-deny` with zero advisory ignores (`advisories.ignore = []`).
+  - Transfer engine: `transfer/mod.rs` (100.00% region, line), `transfer/progress.rs` (100.00% region, line), `transfer/stdio_to_s3.rs` (99.35% region, 99.70% line), `transfer/s3_to_local.rs` (99.24% region, 99.60% line), `transfer/s3_to_s3.rs` (99.02% region, 99.70% line), `transfer/s3_to_stdio.rs` (98.55% region, 98.64% line), `transfer/local_to_s3.rs` (98.39% region, 99.13% line), `transfer/first_chunk.rs` (98.08% region, 98.81% line), `storage/s3/upload_manager.rs` (96.00% region, 95.39% line).
+  - CLI, Pipe Safety & Signal Handling: `bin/s3util/pipe_safe.rs` (99.11% region, 98.68% line), `bin/s3util/cli/ctrl_c_handler.rs` (98.77% region, 98.06% line), `bin/s3util/cli/mv.rs` (97.83% region, 99.08% line), `bin/s3util/cli/cp.rs` (95.83% region, 98.28% line), `bin/s3util/main.rs` (95.90% region, 99.44% line).
+  - API & Serde layers: `storage/s3/api.rs` (99.01% region, 99.70% line), `storage/s3/client_builder.rs` (99.08% region, 99.71% line), `input/json.rs` (98.41% region, 99.91% line), `output/json.rs` (99.27% region, 99.63% line), `storage/local/fs_util.rs` (97.87% region, 98.79% line), `storage/local/mod.rs` (96.93% region, 98.12% line), `types/mod.rs` (98.95% region, 100.00% line).
+- **Static Analysis & Supply Chain Controls:** 0 compiler warnings, 0 clippy warnings (`cargo clippy --all-targets --all-features -- -D warnings`), 0 formatting diffs (`cargo fmt --all -- --check`), clean dependency check via `cargo-deny` with zero advisory ignores (`advisories.ignore = []`), no banned crates (`openssl-sys` explicitly banned).
 
 #### 2. Data Integrity & Transfer Reliability Safeguards
 
-- **End-to-End Digest Verification:** The `UploadManager` computes full-object digests and per-part hashes. Single-part and multipart uploads calculate and send `Content-MD5` headers by default (`upload_manager.rs:1859-1871`), verifying transfer integrity on the server side unless explicitly disabled with `--disable-content-md5-header`.
-- **Version-Pinned Reads:** Mid-transfer overwrite protection is enforced on versioned buckets (`s3_to_s3.rs:77-80`, `s3_to_local.rs:60-63`). Initial `HeadObject` calls capture the source version ID, which is attached to all subsequent ranged GETs, copy operations, and checksum calls.
-- **Atomic Local Downloads:** Downloads write to a `NamedTempFile` within the destination directory (`fs_util.rs:81-103`). Verification (ETag, additional checksums, byte totals) completes before the file is atomically renamed into place. On any error or signal interrupt, temp files are cleaned up immediately.
-- **Stream Transmit Safety:** Stdio transfers (`cp s3://... -` and `cp - s3://...`) process input/output streams incrementally while computing checksums without risking buffer overflow or premature EOF truncation (`s3_to_stdio.rs:252-303`).
-- **Four-Gate Transactional Move (`mv`):** For `mv` operations, source object deletion is guarded by a multi-gate check (`cli/mv.rs:93-155`): (1) no cancellation signal, (2) zero transfer exit code, (3) integrity verification pass (or explicit `--no-fail-on-verify-error`), and (4) a final cancellation re-check before issuing `DeleteObject`.
-- **Graceful Signal Handling:** Interrupt signals (SIGINT/Ctrl-C) during transfers activate a dedicated handler (`ctrl_c_handler.rs`) that signals `CancellationToken`, triggers best-effort `AbortMultipartUpload` to avoid orphaned AWS resources, and exits with code 130.
+- **Comprehensive Digest Computation:** The `UploadManager` precalculates full-object and per-part hashes across CRC32, CRC32C, CRC64NVME, SHA1, and SHA256. Single-part and multipart uploads calculate and send `Content-MD5` headers by default (`upload_manager.rs`), ensuring server-side validation during transit unless explicitly disabled via `--disable-content-md5-header`.
+- **Mid-Transfer Version Pinning:** Mid-transfer overwrite protection is enforced on versioned buckets (`transfer/s3_to_s3.rs`, `transfer/s3_to_local.rs`). Initial `HeadObject` calls capture the source version ID, attaching it to all subsequent ranged GETs, copy operations, and checksum calls to prevent interleaved multi-version reads.
+- **Atomic Local Downloads:** Downloads write to a `NamedTempFile` within the destination directory (`storage/local/fs_util.rs`, `storage/local/mod.rs`). Full-object integrity checks (ETag, additional checksums, byte totals) complete on the temporary file prior to persistence. Only upon verification success is the file atomically moved into place via `temp_file.persist()`. On any failure or signal cancellation, the temporary file is dropped and removed immediately.
+- **Safe Part-Sizing Defense:** In multipart download verification (`storage/e_tag_verify.rs`, `storage/additional_checksum_verify.rs`), part sizes reported by remote endpoints are checked against remaining unread bytes prior to allocating memory, preventing out-of-memory denial-of-service from non-compliant or hostile endpoints.
+- **Shape-Aware ETag Classification:** The transfer engine distinguishes genuine ETag corruptions from structural chunking mismatches (`upload_manager.rs:is_chunksize_related_e_tag_mismatch`), preventing false-positive corruption errors when copying objects uploaded via single PUT but transferred via multipart.
+- **S3 Express OneZone Integration:** Native directory bucket support incorporates CRC64NVME default checksums, session token authentication, and atomic within-bucket server-side renames via `rename_object`.
 
-#### 3. Operational Safety & Scope Containment
+#### 3. Operational Safety, Transactional Move & Scope Containment
 
-- **Strict Resource Isolation:** All 52 subcommands operate on exactly one target resource per invocation (single object, bucket, or subresource). Multi-object wildcards, recursive directory traversals, and multi-source copies are prohibited by design.
-- **Pre-flight Argument & URL Validation:** CLI arguments undergo strict shape validation (`storage_path.rs`), enforcing bucket-only URLs for bucket subcommands and key-containing URLs for object subcommands, exiting with status 2 on mismatch.
-- **Self-Move Prevention:** `mv` executes `check_not_self_move` (`cli/mv.rs:39-91`), comparing normalized bucket and key destinations to prevent self-overwriting data loss.
-- **Choice-Enforcing ArgGroups:** Subcommands modifying bucket states (`put-bucket-versioning`, `put-bucket-accelerate-configuration`, `put-bucket-request-payment`) require explicit state selection via clap `ArgGroup` and `validate_state_flag` (exit 2 on omission).
-- **Dry-run Execution:** All 32 mutating subcommands support `--dry-run`. It executes full argument validation and JSON parsing, elevates logging verbosity to `info`, prints `[dry-run]` preview notifications, and short-circuits prior to executing network mutations.
+- **Strict Resource Isolation:** All 52 subcommands operate on exactly one target resource per invocation (single object, bucket, or subresource). Multi-object wildcards, recursive traversals, and multi-source copies are prohibited by design.
+- **Self-Move Prevention:** The `mv` command executes `check_not_self_move` (`bin/s3util/cli/mv.rs`), comparing normalized source and destination buckets, keys, and endpoints to prevent self-overwriting data loss, while allowing intentional version promotions.
+- **Four-Gate Transactional Move:** Moving an object is guarded by a sequential four-gate verification barrier before source deletion is issued (`bin/s3util/cli/mv.rs:apply_mv_decision_tree`):
+  1. Cancellation check: pipeline interruption immediately halts without deletion.
+  2. Transfer error check: non-zero transfer exit codes abort before deletion.
+  3. Integrity verification check: ETag or checksum warnings abort deletion unless explicitly overridden with `--no-fail-on-verify-error`.
+  4. Defensive re-check: verifies cancellation status immediately prior to dispatching `DeleteObject`.
+- **Choice-Enforcing ArgGroups:** Subcommands modifying bucket states (`put-bucket-versioning`, `put-bucket-accelerate-configuration`, `put-bucket-request-payment`) enforce explicit configuration choices via clap `ArgGroup` and validation checks, exiting with status 2 on omission.
+- **Universal `--dry-run` Implementation:** All 32 mutating subcommands implement `--dry-run`. It executes full CLI validation, schema deserialization, elevates logging verbosity to `info`, logs planned actions, and safely terminates prior to network mutation.
 
-#### 4. Thin S3 API Wrappers & Schema Validation
+#### 4. UNIX Process Ergonomics & Resiliency
 
-- **Strict Input Deserialization:** All 54 input payload structures in `src/input/json.rs` carry `#[serde(deny_unknown_fields)]`. Misspelled or unrecognized JSON fields fail parsing immediately with descriptive error messages.
-- **AWS CLI v2 Compatible Output:** 20 hand-written serializers in `src/output/json.rs` match AWS CLI output specifications, including double-encoded policy strings and `{}` responses for unconfigured resources.
-- **HTTP Error Classification:** `classify_not_found` (`src/storage/s3/api.rs:356-364`) maps HTTP 404, `NoSuchKey`, and `NoSuchBucket` errors across 21 API constants to exit code 4 (`NotFound`).
-- **Requester-Pays Plumbing:** `--target-request-payer` is plumbed across all supported object-level wrappers (`head-object`, `rm`, tagging, annotations, `restore-object`, `presign`).
+- **Pipe-Safe Command Output:** Dedicated pipe safety handling (`bin/s3util/pipe_safe.rs`) intercepts stdout writes for all command reports, presigned URLs, and shell completion scripts. Downstream pipe closures (`EPIPE` / `BrokenPipe`) from consumers like `head`, `grep -q`, or pagers are caught and exit 0 cleanly rather than crashing with OS error 32. In contrast, object data downloads to stdout (`cp s3://... -`) strictly fail with exit code 1 on broken pipes to signal truncated data.
+- **Signal Cancellation Precedence:** Interrupt signals (SIGINT/Ctrl-C) during transfers are captured by `ctrl_c_handler.rs` via an atomic flag (`CTRL_C_RECEIVED`), ensuring Ctrl-C takes precedence over subsequent shutdown or stalled-stream errors, guaranteeing shell exit code 130 and triggering best-effort `AbortMultipartUpload` cleanup.
+- **Decoupled Positional Arguments:** Positional arguments (`source`, `target`) do not bind to ambient shell environment variables (`SOURCE`/`TARGET`), eliminating unintended argument overrides in script environments.
+- **Error Formatting Consistency:** Trailing newlines are guaranteed across all CLI validation errors re-raised through clap.
 
-#### 5. Security Model, Memory Safety & Supply Chain
+#### 5. S3 API Schema & Deserialization Strictness
 
-- **Credential Redaction & Zeroization:** Sensitive parameters (`AccessKeys`, `SseKmsKeyId`, `SseCustomerKey`) implement `Zeroize` + `ZeroizeOnDrop` (`types/mod.rs:415-462`) and redact output representation as `** redacted **`.
-- **Help-Text Privacy:** All secret environment variables set `hide_env_values`, preventing credential leaks when running `--help` (`src/config/args/tests.rs:1889-1917`).
-- **TLS & Modern Dependency Stack:** Modern TLS is enforced using `rustls 0.23.42` with `aws-lc-rs 1.17.3` crypto backend and OS native trust anchors; legacy `rustls 0.21` is explicitly excluded (`Cargo.toml:24-27`). `openssl-sys` is banned in `deny.toml`.
-- **Build Provenance:** CI release pipelines (`cd.yml`) utilize SLSA Build Level 3 provenance attestations (`actions/attest-build-provenance@v4`) and crates.io OIDC trusted publishing.
+- **Strict Input Deserialization:** 55 input payload structures in `src/input/json.rs` enforce `#[serde(deny_unknown_fields)]`. Misspelled or unrecognized fields fail parsing immediately with clear diagnostic errors.
+- **Flexible ISO 8601 Date Handling:** The lifecycle date parser (`src/input/json.rs:parse_iso8601`) normalizes RFC 3339, basic ISO 8601 (`YYYYMMDDTHHMMSSZ`), bare calendar dates, and non-standard numeric offsets (`+00:00`, `+0900`) to UTC, completely resolving previous round-trip parsing failures between GET output and PUT input.
+- **AWS CLI v2 Compatible Output:** 20 hand-crafted serializers in `src/output/json.rs` match AWS CLI output specifications, including double-encoded policy strings and `{}` responses for unconfigured subresources.
+- **Structured Error Classification:** `classify_not_found` and `classify_object_annotation_not_found` map HTTP 404, `NoSuchKey`, `NoSuchBucket`, and `NoSuchAnnotation` cleanly to exit code 4 (`NotFound`).
 
-#### 6. Verification Gaps & Known Limitations
+#### 6. Security Model, Secrets Management & Supply Chain
 
-- **Lifecycle Date Round-Trip Parsing Discrepancy:** `get-bucket-lifecycle-configuration` formats `Date` fields as RFC 3339 with a `+00:00` offset (`output/json.rs:775, 794`), whereas `put-bucket-lifecycle-configuration` uses Smithy `DateTime` expecting a `Z` suffix (`input/json.rs:327`). Piping GET output into PUT fails closed with an ISO 8601 timestamp error (no data corruption occurs; editing `+00:00` to `Z` works around it).
-- **Sparse `put-public-access-block` JSON Deserialization:** Supplying empty JSON (`{}`) to `put-public-access-block` defaults absent boolean fields to `false`, disabling all four access block protections. While consistent with AWS CLI v2 semantics, operators must ensure complete JSON payloads are provided.
-- **Download ETag Warning Classification:** Download ETag mismatches emit an exit code 3 warning while retaining the file; full-object checksum and part byte-count mismatches trigger hard exit code 1 failures. Single-part SSE-C/KMS downloads lack an independent byte-count fallback.
-- **Non-durable File Writes:** Download file completion renames temp files into place without issuing `fsync`, meaning sudden host power loss immediately post-download could lose un-flushed disk cache.
-- **Environment Variable Fallbacks:** Positional parameters backed by `clap(env)` can pick up ambient shell environment variables (e.g. `TARGET`), requiring care in automated script environments.
-- **E2E Suite CI Gating:** The 833 live-AWS integration tests require active AWS credentials and are executed only during maintainer verification passes (`#![cfg(e2e_test)]`), while standard CI validates unit and CLI integration suites offline.
+- **Cryptographic Secret Zeroization:** Sensitive parameters (`AccessKeys`, `SseKmsKeyId`, `SseCustomerKey`) implement `Zeroize` and `ZeroizeOnDrop` (`types/mod.rs`), wiping secrets from memory when dropped.
+- **Secret Redaction & Privacy:** Custom `Debug` implementations render sensitive keys as `** redacted **`. CLI help definitions configure `hide_env_values`, preventing credential leaks when invoking `--help` in environments with exported secret variables.
+- **Modern TLS Stack:** Modern TLS is enforced using `rustls 0.23` with the `aws-lc-rs` crypto backend; legacy `rustls 0.21` is explicitly excluded (`Cargo.toml`). `openssl-sys` is strictly banned in `deny.toml`.
+- **Active Supply Chain Auditing:** Dependency audits via `cargo-deny` show 0 vulnerabilities and 0 advisories (transitive `h2` updated to remediate RUSTSEC-2026-0258). Release workflows enforce SLSA Build Level 3 provenance attestations and crates.io OIDC trusted publishing.
+
+#### 7. Residual Verification Boundaries & Operational Limits
+
+- **Non-durable Local Disk Writes:** Atomic local file persistence uses filesystem `rename(2)` (`temp_file.persist()`) without calling `fsync()` on the written file descriptor or containing directory; abrupt operating system failure or power loss before disk cache flush could risk loss of newly written data.
+- **Sparse `put-public-access-block` JSON Deserialization:** Mirroring AWS CLI v2 semantics, omitting boolean fields in the JSON payload defaults them to `false`; supplying an empty JSON object `{}` disables all four public access block protections.
+- **Download ETag Warning Classification:** Mismatched download ETags emit an exit code 3 warning while retaining the persisted file, whereas byte-count discrepancies and additional-checksum mismatches fail hard with exit code 1.
+- **Offline vs Live Test Gating:** The 838 live-AWS integration tests require real AWS infrastructure (`#![cfg(e2e_test)]`), while standard CI validates unit and CLI suites offline.
 
 #### Overall Conclusion
 
-Is this software reliable? **Yes, conditionally.** At v1.8.0, `s3util` is technically sound for production Amazon S3 management. Its transfer engine and API wrappers are backed by comprehensive coverage metrics (98.64% line coverage across ~57.7k LOC) and rigorous cryptographic digest checks. Operators should treat `--dry-run`, exit code inspection (notably exit code 3 warnings), bucket versioning, and IAM privilege boundaries as required operational controls.
+Is this software reliable? **Yes, conditionally.** At v1.10.2, `s3util` demonstrates high technical correctness, architectural discipline, and defensive robustness for Amazon S3 operations. The transfer subsystem and API wrappers are backed by comprehensive automated test coverage (98.61% line coverage across ~59.9k LOC), robust checksum verification, and resilient UNIX process handling. Operators must maintain awareness of the operational boundaries—specifically noting that download ETag mismatches yield exit code 3 warnings rather than hard failures, and ensuring that bucket versioning, `--dry-run` previews, and IAM least-privilege policies remain standard operational controls.
 
 </details>
 
