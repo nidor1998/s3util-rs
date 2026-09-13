@@ -1058,61 +1058,41 @@ In plain terms: at v1.10.2 the failure modes most likely to cause silent harm â€
 <details>
 <summary>Click to expand the full assessment</summary>
 
-Assessment date: 2026-07-21.
+Assessed from scratch on **2026-09-13**, against source revision `16ffe39881ab48f459d6b548bc34d37e9c28d0d3`. **LLM: OpenAI Codex; Model: GPT-5 family (exact model identifier unavailable in this session); Effort: not exposed by this session.** No previous or other AI assessment was used as a reference.
 
-Assessed workspace: branch `docs/update_ai_assessment_20260721`, commit `2f7189d`. The Rust source tree is identical to tag `v1.8.0` (commit `bc1d9ad`); the commits after that tag change README documentation only.
-
-This is a from-scratch assessment. Every one of the 165 Rust files under `src/` (57,744 lines total) was included in the source review, including all command dispatch, argument validation, local/S3 storage implementations, transfer directions, checksum code, JSON conversion, types, and embedded tests. The 58 `tests/cli_*.rs` files, 57 `tests/e2e_*.rs` files, `tests/common/mod.rs`, `Cargo.toml`, `Cargo.lock`, `deny.toml`, all GitHub Actions workflows, `lcov.info`, and `llvm-cov-report.txt` were also reviewed. Previous AI assessments in this README were not treated as evidence.
+The review covered the complete production implementation: CLI dispatch and every command, argument/configuration validation, credentials and client construction, JSON input/output, local and S3 storage, all transfer directions, multipart uploads/downloads, checksums, annotations, cancellation, progress, tracing, shared types, and `build.rs`. The repository inventory contains 166 Rust files under `src/` (including test code), 120 under `tests/`, and the build script. Test results and the supplied coverage reports supplement the source review; coverage was not used to select which implementation modules to assess.
 
 #### Verification performed
 
-- `cargo test --all-targets` passed on the host: 1,414 library tests, 133 binary unit tests, and 466 CLI integration tests (2,013 passed, 0 failed). The 57 live-AWS e2e crates compiled as empty test targets because they are gated by `cfg(e2e_test)`; this run therefore does not claim a live-AWS pass.
-- `cargo fmt --all --check` passed.
-- `cargo clippy --all-targets -- -D warnings` passed with Rust/Cargo 1.97.1.
-- `cargo deny -L error check` passed: advisories, bans, licenses, and sources all reported `ok`.
-- The repository contains 2,853 test annotations: 1,554 under `src/`, 466 CLI integration tests, and 833 gated live-AWS e2e tests.
-- The latest coverage artifacts agree on 98.64% line coverage (35,228/35,714) and 96.46% function coverage (3,512/3,641). `llvm-cov-report.txt` additionally reports 97.71% region coverage (49,888/51,055).
-- Branch coverage is not measured: both artifacts count zero branches. Coverage is execution evidence, not proof of correct assertions or a substitute for reviewing uncovered behavior.
-- Critical implementation coverage is strong but not complete: `storage/s3/upload_manager.rs` is 95.07% lines, `storage/e_tag_verify.rs` 99.42%, `storage/additional_checksum_verify.rs` 99.26%, `storage/local/mod.rs` 98.12%, `transfer/s3_to_stdio.rs` 98.59%, `input/json.rs` 99.95%, and `output/json.rs` 99.69%.
+- `cargo test --locked --offline --all-features --all-targets`: **2,089 passed, 0 failed, 0 ignored** on `aarch64-apple-darwin`, using Rust 1.98.1. The successful run allowed local test-server sockets; the initial sandboxed run could not bind them.
+- `cargo clippy --locked --offline --all-features --all-targets -- -D warnings`: **passed**.
+- Independently reproduced the metadata validation issue below with a dry-run command; it exited successfully without transferring data.
+- Reconciled the existing `lcov.info` and `llvm-cov-report.txt`: their line and function totals agree. These reports were inspected, not regenerated in this assessment.
+
+| Coverage measure | Covered / total | Coverage |
+|---|---:|---:|
+| Lines | 36,673 / 37,189 | 98.61% |
+| Functions | 3,644 / 3,790 | 96.15% |
+| Regions | 51,899 / 53,100 | 97.74% |
+| Branches | No branch records | Not measured |
+
+The reports include inline test code and do not establish production-only coverage or prove that the reports were generated from this exact revision. `--all-features` does not enable the separate `cfg(e2e_test)` cloud suite: those binaries ran zero tests. Live S3 behavior, other operating systems, and a fresh dependency-advisory audit were not validated by this run.
 
 #### Safety and correctness assessment
 
-- The CLI defines 52 single-resource subcommands; it has no recursive or multi-source transfer syntax. Path-shape validation rejects unsupported local/local and stdio combinations, missing S3 object keys, local source directories, and nonexistent local destination parents.
-- All 32 mutating commands expose `--dry-run`. Dry-run prevents the final mutating call, but some modes still build clients or make read-only calls, so it is not an offline validation of credentials, IAM, endpoint reachability, resource existence, or AWS-side input rules.
-- Uploads use byte-count reconciliation, ordered multipart completion, default `Content-MD5` where applicable, ETag/additional-checksum verification, bounded concurrency, cancellation, and best-effort multipart abort. Downloads write to a same-directory temporary file, verify it before atomic persistence, and preserve an existing destination on pre-persist failure.
-- Versioned S3 sources are pinned to the version observed during the initial read so later ranged requests and `mv` deletion address that version. Unversioned buckets cannot provide that guarantee; concurrent replacement may be detected by size/checksum checks, but no snapshot isolation exists.
-- `mv` rejects destructive same-object moves, refuses to delete after cancellation/copy failure, and normally refuses to delete after an ambiguous verification warning. `--no-fail-on-verify-error` deliberately overrides the last protection.
-- Full-object checksum mismatches and locally reproducible upload mismatches are hard errors. Multipart ETag/composite-checksum mismatches that can be caused solely by different part layouts are warnings (exit 3). For stdout downloads, bytes necessarily become externally visible before final verification, so a later nonzero exit cannot retract them.
-- Bucket-configuration JSON uses strict `deny_unknown_fields` mirror types and fallible SDK builders; output JSON is manually mapped to AWS-CLI-like shapes. Policy JSON and several cross-field S3 rules are intentionally left to S3 for authoritative validation.
-- Production code contains no `unsafe`; the only `unsafe` blocks are in tests that temporarily mutate process environment variables under Rust 2024 rules.
-- Access keys, SSE-C keys, and KMS identifiers have redacting `Debug` implementations after configuration is built, key wrappers zeroize on drop, secret environment values are hidden from help, and startup tracing logs an allow-listed summary. This is defense in depth, not complete secret erasure: Clap argument structs and SDK credential copies use ordinary `String` values, and secrets supplied directly as command-line arguments may be exposed through shell history or process inspection.
-- Default AWS endpoints use the SDK's modern rustls client and native trust roots. Explicit custom `http://` endpoints are accepted; choosing one removes transport confidentiality and must be treated as an operator-controlled insecure mode.
-- Dependency policy currently has no ignored advisories, denies unknown registries/git sources and `openssl-sys`, and is checked in CI and on a daily schedule.
+The implementation has substantial defensive behavior. CLI validation rejects many incompatible transfer, encryption, credential, and checksum options. Downloads use temporary files before publishing the destination. Multipart paths check sizes and integrity, and parallel stdout delivery preserves ordering with bounded coordination. Versioned S3 transfers retain the captured source version. `mv` checks cancellation, transfer errors, and verification warnings before deleting the source, and rejects ordinary same-object moves. Secret wrapper types redact sensitive debug output and zeroize their owned values. No production `unsafe` block was found; this does not audit unsafe code inside dependencies.
 
-#### Finding from this pass
+The following limitations materially constrain the reliability conclusion:
 
-**Low-severity functional defect â€” metadata flags can be silently ignored for local targets.** `CommonTransferArgs::check_metadata_conflict` checks system-header fields, tagging, and `--put-last-modified-metadata`, but omits `--metadata`, `--no-sync-system-metadata`, and `--no-sync-user-defined-metadata`. Consequently, for example, `cp s3://bucket/key local-file --metadata key=value` is accepted even though the documented validation says metadata-related options require an S3 target; the local target path does not consume that metadata. A process-level dry-run reproduced exit 0 with no warning. This does not corrupt transferred bytes, but it violates fail-fast CLI semantics and can mislead automation.
+- **Concurrent modification can make `mv` delete uncopied data.** The [move decision](src/bin/s3util/cli/mv.rs) deletes a local pathname or an unversioned S3 key after copying, without an identity/ETag precondition on deletion. A replacement written between the copy and deletion can therefore be removed. Captured S3 version IDs protect versioned transfers, but local/unversioned moves are not transactional. The self-move guard also compares endpoint strings, so different aliases for the same service can bypass that guard.
+- **Verification failure does not guarantee an unchanged destination.** [Local verification](src/storage/local/mod.rs) classifies some ETag/composite-checksum mismatches as warnings and subsequently persists the temporary file. S3 verification can run after PUT or multipart completion has committed the object. Stdout verification necessarily follows emitted bytes. The default warning/error status and `mv` source-preservation gates matter, but they cannot retract committed data; `--no-fail-on-verify-error` explicitly weakens the move safeguard. Some unsupported or unavailable verification cases only log that verification was skipped, so exit zero does not universally mean integrity was independently verified.
+- **Cancellation and multipart cleanup are best effort.** In [multipart upload handling](src/storage/s3/upload_manager.rs), early propagation of a worker failure drops remaining spawned-task handles without consistently aborting and joining every worker before aborting the upload. Requests can remain in flight; some stream cleanup errors are discarded. The [stdin probe](src/transfer/stdio_to_s3.rs) awaits input without selecting on cancellation, and other I/O waits can also delay shutdown. Prompt termination and complete cleanup are not guaranteed for stalled inputs or interrupted remote operations.
+- **Memory use is configuration- and object-dependent.** Buffered transfers, stdin probing, checksum generation, and multipart workers allocate buffers based on object size, thresholds, or part size. Large allowed settings and concurrency can exhaust memory; there is no aggregate memory budget. Public library configuration and malformed service responses also encounter unchecked assumptions and `unwrap` paths that CLI validation alone cannot eliminate.
+- **S3-only metadata validation is incomplete.** `CommonTransferArgs::check_metadata_conflict` in [argument validation](src/config/args/common.rs) omits `metadata`. Consequently, `s3util cp s3://example-bucket/key /tmp/s3util-codex-assessment.out --metadata key=value --dry-run --source-no-sign-request` succeeds, although the local storage implementation does not apply that metadata. The dry run confirms acceptance; the discarded option follows from the storage implementation.
 
-No critical or high-severity defect was identified in the complete reviewed source. That statement is bounded by the test and review limits below; it is not a claim that none exists.
+Bucket configuration, tagging, and annotation operations also depend on service-side semantic validation and can make partial changes across multiple requests. Local JSON validation and dry runs do not prove remote acceptance or provide rollback.
 
-#### Residual risks and limits
-
-- Several production `unwrap`, `expect`, `panic!`, `unreachable!`, and local-storage `unimplemented!` paths enforce internal or SDK-response invariants. Normal CLI validation and Amazon S3 response shapes keep them off reviewed public paths, but a programming regression or sufficiently nonconforming S3-compatible endpoint can terminate the process instead of returning a structured error. The minimum-size release profile uses `panic = "abort"`.
-- Multipart completion makes an S3 destination visible before post-completion verification. A hard verification failure or later object-annotation synchronization failure can therefore leave a destination object or partial metadata state even though the command exits nonzero. `create-bucket --tagging` is also a documented two-step, non-transactional operation and returns warning status if tagging fails after creation.
-- Single-part uploads buffer the entire object and allow a threshold up to 5 GiB; multipart memory scales with configured chunk size and concurrency. Bucket-configuration and policy inputs are read into memory without a local size cap.
-- `--skip-existing` is a check-then-act convenience and is race-prone; `--if-none-match` is the atomic protection for supported upload paths.
-- Destructive commands have no interactive confirmation. Environment-backed arguments, syntactically valid but unintended bucket/key/version values, or an incorrect configuration file remain operator risks.
-- The default CI matrix covers seven platform/target combinations, but it does not run the credentialed `cfg(e2e_test)` suite. The supplied coverage artifacts show that those paths were executed during their generating run, but contain no per-test pass/fail log.
-- CI/release hardening is incomplete: several actions use mutable major-version tags, and workflows install Rust/cargo tools at run time rather than pinning every executable by digest.
-- This pass did not run live AWS tests, fuzzers, Miri, sanitizers, fault injection, formal verification, penetration testing, or an independent external audit. S3-compatible services may differ in errors, required fields, checksum behavior, and consistency.
-
-#### Reliability conclusion
-
-Overall classification: **conditionally reliable for routine Amazon S3 use, with a low-severity CLI validation defect and meaningful operational limits**.
-
-The strongest evidence is around byte-transfer integrity: source version pinning where S3 versioning permits it, strict range/size checks, temporary-file verification before persistence, multipart ordering and byte accounting, layered checksums, cancellation, and conservative `mv` deletion gates. The administrative command wrappers are smaller and well covered, but their operations are inherently destructive and sometimes non-transactional.
-
-A careful operator should treat exit code 3 as an unresolved verification result, use `--dry-run` before destructive commands, prefer `--if-none-match` over `--skip-existing` where atomic creation matters, use HTTPS endpoints and profiles/environment credentials, retain bucket versioning or backups for irreplaceable data, and apply least-privilege IAM. These controls are part of the reliability boundary; the code is not proven bug-free or safe against an unintended but syntactically valid command.
+The source and passing local checks support confidence in ordinary transfers with stable sources, appropriate resource settings, and careful handling of exit status. They do **not** establish transactional moves, universal integrity verification, bounded shutdown under stalled I/O, or defect-free behavior. The concurrent-delete and post-commit-verification limitations are more consequential than the high coverage percentage suggests.
 
 </details>
 
