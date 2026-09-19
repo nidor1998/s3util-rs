@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.3] - 2026-09-19
+
+Monthly update.
+
+### Security
+
+- Updated the transitive `rustls` dependency to `v0.23.45`, remediating [RUSTSEC-2026-0285](https://rustsec.org/advisories/RUSTSEC-2026-0285)
+  ("TLS 1.3 handshake messages incorrectly accepted across encryption level boundaries"). `rustls` is the TLS
+  implementation behind every connection s3util opens to Amazon S3, through the AWS SDK's HTTP client. Affected
+  versions accepted TLS 1.3 handshake messages sent at the wrong encryption level when they followed a key-changing
+  message in the same record, for example a plaintext `EncryptedExtensions` packed into the same record as the
+  `ServerHello`, where RFC 8446 requires the connection to be terminated with an `unexpected_message` alert. The
+  handshake transcript is still authenticated, so an attacker on the network path cannot use this to alter or complete
+  a handshake; the practical effect is that a peer could send handshake messages in plaintext that should have been
+  encrypted without rustls rejecting the connection. The advisory is rated low severity upstream. No s3util behavior,
+  option, or output changes.
+
+### Changed
+
+- aws-sdk-s3 `v1.143.0 -> v1.146.1`
+- Updated other dependencies
+
 ## [1.10.2] - 2026-08-21
 
 Monthly update.
