@@ -5,6 +5,33 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.4] - 2026-09-22
+
+Documentation-only release. No code, behavior, option, or output changes.
+
+### Changed
+
+- S3-compatible storage moved from "not supported" to best-effort support in the README. Previously the project
+  declared Amazon S3 the only supported target and stated that bug reports, feature requests, and compatibility fixes
+  filed against non-AWS implementations of the S3 API (MinIO, Wasabi, Cloudflare R2, Backblaze B2, Google Cloud
+  Storage's S3 interop, and others) would not be accepted. Amazon S3 remains the primary target and the only one the
+  end-to-end tests run against, but such services are now documented as usable on a best-effort basis, and bug reports
+  about them are welcome at a lower priority than Amazon S3 issues. The README also spells out why the split exists:
+  s3util builds on `aws-sdk-rust`, which is generated from AWS service models and assumes Amazon S3 semantics
+  (checksum headers, endpoint resolution, signing variants, response schemas). Features resting on those semantics —
+  CRC64NVME checksums and newer S3 API additions, `rename` (which requires an S3 Express One Zone directory bucket),
+  `restore-object`, the object-annotation subcommands, and parts of the bucket-configuration family — may be
+  unavailable or behave differently against non-AWS endpoints, while the core object operations (`cp`, `mv`, `rm`,
+  `head-object`, `presign`) are the most likely to work as documented. The endpoint and path-style flags
+  (`--target-endpoint-url`, `--target-force-path-style`, etc.) are unchanged; only the policy around them is.
+- Added a Maintenance Model section to the README, documenting the roughly monthly dependency cadence (sooner when a
+  security advisory requires it), how new SDK features are evaluated and adopted, and that critical bug fixes are
+  applied on a best-effort basis. It supersedes the shorter note previously kept at the end of Contributing.
+- Trimmed the README Non-Goals section. The two gatekeeping bullets — compatibility with other S3 clients, and
+  diagnosing problems caused by raising concurrency settings above their defaults — and the closing "Issues and pull
+  requests requesting any of the above will be closed" line were removed, and the lead-in softened. The technical
+  bullets are unchanged, and the `#non-goals` anchor used by the issue templates still resolves.
+
 ## [1.10.3] - 2026-09-19
 
 Monthly update.
