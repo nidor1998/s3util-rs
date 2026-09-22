@@ -83,6 +83,7 @@
     * [AI assessment of safety and correctness (by Claude, Anthropic)](#ai-assessment-of-safety-and-correctness-by-claude-anthropic)
     * [AI assessment of safety and correctness (by Codex)](#ai-assessment-of-safety-and-correctness-by-codex)
     * [AI assessment of safety and correctness (by Gemini)](#ai-assessment-of-safety-and-correctness-by-gemini)
+- [Maintenance Model](#maintenance-model)
 - [Security assumptions](#security-assumptions)
 - [Scope](#scope)
 - [Non-Goals](#non-goals)
@@ -947,11 +948,15 @@ s3util cp -q ./artifact.tar.gz s3://my-bucket/artifacts/
 
 ## About testing
 
-**Supported target: Amazon S3 only.**
-
-S3-compatible storage (MinIO, Wasabi, Cloudflare R2, Backblaze B2, Google Cloud Storage's S3 interop, and any other non-AWS implementation of the S3 API) is **not supported**. The code is provided as-is against such targets: it may work, it may not, and behaviour may change between releases without notice. Bug reports, feature requests, or compatibility fixes filed against non-AWS S3-compatible stores will not be accepted. Endpoint and path-style flags (`--target-endpoint-url`, `--target-force-path-style`, etc.) remain in the binary because they are also useful for AWS-internal scenarios (e.g. FIPS endpoints, VPC endpoints), but their presence is not an endorsement of S3-compatible-store usage.
+**Primary target: Amazon S3.**
 
 `s3util` has been tested with Amazon S3, including Express One Zone directory buckets. `s3util` has many end-to-end tests and unit tests, and they run every time a new version is released. None of those tests run against non-AWS S3-compatible stores.
+
+S3-compatible storage (MinIO, Wasabi, Cloudflare R2, Backblaze B2, Google Cloud Storage's S3 interop, and any other non-AWS implementation of the S3 API) is supported on a **best-effort basis**. Such services are generally usable via the endpoint and path-style flags (`--target-endpoint-url`, `--target-force-path-style`, etc. — which are also useful for AWS-internal scenarios such as FIPS endpoints and VPC endpoints), but they are not part of the test matrix, so behaviour can differ between services and change between releases.
+
+This is a structural consequence of building on `aws-sdk-rust`, which is generated from AWS service models and assumes Amazon S3 semantics (checksum headers, endpoint resolution, signing variants, response schemas). Features that depend on AWS-specific semantics may be unavailable or behave differently against non-AWS endpoints — notably CRC64NVME checksums and newer S3 API additions, `rename` (which requires an S3 Express One Zone directory bucket), `restore-object`, the object-annotation subcommands, and parts of the bucket-configuration family, whose management APIs such services implement partially or not at all. Core object operations (`cp`, `mv`, `rm`, `head-object`, `presign`) are the most likely to work as documented.
+
+Bug reports about S3-compatible storage are welcome and will be looked at on a best-effort basis, but they are lower priority than Amazon S3 issues, fixes are not guaranteed, and problems that originate in the storage service itself belong with that service's operator.
 
 ## Fully AI-generated (human-verified) software
 
@@ -1184,14 +1189,23 @@ Is this software reliable? **Yes, conditionally.** At v1.10.2, `s3util` demonstr
 
 </details>
 
+## Maintenance Model
+
+s3util is maintained as a personal project. The project is considered functionally complete, and development going forward is limited to maintenance. New features are not actively solicited. If you need guaranteed enterprise support, this is not the tool for you.
+
+**Dependency update policy**
+
+The AWS SDK for Rust and the other dependencies are updated on a regular, roughly monthly cadence, and sooner when a security advisory requires it.
+
+When an update introduces new S3 features, API additions, or client settings, they are evaluated and adopted as needed — that is, when they matter for correctness, safety, or the existing feature set. Not every new SDK capability will be surfaced as an s3util option; additions that fall outside the documented [Scope](#scope) are intentionally left out.
+
+Critical bug fixes are applied on a best-effort basis.
+
 ## Contributing
 
 - Bug reports are welcome, but responses are not guaranteed.
 - Since this project is considered functionally complete, I will not accept any feature requests.
 - If you find this project useful, feel free to fork and modify it as you wish.
-
-🔒 I consider this project “complete” and will maintain it only minimally going forward.
-However, I intend to keep the AWS SDK for Rust and other dependencies up to date monthly.
 
 **Issue and PR lifecycle**
 
@@ -1232,26 +1246,11 @@ The `cp` and `mv` subcommands operate on one object at a time; the thin S3 API w
 
 ## Non-Goals
 
-The following are explicitly out of scope and will not be added, regardless of demand:
+The following are out of scope:
 
 - Recursive or directory-mode transfers — use [s3sync](https://github.com/nidor1998/s3sync) instead.
 - Glob or wildcard expansion in S3 keys. For pattern-based matching, use [s3sync](https://github.com/nidor1998/s3sync), which supports regular expressions.
 - Multiple source or destination arguments to `cp` / `mv` (e.g. `s3util cp a.txt b.txt s3://bucket/dest/`). Each invocation transfers exactly one object.
-- Compatibility with other S3 clients — neither in flag names and
-  behavior, nor in feature coverage. The presence of a feature, flag,
-  or output format in `aws s3`, `aws s3api`, `s3cmd`, `s5cmd`,
-  `rclone`, `mc`, or any other S3 tool is not, by itself, a reason
-  to add or change it in s3util. Each request is evaluated only
-  against s3util's own scope and design principles. Use that other
-  tool if you need its specific surface.
-- Diagnosing or fixing performance degradation, resource exhaustion,
-  or errors caused by raising concurrency settings
-  (`--max-parallel-uploads` and similar tuning flags) above their
-  defaults. The documentation explicitly notes that these values
-  must be sized to the host and the target service; tuning them is
-  the operator's responsibility. Reports of the form "I raised
-  `--max-parallel-uploads` and it failed / slowed down / hit rate
-  limits" will be closed.
 - Resuming a failed or interrupted transfer. `s3util` does not
   provide a resume feature for `cp` / `mv`, including for large
   multipart uploads and downloads. There is no checkpoint file,
@@ -1266,8 +1265,6 @@ The following are explicitly out of scope and will not be added, regardless of d
   `aws s3api abort-multipart-upload`) is the operator's
   responsibility.
 - A plugin or extension mechanism.
-
-Issues and pull requests requesting any of the above will be closed.
 
 ## License
 
