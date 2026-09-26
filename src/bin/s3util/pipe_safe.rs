@@ -11,11 +11,14 @@
 //! or I/O error on a redirect) is propagated so the command fails loudly
 //! instead of silently dropping output.
 //!
-//! The data-transfer paths are intentionally different and unchanged: `cp`
-//! to stdout and `get-object-annotation` payload output deliver object
-//! bytes whose truncation is a real failure, and both already report
-//! `BrokenPipe` as an error rather than panicking. The stderr counterpart
-//! for tracing output is `tracing_init::PipeSafeWriter`.
+//! The data-transfer paths are intentionally different: `cp` to stdout and
+//! `get-object-annotation` payload output deliver object bytes whose
+//! truncation is a real failure, so both report `BrokenPipe` as an error
+//! rather than panicking or swallowing it. Both must also flush before
+//! reporting success — an unflushed payload small enough to sit in stdout's
+//! line buffer would otherwise be lost silently, since the runtime's
+//! exit-time flush discards its error after the exit code is fixed. The
+//! stderr counterpart for tracing output is `tracing_init::PipeSafeWriter`.
 
 use std::io::{ErrorKind, Write};
 

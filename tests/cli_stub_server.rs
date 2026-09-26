@@ -127,18 +127,19 @@ fn spawn_stub(response: StubResponse) -> String {
     addr
 }
 
-/// Run the s3util binary against the stub endpoint with static dummy
+/// Build the s3util command for the stub endpoint with static dummy
 /// credentials (no profile / IMDS lookup) and no retries. `side` selects the
 /// client-config flag family the subcommand exposes (`target` for most
 /// commands, `source` for rename). `-v` raises logging to info so success
-/// logs are observable on stderr.
-fn run_side_against_stub(side: &str, addr: &str, args: &[&str]) -> (Option<i32>, String, String) {
+/// logs are observable on stderr. Only stdout is left for the caller to
+/// wire up, so the closed-pipe variant below can share this setup.
+fn stub_command(side: &str, addr: &str, args: &[&str]) -> Command {
     let endpoint = format!("http://{addr}");
-    let output = Command::new(env!("CARGO_BIN_EXE_s3util"))
-        // Directory-bucket (…--x-s3) requests would otherwise trigger the S3
-        // Express CreateSession auth flow before the operation under test,
-        // wrapping the stub's answer in an identity-resolution dispatch error.
-        .env("AWS_S3_DISABLE_EXPRESS_SESSION_AUTH", "true")
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_s3util"));
+    // Directory-bucket (…--x-s3) requests would otherwise trigger the S3
+    // Express CreateSession auth flow before the operation under test,
+    // wrapping the stub's answer in an identity-resolution dispatch error.
+    cmd.env("AWS_S3_DISABLE_EXPRESS_SESSION_AUTH", "true")
         .args(args)
         .args([
             &format!("--{side}-endpoint-url"),
@@ -154,8 +155,14 @@ fn run_side_against_stub(side: &str, addr: &str, args: &[&str]) -> (Option<i32>,
             "-v",
         ])
         .stdin(Stdio::null())
+        .stderr(Stdio::piped());
+    cmd
+}
+
+/// Run the s3util binary against the stub endpoint, capturing stdout.
+fn run_side_against_stub(side: &str, addr: &str, args: &[&str]) -> (Option<i32>, String, String) {
+    let output = stub_command(side, addr, args)
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
         .output()
         .expect("failed to spawn s3util binary");
     (
@@ -167,6 +174,27 @@ fn run_side_against_stub(side: &str, addr: &str, args: &[&str]) -> (Option<i32>,
 
 fn run_against_stub(addr: &str, args: &[&str]) -> (Option<i32>, String, String) {
     run_side_against_stub("target", addr, args)
+}
+
+/// Run the s3util binary against the stub endpoint with a stdout whose read
+/// end is already closed, so every stdout write in the child fails with
+/// `BrokenPipe` from the first byte. Returns (exit_code, stderr). This is
+/// the `tests/cli_broken_pipe.rs` helper for the paths that need a live S3
+/// answer before they reach their stdout write.
+fn run_against_stub_with_closed_stdout(addr: &str, args: &[&str]) -> (Option<i32>, String) {
+    let (reader, writer) = std::io::pipe().expect("failed to create pipe");
+    // Close the read end before the child even starts: with no readers left,
+    // every stdout write in the child fails with EPIPE immediately.
+    drop(reader);
+
+    let output = stub_command("target", addr, args)
+        .stdout(Stdio::from(writer))
+        .output()
+        .expect("failed to spawn s3util binary");
+    (
+        output.status.code(),
+        String::from_utf8_lossy(&output.stderr).to_string(),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -519,4 +547,88 @@ fn get_object_annotation_payload_over_limit_exits_1() {
         "expected the 1 MiB limit error; got: {stderr}"
     );
     assert!(!outfile.exists(), "oversized payload must not be written");
+}
+
+// ---------------------------------------------------------------------------
+// get-object-annotation with `-` as <OUTFILE>: the payload goes to stdout
+// instead of a file. The single byte "x" (MD5
+// 9dd4e461268c8034f5c8564e155c67a6) is the worst case for stdout buffering:
+// it fits entirely inside stdout's 1 KiB `LineWriter` buffer and contains no
+// newline, so nothing reaches the file descriptor until an explicit flush.
+// ---------------------------------------------------------------------------
+
+const ONE_BYTE_MD5_ETAG: &str = "\"9dd4e461268c8034f5c8564e155c67a6\"";
+
+/// The deliberate counter-case to `tests/cli_broken_pipe.rs`: report output
+/// swallows `BrokenPipe` because the S3 operation has already completed, but
+/// the annotation payload *is* the object's bytes, so a vanished reader means
+/// the payload was lost and the command must fail loudly. `write_all` alone
+/// returns `Ok` here — the byte never leaves the `LineWriter`, and the error
+/// from the runtime's exit-time flush is discarded after `main`'s `ExitCode`
+/// is already fixed, so the command exited 0 having delivered nothing.
+#[test]
+fn get_object_annotation_payload_to_closed_stdout_exits_1() {
+    let addr = spawn_stub(annotation_response(
+        b"x",
+        ONE_BYTE_MD5_ETAG,
+        Some("AES256"),
+        vec![],
+    ));
+
+    let (code, stderr) = run_against_stub_with_closed_stdout(
+        &addr,
+        &[
+            "get-object-annotation",
+            "s3://cov-bucket/key",
+            "-",
+            "--annotation-name",
+            "cov_note",
+        ],
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "annotation payload output must not panic on a closed stdout pipe; \
+         stderr: {stderr}"
+    );
+    assert_eq!(
+        code,
+        Some(1),
+        "a lost annotation payload must exit 1, not report success \
+         (None = killed by SIGPIPE); stderr: {stderr}"
+    );
+    assert!(
+        stderr.contains("writing annotation payload to stdout"),
+        "expected the payload write error on stderr; got: {stderr}"
+    );
+}
+
+/// The success side of the same path, so a fix for the closed-pipe case
+/// cannot pass by dropping or swallowing the payload: with a live reader the
+/// byte must arrive verbatim, with no trailing newline and no JSON report
+/// (the report is file-mode only).
+#[test]
+fn get_object_annotation_payload_to_stdout_is_delivered_verbatim() {
+    let addr = spawn_stub(annotation_response(
+        b"x",
+        ONE_BYTE_MD5_ETAG,
+        Some("AES256"),
+        vec![],
+    ));
+
+    let (code, stdout, stderr) = run_against_stub(
+        &addr,
+        &[
+            "get-object-annotation",
+            "s3://cov-bucket/key",
+            "-",
+            "--annotation-name",
+            "cov_note",
+        ],
+    );
+    assert_eq!(
+        code,
+        Some(0),
+        "payload to stdout must exit 0; stderr: {stderr}"
+    );
+    assert_eq!(stdout, "x", "the payload must reach stdout verbatim");
 }
