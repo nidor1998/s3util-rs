@@ -1057,8 +1057,13 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
                 // serial path: a process crash between drained chunks
                 // doesn't leave bytes stranded in any user-space
                 // buffer the caller may have wrapped the writer in
-                // (e.g., BufWriter). For tokio::io::stdout() this is
-                // a no-op; data integrity > the marginal flush cost.
+                // (e.g., BufWriter). This is not a no-op for
+                // tokio::io::stdout() either — it is Blocking<std::io::
+                // Stdout>, whose poll_flush calls flush() on the inner
+                // std::io::Stdout, a LineWriter. That call is what
+                // drains a tail carrying no newline and what surfaces
+                // EPIPE from a reader that has gone away; poll_write
+                // alone can report Ok for bytes the kernel never saw.
                 if let Err(e) = writer.flush().await {
                     *failed = Some(e.into());
                     cancellation_token.cancel();
@@ -3292,8 +3297,8 @@ mod tests {
     }
 
     /// Fails on write, or (with `fail_flush`) succeeds writes and fails the
-    /// per-chunk flush — the two downstream-pipe failure shapes of the
-    /// parallel drain.
+    /// flush — the two downstream-pipe failure shapes, on both the parallel
+    /// drain and the serial loop.
     struct FailWriter {
         fail_flush: bool,
     }
@@ -3565,6 +3570,35 @@ mod tests {
     async fn parallel_flush_failure_is_reported_not_swallowed() {
         let mock = MockSource::new(vec![0x42; 12]);
         let config = test_config(2, 4, 4);
+        let writer = FailWriter { fail_flush: true };
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+
+        let source: Storage = Box::new(mock);
+        let err = transfer(&config, source, "k", writer, token, stats_tx)
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("simulated flush failure"),
+            "expected the io error to survive: {err:#}"
+        );
+    }
+
+    /// The serial counterpart of `parallel_flush_failure_is_reported_not_swallowed`.
+    /// `max_parallel_uploads = 1` takes the serial loop, whose single flush sits
+    /// after the read loop and before verification — the one call that drains
+    /// stdout's line buffer. A body this small writes cleanly and only the flush
+    /// fails, which is exactly the shape a vanished reader takes when every byte
+    /// so far fitted inside that buffer: drop the `?` on that flush and the
+    /// transfer reports success having delivered nothing.
+    #[tokio::test]
+    async fn serial_flush_failure_is_reported_not_swallowed() {
+        let mock = MockSource::new(vec![0x42; 12]);
+        let config = test_config(
+            /* parallel */ 1,
+            /* threshold */ 8 * 1024 * 1024,
+            /* chunksize */ 8 * 1024 * 1024,
+        );
         let writer = FailWriter { fail_flush: true };
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
