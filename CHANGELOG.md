@@ -5,6 +5,28 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.6] - 2026-10-17
+
+Dependency and security update. No code, behavior, option, or output changes.
+
+### Security
+
+- Updated `rustls` from `v0.23.45` to `v0.23.46` to remediate RUSTSEC-2026-0349 (GHSA-w44r-93j7-qv28). Earlier
+  versions recorded the key exchange group chosen in a server's ServerHello before that server had been
+  authenticated, and used the record to predict the key share for later connections to the same server name. A
+  network attacker able to answer one connection attempt could therefore make later handshakes to that endpoint offer
+  only the classical X25519 share, and if the genuine server accepted it rather than requesting its preferred hybrid
+  group, the connection completed without the post-quantum X25519MLKEM768 key exchange and without any error. The
+  impact is limited to the loss of post-quantum confidentiality on the affected connections ("harvest now, decrypt
+  later"): there is no key compromise and no authentication bypass, and servers that send a HelloRetryRequest for
+  their preferred group are not affected. `rustls` reaches s3util through the AWS SDK's HTTPS client, so this concerns
+  the TLS connections s3util makes to Amazon S3 and other AWS endpoints.
+
+### Changed
+
+- aws-sdk-s3 `v1.146.1 -> v1.152.0`
+- Updated other dependencies
+
 ## [1.10.5] - 2026-09-26
 
 Bug-fix release. No dependency changes.
