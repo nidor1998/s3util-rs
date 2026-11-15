@@ -35,8 +35,8 @@ pub async fn run_put_bucket_website(
             .with_context(|| format!("reading website configuration from {config_arg}"))?
     };
 
-    let parsed: WebsiteConfigurationJson =
-        serde_json::from_str(&body).with_context(|| format!("parsing JSON from {config_arg}"))?;
+    let parsed: WebsiteConfigurationJson = s3util_rs::input::json::from_json_str(&body)
+        .with_context(|| format!("parsing JSON from {config_arg}"))?;
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;

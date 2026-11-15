@@ -16,7 +16,8 @@ use super::ExitStatus;
 /// Default output mirrors `aws s3api get-bucket-policy --output json`:
 /// `{"Policy": "<escaped-JSON-string>"}` where `Policy` is the raw policy
 /// JSON double-encoded as a JSON string. With `--policy-only`, prints just
-/// the policy JSON itself (parsed and re-pretty-printed).
+/// the policy JSON itself, re-indented but otherwise verbatim (key order,
+/// duplicate keys, and number spelling are preserved).
 ///
 /// Returns `ExitStatus::NotFound` (exit code 4) when S3 reports
 /// `NoSuchBucket` (logged as "bucket … not found") or `NoSuchBucketPolicy`
@@ -60,10 +61,75 @@ fn render_policy_only(policy: Option<&str>) -> Result<String> {
     let Some(policy) = policy else {
         return Ok("{}".to_string());
     };
-    match serde_json::from_str::<serde_json::Value>(policy) {
-        Ok(v) => Ok(serde_json::to_string_pretty(&v)?),
+    match serde_json::from_str::<serde::de::IgnoredAny>(policy) {
+        Ok(_) => Ok(reindent_json(policy)),
         Err(_) => Ok(policy.to_string()),
     }
+}
+
+/// Pretty-print already-validated JSON text by re-flowing whitespace only.
+///
+/// Going through `serde_json::Value` would normalise the policy: without the
+/// `preserve_order` feature its maps are sorted by key, duplicate keys collapse
+/// to the last one, and numbers are re-spelled (`1.50` -> `1.5`). Here every
+/// token is copied verbatim; only the whitespace between tokens is replaced,
+/// using `serde_json::to_string_pretty`'s layout (two-space indent, `": "`,
+/// empty containers kept as `{}` / `[]`).
+fn reindent_json(src: &str) -> String {
+    fn newline(out: &mut String, depth: usize) {
+        out.push('\n');
+        for _ in 0..depth {
+            out.push_str("  ");
+        }
+    }
+
+    let mut out = String::with_capacity(src.len() * 2);
+    let mut depth = 0usize;
+    let mut chars = src.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '"' => {
+                out.push('"');
+                while let Some(c) = chars.next() {
+                    out.push(c);
+                    match c {
+                        '\\' => {
+                            if let Some(escaped) = chars.next() {
+                                out.push(escaped);
+                            }
+                        }
+                        '"' => break,
+                        _ => {}
+                    }
+                }
+            }
+            '{' | '[' => {
+                out.push(c);
+                while chars.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+                    chars.next();
+                }
+                if matches!(chars.peek(), Some('}' | ']')) {
+                    out.push(chars.next().unwrap());
+                } else {
+                    depth += 1;
+                    newline(&mut out, depth);
+                }
+            }
+            '}' | ']' => {
+                depth = depth.saturating_sub(1);
+                newline(&mut out, depth);
+                out.push(c);
+            }
+            ',' => {
+                out.push(',');
+                newline(&mut out, depth);
+            }
+            ':' => out.push_str(": "),
+            c if c.is_ascii_whitespace() => {}
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 #[cfg(test)]
@@ -92,5 +158,48 @@ mod tests {
     fn render_policy_only_emits_empty_object_when_policy_missing() {
         let got = render_policy_only(None).unwrap();
         assert_eq!(got, "{}");
+    }
+
+    /// `--policy-only` must show the policy S3 stored, not a normalised copy:
+    /// key order, number spelling, and duplicate keys all survive.
+    #[test]
+    fn render_policy_only_preserves_policy_text_exactly() {
+        let raw = r#"{"Version":"2012-10-17","Statement":[{"Sid":"a","Effect":"Allow","Principal":"*","Action":"s3:GetObject","Resource":"arn:aws:s3:::b/*","Condition":{"NumericLessThan":{"s3:max-keys":1.50,"k":1e3},"NumericEquals":{"x":"1"},"NumericEquals":{"x":"2"}}}]}"#;
+        let got = render_policy_only(Some(raw)).unwrap();
+        let expected = r#"{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "a",
+      "Effect": "Allow",
+      "Principal": "*",
+      "Action": "s3:GetObject",
+      "Resource": "arn:aws:s3:::b/*",
+      "Condition": {
+        "NumericLessThan": {
+          "s3:max-keys": 1.50,
+          "k": 1e3
+        },
+        "NumericEquals": {
+          "x": "1"
+        },
+        "NumericEquals": {
+          "x": "2"
+        }
+      }
+    }
+  ]
+}"#;
+        assert_eq!(got, expected);
+    }
+
+    #[test]
+    fn render_policy_only_keeps_string_contents_verbatim() {
+        // Structural characters, whitespace, and escapes inside strings must
+        // not be touched by the re-indenter.
+        let raw = "{ \"Sid\" : \"a, b: {c} [d]\\\"  \\\\\" ,\n\t\"S\": [ ], \"O\": { } }";
+        let got = render_policy_only(Some(raw)).unwrap();
+        let expected = "{\n  \"Sid\": \"a, b: {c} [d]\\\"  \\\\\",\n  \"S\": [],\n  \"O\": {}\n}";
+        assert_eq!(got, expected);
     }
 }

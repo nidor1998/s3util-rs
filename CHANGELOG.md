@@ -5,6 +5,86 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.7] - 2026-11-15
+
+Dependency and security update, plus fixes to JSON input and output fidelity. No option changes.
+
+### Fixed
+
+- `head-object` omitted the object-lock event-hold fields that the SDK reads from S3's response headers. It now emits
+  `ObjectLockEventHold`, `ObjectLockEventHoldDurationDays`, and `ObjectLockEventHoldDurationYears` when S3 returns
+  them; previously an object under an event hold was reported as if it had none.
+- `list-object-annotations` omitted each entry's `ReplicationStatus`. It is now emitted, as explicit `null` when S3
+  does not return it, matching the stable per-entry key set already used for `ETag`.
+- `get-bucket-policy --policy-only` showed a normalised copy of the policy rather than the stored one: keys were
+  sorted alphabetically, duplicate keys collapsed to the last occurrence, and numbers were re-spelled (`1.50` became
+  `1.5`). The policy is now only re-indented; every token, including key order, duplicates, and number spelling, is
+  kept verbatim. The default output (`{"Policy": "<string>"}`) was not affected.
+- `put-bucket-replication` rejected `DeleteMarkerReplication` without `Status` and `ReplicationTimeValue` (in
+  `ReplicationTime.Time` and `Metrics.EventThreshold`) without `Minutes`, and `put-bucket-notification-configuration`
+  rejected a `FilterRule` without `Name` or `Value`, although all four members are optional in the S3 model. Because
+  `get-bucket-replication` renders such absent values as `{}`, its own output could not be fed back into
+  `put-bucket-replication`. These members are now optional, and an omitted value is left unset in the request rather
+  than replaced with a default.
+- `put-bucket-lifecycle-configuration` crashed with a panic when `Expiration.Date` or `Transitions[].Date` named a
+  leap second (for example `"2024-12-31T23:59:60Z"`). Such a value is now rejected with an ordinary error, as the AWS
+  CLI does.
+- `put-bucket-lifecycle-configuration` rejected several `Date` spellings that the AWS CLI accepts. It now also
+  accepts ISO 8601 times without seconds or minutes (`2024-01-01T00:00Z`, `20240101T0000Z`, `2024-01-01T00Z`), a
+  comma as the decimal sign (`2024-01-01T00:00:00,000Z`), a space between date and time or before the offset
+  (`2024-01-01 00:00:00`, `2024-01-01T09:00:00 +09:00`), RFC 2822 dates (`Mon, 01 Jan 2024 00:00:00 GMT`), and
+  seconds since the Unix epoch, written as a JSON number or as a string (`1704067200`, `"1704067200"`). An
+  eight-digit string or integer is still read as the ISO 8601 basic date (`"20240101"` and `20240101` are
+  2024-01-01), not as an epoch.
+- The eight `put-*` commands that read a JSON document rejected a document in which an object key appears more than
+  once (`duplicate field`). The last occurrence now wins, as in the AWS CLI. Unknown keys, missing required keys, and
+  wrongly typed values are still rejected.
+
+### Security
+
+- Updated `rustls-webpki` from `v0.103.15` to `v0.103.16` to remediate RUSTSEC-2026-0382 (CVE-2026-111943). Earlier
+  versions could accept certificate chains that pass through the distrusted emSign intermediates, whose private keys
+  are now publicly known, provided the configured trust anchors allowed such a path. s3util verifies the TLS
+  connections it makes to Amazon S3 and other AWS endpoints against the operating system's certificate store, so a
+  host whose store still trusts the affected emSign root could have accepted a forged certificate from an attacker on
+  the network path. The fixed version rejects any chain containing those intermediates' public keys, regardless of the
+  trust store. The related RUSTSEC-2026-0381 (`webpki-roots` `v1.0.9 -> v1.0.11`, removing the
+  `emSign ECC Root CA - G3` root) was also remediated; `webpki-roots` is used only by the test suite, not by the
+  shipped binary.
+- Updated `crypto-bigint` from `v0.5.5` to `v0.7.10` (via `aws-sigv4` `v1.6.0 -> v1.6.4`) to remediate
+  RUSTSEC-2026-0387, and `ctutils` from `v0.4.3` to `v0.4.8` to remediate RUSTSEC-2026-0385. Operations in both crates
+  that are meant to run in constant time (multi-precision subtraction, division and Montgomery multiplication in
+  `crypto-bigint`; mask generation and `u128` comparisons in `ctutils`) could compile to branches on secret values,
+  potentially leaking them through timing side channels. These crates are reached through SigV4a request signing,
+  which s3util uses for Multi-Region Access Points, where the secret involved is the ECDSA signing key derived from
+  your AWS credentials. Exploiting this would require an attacker to measure the timing of signing operations on the
+  machine running s3util; no practical attack against s3util is known.
+- Updated `tokio` from `v1.53.2` to `v1.54.1` to remediate RUSTSEC-2026-0386, an I/O-safety soundness issue in the
+  safe `AsyncFd` constructors that could lead to a use-after-free if a file descriptor was closed and reused while
+  still registered. s3util does not use `AsyncFd`, so it was not affected in practice.
+- Updated `libz-sys` from `v1.1.29` to `v1.1.32` to remediate RUSTSEC-2026-0418 (GHSA-8p3x-q3q3-q3v5). With `cc`
+  `v1.6.0` or later on a Unix host, the build script of earlier versions printed the entire build environment,
+  including any secrets in it, to its stdout, which Cargo saves under `target/`. This affects only building s3util from
+  source (`libz-sys` is a build-time dependency); the s3util binary itself does not contain or expose those values. If
+  you built s3util from source with an affected version in an environment holding secrets, and kept or shared the
+  `target/` directory (for example in a CI cache), consider those secrets exposed.
+- Removed the unmaintained `pin-utils` crate (RUSTSEC-2026-0441) from the dependency tree by updating
+  `aws-smithy-runtime` to `v1.16.2`. This was an unmaintained-crate notice, not a vulnerability.
+
+### Changed
+
+- Library API (`s3util_rs::input::json`), as a consequence of the lifecycle `Date` and duplicate-key fixes above:
+  `LifecycleExpirationJson::Date` and `TransitionJson::Date` changed from `Option<String>` to the new
+  `Option<TimestampJson>` (a string or epoch seconds; `From<String>` and `From<&str>` are provided), and the new
+  `from_json_str` function parses a document with last-wins duplicate keys. The mirror structs still implement
+  `Deserialize`, so `serde_json::from_str` keeps working but rejects duplicate keys as before. The command-line
+  interface is unchanged.
+- Removed redundant borrows of the `assert!` message arguments in the shell-completion e2e tests
+  (`tests/e2e_exit_codes.rs`), which the `clippy::useless_borrows_in_formatting` lint added in Rust 1.100 reported as
+  warnings. Test-only change; the assertions and their failure messages are unchanged.
+- aws-sdk-s3 `v1.152.0 -> v1.157.0`
+- Updated other dependencies
+
 ## [1.10.6] - 2026-10-17
 
 Dependency and security update. No code, behavior, option, or output changes.

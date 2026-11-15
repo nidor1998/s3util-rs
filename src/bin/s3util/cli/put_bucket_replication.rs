@@ -35,8 +35,8 @@ pub async fn run_put_bucket_replication(
             .with_context(|| format!("reading replication configuration from {config_arg}"))?
     };
 
-    let parsed: ReplicationConfigurationJson =
-        serde_json::from_str(&body).with_context(|| format!("parsing JSON from {config_arg}"))?;
+    let parsed: ReplicationConfigurationJson = s3util_rs::input::json::from_json_str(&body)
+        .with_context(|| format!("parsing JSON from {config_arg}"))?;
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;

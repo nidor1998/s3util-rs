@@ -322,6 +322,11 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
                 "Size".to_string(),
                 Value::Number(serde_json::Number::from(a.size())),
             );
+            e.insert(
+                "ReplicationStatus".to_string(),
+                a.replication_status()
+                    .map_or(Value::Null, |v| Value::String(v.as_str().to_string())),
+            );
             Value::Object(e)
         })
         .collect();
@@ -556,6 +561,24 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
         map.insert(
             "ObjectLockLegalHoldStatus".to_string(),
             Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.object_lock_event_hold() {
+        map.insert(
+            "ObjectLockEventHold".to_string(),
+            Value::String(v.as_str().to_string()),
+        );
+    }
+    if let Some(v) = out.object_lock_event_hold_duration_days() {
+        map.insert(
+            "ObjectLockEventHoldDurationDays".to_string(),
+            Value::Number(serde_json::Number::from(v)),
+        );
+    }
+    if let Some(v) = out.object_lock_event_hold_duration_years() {
+        map.insert(
+            "ObjectLockEventHoldDurationYears".to_string(),
+            Value::Number(serde_json::Number::from(v)),
         );
     }
     if let Some(v) = out.checksum_sha256() {
@@ -4818,5 +4841,64 @@ mod tests {
             m.get("EventThreshold").is_none(),
             "absent EventThreshold must stay absent: {m}"
         );
+    }
+
+    #[test]
+    fn head_object_emits_object_lock_event_hold_fields() {
+        use aws_sdk_s3::types::ObjectLockEventHold;
+        let out = HeadObjectOutput::builder()
+            .object_lock_event_hold(ObjectLockEventHold::On)
+            .object_lock_event_hold_duration_days(30)
+            .object_lock_event_hold_duration_years(2)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["ObjectLockEventHold"], "ON");
+        assert_eq!(json["ObjectLockEventHoldDurationDays"], 30);
+        assert_eq!(json["ObjectLockEventHoldDurationYears"], 2);
+    }
+
+    #[test]
+    fn head_object_omits_absent_object_lock_event_hold_fields() {
+        let json = head_object_to_json(&HeadObjectOutput::builder().build());
+        let m = json.as_object().unwrap();
+        assert!(!m.contains_key("ObjectLockEventHold"));
+        assert!(!m.contains_key("ObjectLockEventHoldDurationDays"));
+        assert!(!m.contains_key("ObjectLockEventHoldDurationYears"));
+    }
+
+    #[test]
+    fn list_object_annotations_to_json_emits_entry_replication_status() {
+        use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::{AnnotationEntry, ReplicationStatus};
+
+        let with = AnnotationEntry::builder()
+            .annotation_name("a")
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .size(1)
+            .replication_status(ReplicationStatus::Completed)
+            .build()
+            .unwrap();
+        let without = AnnotationEntry::builder()
+            .annotation_name("b")
+            .last_modified(DateTime::from_secs(1_750_000_000))
+            .size(1)
+            .build()
+            .unwrap();
+        let out = ListObjectAnnotationsOutput::builder()
+            .annotations(with)
+            .annotations(without)
+            .build();
+        let json = list_object_annotations_to_json(&out);
+        let arr = json["Annotations"].as_array().unwrap();
+        assert_eq!(arr[0]["ReplicationStatus"], "COMPLETED");
+        // Entries use a stable key set: absent is explicit null, like ETag.
+        assert!(
+            arr[1]
+                .as_object()
+                .unwrap()
+                .contains_key("ReplicationStatus")
+        );
+        assert!(arr[1]["ReplicationStatus"].is_null());
     }
 }

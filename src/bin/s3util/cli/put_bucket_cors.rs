@@ -35,8 +35,8 @@ pub async fn run_put_bucket_cors(
             .with_context(|| format!("reading cors configuration from {config_arg}"))?
     };
 
-    let parsed: CorsConfigurationJson =
-        serde_json::from_str(&body).with_context(|| format!("parsing JSON from {config_arg}"))?;
+    let parsed: CorsConfigurationJson = s3util_rs::input::json::from_json_str(&body)
+        .with_context(|| format!("parsing JSON from {config_arg}"))?;
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;
