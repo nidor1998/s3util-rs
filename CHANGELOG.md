@@ -34,7 +34,8 @@ Dependency and security update, plus fixes to JSON input and output fidelity. No
   comma as the decimal sign (`2024-01-01T00:00:00,000Z`), a space between date and time or before the offset
   (`2024-01-01 00:00:00`, `2024-01-01T09:00:00 +09:00`), RFC 2822 dates (`Mon, 01 Jan 2024 00:00:00 GMT`), and
   seconds since the Unix epoch, written as a JSON number or as a string (`1704067200`, `"1704067200"`). An
-  eight-digit string is still read as the ISO 8601 basic date (`"20240101"` is 2024-01-01), not as an epoch.
+  eight-digit string or integer is still read as the ISO 8601 basic date (`"20240101"` and `20240101` are
+  2024-01-01), not as an epoch.
 - The eight `put-*` commands that read a JSON document rejected a document in which an object key appears more than
   once (`duplicate field`). The last occurrence now wins, as in the AWS CLI. Unknown keys, missing required keys, and
   wrongly typed values are still rejected.

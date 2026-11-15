@@ -376,16 +376,28 @@ impl<'de> Deserialize<'de> for TimestampJson {
                 Ok(TimestampJson::Text(v.to_string()))
             }
             fn visit_i64<E>(self, v: i64) -> std::result::Result<TimestampJson, E> {
-                Ok(TimestampJson::EpochSeconds(v as f64))
+                Ok(integer_timestamp(v.unsigned_abs(), v.to_string(), v as f64))
             }
             fn visit_u64<E>(self, v: u64) -> std::result::Result<TimestampJson, E> {
-                Ok(TimestampJson::EpochSeconds(v as f64))
+                Ok(integer_timestamp(v, v.to_string(), v as f64))
             }
             fn visit_f64<E>(self, v: f64) -> std::result::Result<TimestampJson, E> {
                 Ok(TimestampJson::EpochSeconds(v))
             }
         }
         d.deserialize_any(V)
+    }
+}
+
+/// An eight-digit JSON integer is handed on as text, so that it gets the same
+/// reading as the eight-digit string: the ISO 8601 basic date (`20240101`),
+/// never an epoch, and an error when it is not a valid date. See
+/// [`parse_epoch_string`].
+fn integer_timestamp(magnitude: u64, text: String, epoch: f64) -> TimestampJson {
+    if (10_000_000..=99_999_999).contains(&magnitude) {
+        TimestampJson::Text(text)
+    } else {
+        TimestampJson::EpochSeconds(epoch)
     }
 }
 
@@ -3750,6 +3762,18 @@ mod tests {
         // A mistyped basic date must not fall through to the epoch reading.
         assert!(expiration_date(r#""20241301""#).is_err());
         assert!(expiration_date(r#""-20241301""#).is_err());
+    }
+
+    /// The JSON number must read the same as the string with the same digits.
+    #[test]
+    fn eight_digit_number_is_a_basic_date_never_an_epoch() {
+        assert_eq!(expiration_date("20240101").unwrap().secs(), NEW_YEAR_2024);
+        assert!(expiration_date("20241301").is_err());
+        assert!(expiration_date("-20240101").is_err());
+        // Other lengths, and a number written with a fraction, stay epochs.
+        assert_eq!(expiration_date("9999999").unwrap().secs(), 9_999_999);
+        assert_eq!(expiration_date("100000000").unwrap().secs(), 100_000_000);
+        assert_eq!(expiration_date("20240101.0").unwrap().secs(), 20_240_101);
     }
 
     #[test]
