@@ -40,8 +40,8 @@ pub async fn run_put_bucket_notification_configuration(
             .with_context(|| format!("reading notification-configuration from {config_arg}"))?
     };
 
-    let parsed: NotificationConfigurationJson =
-        serde_json::from_str(&body).with_context(|| format!("parsing JSON from {config_arg}"))?;
+    let parsed: NotificationConfigurationJson = s3util_rs::input::json::from_json_str(&body)
+        .with_context(|| format!("parsing JSON from {config_arg}"))?;
     let cfg = parsed.into_sdk()?;
 
     let client = client_config.create_client().await;

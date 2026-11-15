@@ -69,7 +69,7 @@ pub async fn run_put_bucket_lifecycle_configuration(
 /// correct (silently dropping it would reset the bucket to S3's default), but
 /// the bare serde error is a dead end; point at the flag that sends it.
 fn parse_lifecycle_configuration(body: &str) -> Result<LifecycleConfigurationJson> {
-    serde_json::from_str(body).map_err(|e| {
+    s3util_rs::input::json::from_json_str(body).map_err(|e| {
         if e.to_string()
             .contains("unknown field `TransitionDefaultMinimumObjectSize`")
         {

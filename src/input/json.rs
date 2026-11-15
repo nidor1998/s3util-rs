@@ -102,8 +102,8 @@ pub struct TagJson {
 #[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct LifecycleExpirationJson {
-    /// RFC3339 timestamp.
-    pub Date: Option<String>,
+    /// Timestamp: an ISO 8601 / RFC 2822 string or epoch seconds.
+    pub Date: Option<TimestampJson>,
     pub Days: Option<i32>,
     pub ExpiredObjectDeleteMarker: Option<bool>,
 }
@@ -120,7 +120,7 @@ pub struct NoncurrentVersionExpirationJson {
 #[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct TransitionJson {
-    pub Date: Option<String>,
+    pub Date: Option<TimestampJson>,
     pub Days: Option<i32>,
     pub StorageClass: Option<String>,
 }
@@ -247,7 +247,7 @@ impl LifecycleExpirationJson {
     fn into_sdk(self) -> Result<LifecycleExpiration> {
         let mut b = LifecycleExpiration::builder();
         if let Some(d) = self.Date {
-            b = b.date(parse_rfc3339(&d)?);
+            b = b.date(d.into_sdk()?);
         }
         if let Some(days) = self.Days {
             b = b.days(days);
@@ -276,7 +276,7 @@ impl TransitionJson {
     fn into_sdk(self) -> Result<Transition> {
         let mut b = Transition::builder();
         if let Some(d) = self.Date {
-            b = b.date(parse_rfc3339(&d)?);
+            b = b.date(d.into_sdk()?);
         }
         if let Some(days) = self.Days {
             b = b.days(days);
@@ -314,17 +314,147 @@ impl AbortIncompleteMultipartUploadJson {
     }
 }
 
-fn parse_rfc3339(s: &str) -> Result<DateTime> {
-    let dt = parse_iso8601(s).ok_or_else(|| {
+/// Parse a `put-*` JSON document into one of this module's mirror structs.
+///
+/// Identical to `serde_json::from_str`, except that a repeated object key
+/// takes its last value instead of failing with `duplicate field` — what the
+/// AWS CLI (Python's `json`) does, and what RFC 8259 leaves to the parser.
+///
+/// The document is first parsed directly, which keeps the line/column in
+/// every ordinary error. Only when that fails on the data (not the syntax) is
+/// it re-read through `serde_json::Value`, whose maps keep the last value of a
+/// repeated key. If that succeeds, the failure was caused by a duplicate; if
+/// not, the document is wrong either way and the more useful of the two
+/// errors is returned.
+pub fn from_json_str<T: serde::de::DeserializeOwned>(body: &str) -> serde_json::Result<T> {
+    let first = match serde_json::from_str::<T>(body) {
+        Ok(v) => return Ok(v),
+        Err(e) if !e.is_data() => return Err(e),
+        Err(e) => e,
+    };
+    serde_json::from_str::<serde_json::Value>(body)
+        .and_then(serde_json::from_value::<T>)
+        .map_err(|second| {
+            if first.to_string().starts_with("duplicate field") {
+                second
+            } else {
+                first
+            }
+        })
+}
+
+/// A timestamp member (`Expiration.Date`, `Transitions[].Date`) as the AWS CLI
+/// accepts it: either a string or a JSON number of seconds since the Unix
+/// epoch.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TimestampJson {
+    Text(String),
+    EpochSeconds(f64),
+}
+
+impl From<String> for TimestampJson {
+    fn from(s: String) -> Self {
+        TimestampJson::Text(s)
+    }
+}
+
+impl From<&str> for TimestampJson {
+    fn from(s: &str) -> Self {
+        TimestampJson::Text(s.to_string())
+    }
+}
+
+impl<'de> Deserialize<'de> for TimestampJson {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> std::result::Result<Self, D::Error> {
+        struct V;
+        impl serde::de::Visitor<'_> for V {
+            type Value = TimestampJson;
+            fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+                f.write_str("a timestamp string or a number of seconds since the Unix epoch")
+            }
+            fn visit_str<E>(self, v: &str) -> std::result::Result<TimestampJson, E> {
+                Ok(TimestampJson::Text(v.to_string()))
+            }
+            fn visit_i64<E>(self, v: i64) -> std::result::Result<TimestampJson, E> {
+                Ok(TimestampJson::EpochSeconds(v as f64))
+            }
+            fn visit_u64<E>(self, v: u64) -> std::result::Result<TimestampJson, E> {
+                Ok(TimestampJson::EpochSeconds(v as f64))
+            }
+            fn visit_f64<E>(self, v: f64) -> std::result::Result<TimestampJson, E> {
+                Ok(TimestampJson::EpochSeconds(v))
+            }
+        }
+        d.deserialize_any(V)
+    }
+}
+
+impl TimestampJson {
+    fn into_sdk(self) -> Result<DateTime> {
+        match self {
+            TimestampJson::Text(s) => parse_timestamp(&s),
+            TimestampJson::EpochSeconds(v) => epoch_seconds_to_sdk(v)
+                .ok_or_else(|| anyhow::anyhow!("timestamp {v} is out of range (years 0000-9999)")),
+        }
+    }
+}
+
+/// Seconds since the Unix epoch -> SDK `DateTime`, limited to the years
+/// 0000-9999 that the wire format can spell.
+fn epoch_seconds_to_sdk(v: f64) -> Option<DateTime> {
+    const MIN: f64 = -62_167_219_200.0; // 0000-01-01T00:00:00Z
+    const MAX: f64 = 253_402_300_800.0; // 10000-01-01T00:00:00Z (exclusive)
+    if !(MIN..MAX).contains(&v) {
+        return None; // also rejects NaN and the infinities
+    }
+    let secs = v.floor();
+    // `from_secs_and_nanos` panics on nanos >= 1e9; float rounding must not
+    // be able to reach it.
+    let nanos = (((v - secs) * 1e9) as u32).min(999_999_999);
+    Some(DateTime::from_secs_and_nanos(secs as i64, nanos))
+}
+
+fn parse_timestamp(s: &str) -> Result<DateTime> {
+    let invalid = || {
         anyhow::anyhow!(
-            "invalid ISO 8601 timestamp {s:?}: expected a date (\"2024-01-01\") or a date-time \
-             (\"2024-01-01T00:00:00Z\", \"2024-01-01T00:00:00+09:00\")"
+            "invalid timestamp {s:?}: expected an ISO 8601 date (\"2024-01-01\") or date-time \
+             (\"2024-01-01T00:00:00Z\", \"2024-01-01T00:00:00+09:00\"), an RFC 2822 date \
+             (\"Mon, 01 Jan 2024 00:00:00 GMT\"), or seconds since the Unix epoch"
         )
-    })?;
-    Ok(DateTime::from_secs_and_nanos(
-        dt.timestamp(),
-        dt.timestamp_subsec_nanos(),
-    ))
+    };
+    if let Some(dt) = parse_iso8601(s).or_else(|| chrono::DateTime::parse_from_rfc2822(s).ok()) {
+        // chrono spells a leap second (`23:59:60`) as nanos >= 1e9, which the
+        // SDK `DateTime` cannot hold (its constructor panics). S3 has no use
+        // for one either, so reject it like the AWS CLI does.
+        let nanos = dt.timestamp_subsec_nanos();
+        if nanos >= 1_000_000_000 {
+            return Err(anyhow::anyhow!(
+                "invalid timestamp {s:?}: leap seconds (\":60\") are not supported"
+            ));
+        }
+        return Ok(DateTime::from_secs_and_nanos(dt.timestamp(), nanos));
+    }
+    parse_epoch_string(s)
+        .and_then(epoch_seconds_to_sdk)
+        .ok_or_else(invalid)
+}
+
+/// A string holding a plain decimal number is read as seconds since the Unix
+/// epoch, as the AWS CLI does.
+///
+/// One deliberate difference: exactly eight digits is the ISO 8601 basic date
+/// (`20240101`), never an epoch. The AWS CLI reads that string as 1970-08-23,
+/// which is not what anyone writing it means; and a mistyped basic date
+/// (`20241301`) must stay an error rather than quietly become a 1970 date.
+fn parse_epoch_string(s: &str) -> Option<f64> {
+    let digits = s.strip_prefix(['-', '+']).unwrap_or(s);
+    let plain_decimal = !digits.is_empty()
+        && digits.bytes().all(|b| b.is_ascii_digit() || b == b'.')
+        && digits.bytes().any(|b| b.is_ascii_digit());
+    if !plain_decimal || (digits.len() == 8 && !digits.contains('.')) {
+        return None;
+    }
+    s.parse::<f64>().ok()
 }
 
 /// Parse the ISO 8601 profiles S3 documents for Lifecycle/Transition `Date`,
@@ -337,7 +467,8 @@ fn parse_rfc3339(s: &str) -> Result<DateTime> {
 ///
 /// RFC 3339 alone is not enough either: it is a strict subset of ISO 8601 and
 /// rejects the basic format (`20240101T000000Z`), colon-less offsets
-/// (`+0000`), and a date-time with no offset at all — all of which the AWS CLI
+/// (`+0000`), reduced-precision times (`T00:00Z`), a comma as the decimal
+/// sign, and a date-time with no offset at all — all of which the AWS CLI
 /// accepts, so rejecting them would turn valid input into an error.
 fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
     // The common case, and what our own `get-bucket-lifecycle-configuration`
@@ -349,10 +480,16 @@ fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
 }
 
 /// Rewrite the ISO 8601 spellings RFC 3339 rejects into RFC 3339 form, so that
-/// a single strict parser still validates every accepted input. Handles the
-/// basic format (`20240101`, `20240101T000000Z`), offsets written `+09` or
-/// `+0900`, and a date-time with no offset at all (read as UTC — what the AWS
-/// CLI does, and the only zone S3 renders the field in).
+/// a single strict parser still validates every accepted input. Handles:
+///
+/// - the basic format (`20240101`, `20240101T000000Z`);
+/// - a time without seconds or minutes (`T00:00`, `T0000`, `T00`);
+/// - a comma as the decimal sign (`T00:00:00,500Z`);
+/// - a space (or lowercase `t`) between date and time, and a space before the
+///   offset (`2024-01-01 00:00:00 +09:00`);
+/// - offsets written `+09` or `+0900`;
+/// - a date-time with no offset at all (read as UTC — what the AWS CLI does,
+///   and the only zone S3 renders the field in).
 ///
 /// Returns `None` when the input is not one of those forms. Rewriting only
 /// moves separators around: the result is still handed to the RFC 3339 parser,
@@ -374,6 +511,48 @@ fn normalise_iso8601(s: &str) -> Option<String> {
             None => (tail, ""),
         }
     }
+    /// `HH`, `HH:MM`, `HH:MM:SS[.frac]` and their colon-less basic forms ->
+    /// `HH:MM:SS[.frac]`. A fraction is taken only on the seconds: ISO 8601
+    /// also allows fractional hours and minutes, but nobody writes those.
+    fn expand_time(time: &str) -> Option<String> {
+        let (hms, frac) = match time.find(['.', ',']) {
+            Some(i) => (&time[..i], Some(&time[i + 1..])),
+            None => (time, None),
+        };
+        let parts: Vec<&str> = if hms.contains(':') {
+            hms.split(':').collect()
+        } else {
+            match hms.len() {
+                2 => vec![hms],
+                4 => vec![&hms[..2], &hms[2..]],
+                6 => vec![&hms[..2], &hms[2..4], &hms[4..]],
+                _ => return None,
+            }
+        };
+        if parts.len() > 3
+            || parts
+                .iter()
+                .any(|p| p.len() != 2 || !all_digits(p.as_bytes()))
+        {
+            return None;
+        }
+        let field = |i: usize| parts.get(i).copied().unwrap_or("00");
+        let hms = format!("{}:{}:{}", field(0), field(1), field(2));
+        match frac {
+            None => Some(hms),
+            Some(f) if parts.len() == 3 && !f.is_empty() && all_digits(f.as_bytes()) => {
+                Some(format!("{hms}.{f}"))
+            }
+            Some(_) => None,
+        }
+    }
+
+    // The input is arbitrary user text and everything below slices by byte
+    // offset; restricting to ASCII makes every offset a char boundary. (No
+    // ISO 8601 form needs more.)
+    if !s.is_ascii() {
+        return None;
+    }
 
     let expand_date = |d: &str| -> String {
         if d.len() == 8 && all_digits(d.as_bytes()) {
@@ -389,26 +568,13 @@ fn normalise_iso8601(s: &str) -> Option<String> {
         return Some(format!("{}T00:00:00Z", expand_date(s)));
     }
 
-    let (date, tail) = s.split_once('T')?;
+    let sep = s.find(['T', 't', ' '])?;
+    let (date, tail) = (&s[..sep], s[sep + 1..].trim());
     let (time, offset) = split_offset(tail);
+    let time = expand_time(time.trim_end())?;
 
-    // `HHMMSS[.frac]` -> `HH:MM:SS[.frac]`.
-    let time = if !time.contains(':') && time.len() >= 6 && all_digits(&time.as_bytes()[..6]) {
-        format!(
-            "{}:{}:{}{}",
-            &time[0..2],
-            &time[2..4],
-            &time[4..6],
-            &time[6..]
-        )
-    } else {
-        time.to_string()
-    };
-
-    // The digit guards keep the slicing on ASCII boundaries — the offset is
-    // arbitrary user input, so a multi-byte char here would otherwise panic —
-    // and anything that fails them falls through to the RFC 3339 parser, which
-    // rejects it.
+    // Anything that fails the digit guards is passed through unchanged for
+    // the RFC 3339 parser to reject.
     let ob = offset.as_bytes();
     let offset = match ob.len() {
         0 => "Z".to_string(),                                 // no zone given
@@ -3139,7 +3305,7 @@ mod tests {
             "++++++++T++++++",
         ] {
             let parsed = LifecycleExpirationJson {
-                Date: Some(date.to_string()),
+                Date: Some(date.into()),
                 Days: None,
                 ExpiredObjectDeleteMarker: None,
             };
@@ -3475,5 +3641,228 @@ mod tests {
         let parsed: ReplicationConfigurationJson = serde_json::from_str(&inner)
             .unwrap_or_else(|e| panic!("own get output must parse: {e}: {inner}"));
         parsed.into_sdk().unwrap();
+    }
+
+    // ----- timestamps: AWS-CLI-accepted spellings -----
+
+    fn expiration_date(date_json: &str) -> Result<DateTime> {
+        let body =
+            format!(r#"{{"Rules":[{{"Status":"Enabled","Expiration":{{"Date":{date_json}}}}}]}}"#);
+        let cfg = from_json_str::<LifecycleConfigurationJson>(&body)?.into_sdk()?;
+        Ok(*cfg.rules()[0].expiration().unwrap().date().unwrap())
+    }
+
+    /// 2024-01-01T00:00:00Z
+    const NEW_YEAR_2024: i64 = 1_704_067_200;
+
+    #[test]
+    fn timestamp_spellings_the_aws_cli_accepts_all_parse_to_the_same_instant() {
+        for date in [
+            // ISO 8601 reduced precision (no seconds / no minutes), extended and basic.
+            r#""2024-01-01T00:00Z""#,
+            r#""2024-01-01T00:00""#,
+            r#""2024-01-01T00Z""#,
+            r#""20240101T0000Z""#,
+            r#""20240101T00""#,
+            // Comma as the decimal sign.
+            r#""2024-01-01T00:00:00,000Z""#,
+            r#""20240101T000000,0+0000""#,
+            // Space / lowercase separators.
+            r#""2024-01-01 00:00:00""#,
+            r#""2024-01-01 00:00""#,
+            r#""2024-01-01t00:00:00+0000""#,
+            r#""2024-01-01T09:00:00 +09:00""#,
+            r#""2024-01-01 09:00 +0900""#,
+            // RFC 2822.
+            r#""Mon, 01 Jan 2024 00:00:00 GMT""#,
+            r#""Mon, 01 Jan 2024 09:00:00 +0900""#,
+            // Epoch seconds, as a number and as a string.
+            "1704067200",
+            "1704067200.0",
+            r#""1704067200""#,
+            r#""1704067200.0""#,
+        ] {
+            let dt = expiration_date(date).unwrap_or_else(|e| panic!("{date} must parse: {e:#}"));
+            assert_eq!(dt.secs(), NEW_YEAR_2024, "{date}");
+            assert_eq!(dt.subsec_nanos(), 0, "{date}");
+        }
+    }
+
+    #[test]
+    fn timestamp_fraction_is_kept() {
+        for date in [
+            r#""2024-01-01T00:00:00,5Z""#,
+            r#""2024-01-01 00:00:00.5""#,
+            "1704067200.5",
+            r#""1704067200.5""#,
+        ] {
+            let dt = expiration_date(date).unwrap();
+            assert_eq!(dt.secs(), NEW_YEAR_2024, "{date}");
+            assert_eq!(dt.subsec_nanos(), 500_000_000, "{date}");
+        }
+    }
+
+    #[test]
+    fn negative_epoch_seconds_parse() {
+        let dt = expiration_date("-1.5").unwrap();
+        assert_eq!((dt.secs(), dt.subsec_nanos()), (-2, 500_000_000));
+        assert_eq!(expiration_date(r#""-1""#).unwrap().secs(), -1);
+    }
+
+    #[test]
+    fn transition_date_accepts_epoch_number() {
+        let body = r#"{"Rules":[{"Status":"Enabled",
+            "Transitions":[{"Date":1704067200,"StorageClass":"GLACIER"}]}]}"#;
+        let cfg = from_json_str::<LifecycleConfigurationJson>(body)
+            .unwrap()
+            .into_sdk()
+            .unwrap();
+        assert_eq!(
+            cfg.rules()[0].transitions()[0].date().unwrap().secs(),
+            NEW_YEAR_2024
+        );
+    }
+
+    /// A leap second used to panic inside the SDK `DateTime` constructor.
+    #[test]
+    fn leap_second_is_an_error_not_a_panic() {
+        for date in [
+            r#""2024-12-31T23:59:60Z""#,
+            r#""2024-12-31T23:59:60.5+09:00""#,
+            r#""20241231T235960""#,
+            r#""2024-12-31 23:59:60""#,
+            r#""Tue, 31 Dec 2024 23:59:60 GMT""#,
+        ] {
+            let err = expiration_date(date).expect_err(date);
+            assert!(
+                format!("{err:#}").contains("invalid timestamp"),
+                "{date}: {err:#}"
+            );
+        }
+    }
+
+    #[test]
+    fn eight_digit_string_is_a_basic_date_never_an_epoch() {
+        assert_eq!(
+            expiration_date(r#""20240101""#).unwrap().secs(),
+            NEW_YEAR_2024
+        );
+        // A mistyped basic date must not fall through to the epoch reading.
+        assert!(expiration_date(r#""20241301""#).is_err());
+        assert!(expiration_date(r#""-20241301""#).is_err());
+    }
+
+    #[test]
+    fn malformed_timestamps_still_error() {
+        for date in [
+            r#""2024-01-01T00:00.5Z""#, // fractional minutes
+            r#""2024-01-01T0Z""#,
+            r#""2024-01-01T000Z""#,
+            r#""2024-01-01T00:00:00:00Z""#,
+            r#""2024-01-01T00:00:00.Z""#,
+            r#""2024-01-01T24:00:00Z""#,
+            r#""2024-02-30""#,
+            r#""2024-01""#,
+            r#""1e9""#,
+            r#""inf""#,
+            r#""nan""#,
+            r#"".""#,
+            r#""-""#,
+            r#""""#,
+            r#"" ""#,
+            r#""1704067200 ""#,
+            "1e300",
+            "-1e300",
+            "253402300800",
+            "true",
+            "[]",
+        ] {
+            assert!(expiration_date(date).is_err(), "{date} must error");
+        }
+    }
+
+    #[test]
+    fn epoch_range_limits() {
+        assert_eq!(
+            expiration_date("253402300799").unwrap().secs(),
+            253_402_300_799
+        );
+        assert_eq!(
+            expiration_date("-62167219200").unwrap().secs(),
+            -62_167_219_200
+        );
+        assert!(expiration_date("-62167219201").is_err());
+        // Float rounding must never produce 1e9 nanoseconds (which panics).
+        let dt = expiration_date("-0.00000000000000000001").unwrap();
+        assert!(dt.subsec_nanos() < 1_000_000_000);
+    }
+
+    // ----- from_json_str: duplicate keys take the last value -----
+
+    #[test]
+    fn duplicate_key_takes_the_last_value() {
+        let body = r#"{"Rules":[{"Status":"Enabled","Status":"Disabled","ID":"a","ID":"b"}],
+                       "Rules":[{"Status":"Enabled","ID":"x","Status":"Disabled","ID":"y"}]}"#;
+        let cfg = from_json_str::<LifecycleConfigurationJson>(body)
+            .unwrap()
+            .into_sdk()
+            .unwrap();
+        assert_eq!(cfg.rules().len(), 1);
+        assert_eq!(cfg.rules()[0].id(), Some("y"));
+        assert_eq!(cfg.rules()[0].status().as_str(), "Disabled");
+    }
+
+    #[test]
+    fn duplicate_key_last_wins_even_when_an_earlier_value_is_invalid() {
+        let body = r#"{"BlockPublicAcls":"yes","BlockPublicAcls":true}"#;
+        let cfg = from_json_str::<PublicAccessBlockConfigurationJson>(body)
+            .unwrap()
+            .into_sdk()
+            .unwrap();
+        assert_eq!(cfg.block_public_acls(), Some(true));
+    }
+
+    #[test]
+    fn duplicate_key_whose_last_value_is_invalid_errors() {
+        let body = r#"{"BlockPublicAcls":true,"BlockPublicAcls":"yes"}"#;
+        let err = from_json_str::<PublicAccessBlockConfigurationJson>(body).unwrap_err();
+        assert!(err.to_string().contains("invalid type"), "got: {err}");
+    }
+
+    #[test]
+    fn duplicates_do_not_hide_unknown_or_missing_fields() {
+        let err =
+            from_json_str::<CorsConfigurationJson>(r#"{"CORSRules":[],"CORSRules":[],"Bogus":1}"#)
+                .unwrap_err();
+        assert!(
+            err.to_string().contains("unknown field `Bogus`"),
+            "got: {err}"
+        );
+        assert!(
+            from_json_str::<ReplicationConfigurationJson>(r#"{"Role":"a","Role":"b"}"#).is_err(),
+            "missing `Rules` must still error"
+        );
+    }
+
+    #[test]
+    fn from_json_str_keeps_position_in_ordinary_errors() {
+        let err = from_json_str::<CorsConfigurationJson>(r#"{"CORSRule":[]}"#).unwrap_err();
+        assert!(err.to_string().contains("line 1 column"), "got: {err}");
+        let err = from_json_str::<CorsConfigurationJson>("{not json").unwrap_err();
+        assert!(err.is_syntax(), "got: {err}");
+    }
+
+    #[test]
+    fn from_json_str_matches_from_str_on_valid_documents() {
+        let body = r#"{"Rules":[{"Status":"Enabled","Filter":{"ObjectSizeGreaterThan":5497558138880},
+            "Expiration":{"Days":30}}]}"#;
+        let cfg = from_json_str::<LifecycleConfigurationJson>(body)
+            .unwrap()
+            .into_sdk()
+            .unwrap();
+        assert_eq!(
+            cfg.rules()[0].filter().unwrap().object_size_greater_than(),
+            Some(5_497_558_138_880)
+        );
     }
 }

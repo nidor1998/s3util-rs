@@ -26,6 +26,18 @@ Dependency and security update, plus fixes to JSON input and output fidelity. No
   `get-bucket-replication` renders such absent values as `{}`, its own output could not be fed back into
   `put-bucket-replication`. These members are now optional, and an omitted value is left unset in the request rather
   than replaced with a default.
+- `put-bucket-lifecycle-configuration` crashed with a panic when `Expiration.Date` or `Transitions[].Date` named a
+  leap second (for example `"2024-12-31T23:59:60Z"`). Such a value is now rejected with an ordinary error, as the AWS
+  CLI does.
+- `put-bucket-lifecycle-configuration` rejected several `Date` spellings that the AWS CLI accepts. It now also
+  accepts ISO 8601 times without seconds or minutes (`2024-01-01T00:00Z`, `20240101T0000Z`, `2024-01-01T00Z`), a
+  comma as the decimal sign (`2024-01-01T00:00:00,000Z`), a space between date and time or before the offset
+  (`2024-01-01 00:00:00`, `2024-01-01T09:00:00 +09:00`), RFC 2822 dates (`Mon, 01 Jan 2024 00:00:00 GMT`), and
+  seconds since the Unix epoch, written as a JSON number or as a string (`1704067200`, `"1704067200"`). An
+  eight-digit string is still read as the ISO 8601 basic date (`"20240101"` is 2024-01-01), not as an epoch.
+- The eight `put-*` commands that read a JSON document rejected a document in which an object key appears more than
+  once (`duplicate field`). The last occurrence now wins, as in the AWS CLI. Unknown keys, missing required keys, and
+  wrongly typed values are still rejected.
 
 ### Security
 
@@ -60,6 +72,12 @@ Dependency and security update, plus fixes to JSON input and output fidelity. No
 
 ### Changed
 
+- Library API (`s3util_rs::input::json`), as a consequence of the lifecycle `Date` and duplicate-key fixes above:
+  `LifecycleExpirationJson::Date` and `TransitionJson::Date` changed from `Option<String>` to the new
+  `Option<TimestampJson>` (a string or epoch seconds; `From<String>` and `From<&str>` are provided), and the new
+  `from_json_str` function parses a document with last-wins duplicate keys. The mirror structs still implement
+  `Deserialize`, so `serde_json::from_str` keeps working but rejects duplicate keys as before. The command-line
+  interface is unchanged.
 - Removed redundant borrows of the `assert!` message arguments in the shell-completion e2e tests
   (`tests/e2e_exit_codes.rs`), which the `clippy::useless_borrows_in_formatting` lint added in Rust 1.100 reported as
   warnings. Test-only change; the assertions and their failure messages are unchanged.
