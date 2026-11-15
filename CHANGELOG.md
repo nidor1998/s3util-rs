@@ -42,6 +42,9 @@ Dependency and security update. No code, behavior, option, or output changes.
 
 ### Changed
 
+- Removed redundant borrows of the `assert!` message arguments in the shell-completion e2e tests
+  (`tests/e2e_exit_codes.rs`), which the `clippy::useless_borrows_in_formatting` lint added in Rust 1.100 reported as
+  warnings. Test-only change; the assertions and their failure messages are unchanged.
 - aws-sdk-s3 `v1.152.0 -> v1.157.0`
 - Updated other dependencies
 
