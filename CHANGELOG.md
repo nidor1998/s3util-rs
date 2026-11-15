@@ -5,6 +5,46 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.10.7] - 2026-11-15
+
+Dependency and security update. No code, behavior, option, or output changes.
+
+### Security
+
+- Updated `rustls-webpki` from `v0.103.15` to `v0.103.16` to remediate RUSTSEC-2026-0382 (CVE-2026-111943). Earlier
+  versions could accept certificate chains that pass through the distrusted emSign intermediates, whose private keys
+  are now publicly known, provided the configured trust anchors allowed such a path. s3util verifies the TLS
+  connections it makes to Amazon S3 and other AWS endpoints against the operating system's certificate store, so a
+  host whose store still trusts the affected emSign root could have accepted a forged certificate from an attacker on
+  the network path. The fixed version rejects any chain containing those intermediates' public keys, regardless of the
+  trust store. The related RUSTSEC-2026-0381 (`webpki-roots` `v1.0.9 -> v1.0.11`, removing the
+  `emSign ECC Root CA - G3` root) was also remediated; `webpki-roots` is used only by the test suite, not by the
+  shipped binary.
+- Updated `crypto-bigint` from `v0.5.5` to `v0.7.10` (via `aws-sigv4` `v1.6.0 -> v1.6.4`) to remediate
+  RUSTSEC-2026-0387, and `ctutils` from `v0.4.3` to `v0.4.8` to remediate RUSTSEC-2026-0385. Operations in both crates
+  that are meant to run in constant time (multi-precision subtraction, division and Montgomery multiplication in
+  `crypto-bigint`; mask generation and `u128` comparisons in `ctutils`) could compile to branches on secret values,
+  potentially leaking them through timing side channels. These crates are reached through SigV4a request signing,
+  which s3util uses for Multi-Region Access Points, where the secret involved is the ECDSA signing key derived from
+  your AWS credentials. Exploiting this would require an attacker to measure the timing of signing operations on the
+  machine running s3util; no practical attack against s3util is known.
+- Updated `tokio` from `v1.53.2` to `v1.54.1` to remediate RUSTSEC-2026-0386, an I/O-safety soundness issue in the
+  safe `AsyncFd` constructors that could lead to a use-after-free if a file descriptor was closed and reused while
+  still registered. s3util does not use `AsyncFd`, so it was not affected in practice.
+- Updated `libz-sys` from `v1.1.29` to `v1.1.32` to remediate RUSTSEC-2026-0418 (GHSA-8p3x-q3q3-q3v5). With `cc`
+  `v1.6.0` or later on a Unix host, the build script of earlier versions printed the entire build environment,
+  including any secrets in it, to its stdout, which Cargo saves under `target/`. This affects only building s3util from
+  source (`libz-sys` is a build-time dependency); the s3util binary itself does not contain or expose those values. If
+  you built s3util from source with an affected version in an environment holding secrets, and kept or shared the
+  `target/` directory (for example in a CI cache), consider those secrets exposed.
+- Removed the unmaintained `pin-utils` crate (RUSTSEC-2026-0441) from the dependency tree by updating
+  `aws-smithy-runtime` to `v1.16.2`. This was an unmaintained-crate notice, not a vulnerability.
+
+### Changed
+
+- aws-sdk-s3 `v1.152.0 -> v1.157.0`
+- Updated other dependencies
+
 ## [1.10.6] - 2026-10-17
 
 Dependency and security update. No code, behavior, option, or output changes.

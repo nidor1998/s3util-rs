@@ -139,7 +139,7 @@ mod tests {
         assert!(
             stdout.contains("s3util"),
             "expected bash completion output mentioning 's3util', got first 200 chars: {}",
-            &stdout.chars().take(200).collect::<String>()
+            stdout.chars().take(200).collect::<String>()
         );
     }
 
@@ -166,7 +166,7 @@ mod tests {
         assert!(
             stdout.contains("#compdef s3util"),
             "expected zsh completion output containing '#compdef s3util', got first 200 chars: {}",
-            &stdout.chars().take(200).collect::<String>()
+            stdout.chars().take(200).collect::<String>()
         );
     }
 
@@ -193,7 +193,7 @@ mod tests {
         assert!(
             stdout.contains("complete -c s3util"),
             "expected fish completion output containing 'complete -c s3util', got first 200 chars: {}",
-            &stdout.chars().take(200).collect::<String>()
+            stdout.chars().take(200).collect::<String>()
         );
     }
 
