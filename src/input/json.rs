@@ -966,9 +966,10 @@ pub struct S3KeyFilterJson {
 #[allow(non_snake_case)]
 pub struct FilterRuleJson {
     /// `prefix` or `suffix`. Unknown values are passed through to the SDK
-    /// enum; S3 will reject them server-side.
-    pub Name: String,
-    pub Value: String,
+    /// enum; S3 will reject them server-side. Both members are optional in
+    /// the S3 model.
+    pub Name: Option<String>,
+    pub Value: Option<String>,
 }
 
 impl NotificationConfigurationJson {
@@ -1092,8 +1093,8 @@ impl S3KeyFilterJson {
 impl FilterRuleJson {
     fn into_sdk(self) -> FilterRule {
         FilterRule::builder()
-            .name(FilterRuleName::from(self.Name.as_str()))
-            .value(self.Value)
+            .set_name(self.Name.as_deref().map(FilterRuleName::from))
+            .set_value(self.Value)
             .build()
     }
 }
@@ -1210,7 +1211,8 @@ pub struct ReplicationTimeJson {
 #[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct ReplicationTimeValueJson {
-    pub Minutes: i32,
+    /// Optional in the S3 model; S3 currently accepts only `15`.
+    pub Minutes: Option<i32>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1225,7 +1227,8 @@ pub struct MetricsJson {
 #[serde(deny_unknown_fields)]
 #[allow(non_snake_case)]
 pub struct DeleteMarkerReplicationJson {
-    pub Status: String,
+    /// Optional in the S3 model.
+    pub Status: Option<String>,
 }
 
 impl ReplicationConfigurationJson {
@@ -1275,7 +1278,11 @@ impl ReplicationRuleJson {
         if let Some(dmr) = self.DeleteMarkerReplication {
             b = b.delete_marker_replication(
                 DeleteMarkerReplication::builder()
-                    .status(DeleteMarkerReplicationStatus::from(dmr.Status.as_str()))
+                    .set_status(
+                        dmr.Status
+                            .as_deref()
+                            .map(DeleteMarkerReplicationStatus::from),
+                    )
                     .build(),
             );
         }
@@ -1360,7 +1367,7 @@ impl DestinationJson {
                     .status(ReplicationTimeStatus::from(rt.Status.as_str()))
                     .time(
                         ReplicationTimeValue::builder()
-                            .minutes(rt.Time.Minutes)
+                            .set_minutes(rt.Time.Minutes)
                             .build(),
                     )
                     .build()?,
@@ -1369,8 +1376,11 @@ impl DestinationJson {
         if let Some(metrics) = self.Metrics {
             let mut mb = Metrics::builder().status(MetricsStatus::from(metrics.Status.as_str()));
             if let Some(et) = metrics.EventThreshold {
-                mb =
-                    mb.event_threshold(ReplicationTimeValue::builder().minutes(et.Minutes).build());
+                mb = mb.event_threshold(
+                    ReplicationTimeValue::builder()
+                        .set_minutes(et.Minutes)
+                        .build(),
+                );
             }
             b = b.metrics(mb.build()?);
         }
@@ -3335,5 +3345,135 @@ mod tests {
         let ssc = cfg.rules()[0].source_selection_criteria().unwrap();
         assert!(ssc.sse_kms_encrypted_objects().is_some());
         assert!(ssc.replica_modifications().is_none());
+    }
+
+    // `DeleteMarkerReplication.Status`, `ReplicationTimeValue.Minutes` and
+    // `FilterRule.Name`/`Value` are optional in the S3 model (and the SDK);
+    // the mirrors must not demand them, or valid input — including our own
+    // `get-*` output, which renders an absent value as `{}` — is rejected.
+
+    #[test]
+    fn replication_delete_marker_replication_without_status_parses() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "DeleteMarkerReplication": {},
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let dmr = cfg.rules()[0].delete_marker_replication().unwrap();
+        assert!(dmr.status().is_none());
+    }
+
+    #[test]
+    fn replication_time_value_without_minutes_parses() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "ReplicationTime": { "Status": "Enabled", "Time": {} },
+              "Metrics": { "Status": "Enabled", "EventThreshold": {} }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        let time = d.replication_time().unwrap().time().unwrap();
+        assert!(time.minutes().is_none());
+        let et = d.metrics().unwrap().event_threshold().unwrap();
+        assert!(et.minutes().is_none());
+    }
+
+    #[test]
+    fn replication_time_value_with_minutes_still_set() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "ReplicationTime": { "Status": "Enabled", "Time": { "Minutes": 15 } },
+              "Metrics": { "Status": "Enabled", "EventThreshold": { "Minutes": 15 } }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let d = cfg.rules()[0].destination().unwrap();
+        assert_eq!(
+            d.replication_time().unwrap().time().unwrap().minutes(),
+            Some(15)
+        );
+        assert_eq!(
+            d.metrics().unwrap().event_threshold().unwrap().minutes(),
+            Some(15)
+        );
+    }
+
+    #[test]
+    fn notification_filter_rule_without_name_or_value_parses() {
+        let json = r#"{
+          "QueueConfigurations":[{
+            "QueueArn":"arn:aws:sqs:us-east-1:111111111111:q",
+            "Events":["s3:ObjectCreated:*"],
+            "Filter":{"Key":{"FilterRules":[{"Value":"a/"},{"Name":"suffix"}]}}
+          }]
+        }"#;
+        let parsed: NotificationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let rules = cfg.queue_configurations()[0]
+            .filter()
+            .unwrap()
+            .key()
+            .unwrap()
+            .filter_rules();
+        assert!(rules[0].name().is_none());
+        assert_eq!(rules[0].value(), Some("a/"));
+        assert_eq!(rules[1].name(), Some(&FilterRuleName::Suffix));
+        assert!(rules[1].value().is_none());
+    }
+
+    #[test]
+    fn get_bucket_replication_output_round_trips_into_put() {
+        use crate::output::json::get_bucket_replication_to_json;
+        use aws_sdk_s3::operation::get_bucket_replication::GetBucketReplicationOutput;
+
+        let rule = ReplicationRule::builder()
+            .status(ReplicationRuleStatus::Enabled)
+            .destination(
+                Destination::builder()
+                    .bucket("arn:aws:s3:::d")
+                    .replication_time(
+                        ReplicationTime::builder()
+                            .status(ReplicationTimeStatus::Enabled)
+                            .time(ReplicationTimeValue::builder().build())
+                            .build()
+                            .unwrap(),
+                    )
+                    .build()
+                    .unwrap(),
+            )
+            .delete_marker_replication(DeleteMarkerReplication::builder().build())
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(
+                ReplicationConfiguration::builder()
+                    .role("arn:aws:iam::111111111111:role/r")
+                    .rules(rule)
+                    .build()
+                    .unwrap(),
+            )
+            .build();
+        let inner = get_bucket_replication_to_json(&out)["ReplicationConfiguration"].to_string();
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(&inner)
+            .unwrap_or_else(|e| panic!("own get output must parse: {e}: {inner}"));
+        parsed.into_sdk().unwrap();
     }
 }

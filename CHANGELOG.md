@@ -7,7 +7,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [1.10.7] - 2026-11-15
 
-Dependency and security update. No code, behavior, option, or output changes.
+Dependency and security update, plus fixes to JSON input and output fidelity. No option changes.
+
+### Fixed
+
+- `head-object` omitted the object-lock event-hold fields that the SDK reads from S3's response headers. It now emits
+  `ObjectLockEventHold`, `ObjectLockEventHoldDurationDays`, and `ObjectLockEventHoldDurationYears` when S3 returns
+  them; previously an object under an event hold was reported as if it had none.
+- `list-object-annotations` omitted each entry's `ReplicationStatus`. It is now emitted, as explicit `null` when S3
+  does not return it, matching the stable per-entry key set already used for `ETag`.
+- `get-bucket-policy --policy-only` showed a normalised copy of the policy rather than the stored one: keys were
+  sorted alphabetically, duplicate keys collapsed to the last occurrence, and numbers were re-spelled (`1.50` became
+  `1.5`). The policy is now only re-indented; every token, including key order, duplicates, and number spelling, is
+  kept verbatim. The default output (`{"Policy": "<string>"}`) was not affected.
+- `put-bucket-replication` rejected `DeleteMarkerReplication` without `Status` and `ReplicationTimeValue` (in
+  `ReplicationTime.Time` and `Metrics.EventThreshold`) without `Minutes`, and `put-bucket-notification-configuration`
+  rejected a `FilterRule` without `Name` or `Value`, although all four members are optional in the S3 model. Because
+  `get-bucket-replication` renders such absent values as `{}`, its own output could not be fed back into
+  `put-bucket-replication`. These members are now optional, and an omitted value is left unset in the request rather
+  than replaced with a default.
 
 ### Security
 
