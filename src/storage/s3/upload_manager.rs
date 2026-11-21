@@ -14,11 +14,11 @@ use aws_sdk_s3::types::{
 };
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use base64::{Engine as _, engine::general_purpose};
-use chrono::SecondsFormat;
 use futures::stream::{FuturesUnordered, StreamExt};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
+use time::OffsetDateTime;
 use tokio::io::AsyncReadExt;
 use tokio::task;
 use tokio::task::JoinHandle;
@@ -34,6 +34,7 @@ use crate::storage::{
 use crate::types::SyncStatistics::{
     ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
 };
+use crate::types::datetime::{Rfc3339Ext, to_time_millis};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
@@ -64,16 +65,8 @@ struct UploadMetadata {
 /// Convert `--expires` into the SDK's `DateTime` for a stdin-sourced streaming
 /// upload. Split out from `upload_stream` (and kept free of `Config`) so the
 /// conversion is testable without an S3 client.
-fn stream_upload_expires(
-    expires: Option<chrono::DateTime<chrono::Utc>>,
-) -> Result<Option<DateTime>> {
-    match expires {
-        Some(expires) => Ok(Some(DateTime::from_str(
-            &expires.to_rfc3339(),
-            DateTimeFormat::DateTimeWithOffset,
-        )?)),
-        None => Ok(None),
-    }
+fn stream_upload_expires(expires: Option<OffsetDateTime>) -> Option<DateTime> {
+    expires.map(DateTime::from_time)
 }
 
 /// Build the user-metadata map for a stdin-sourced streaming upload.
@@ -85,7 +78,7 @@ fn stream_upload_expires(
 fn stream_upload_metadata(
     configured_metadata: Option<&HashMap<String, String>>,
     put_last_modified_metadata: bool,
-    now: chrono::DateTime<chrono::Utc>,
+    now: OffsetDateTime,
 ) -> Option<HashMap<String, String>> {
     if !put_last_modified_metadata {
         return configured_metadata.cloned();
@@ -94,7 +87,7 @@ fn stream_upload_metadata(
     let mut metadata = configured_metadata.cloned().unwrap_or_default();
     metadata.insert(
         S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
-        now.to_rfc3339_opts(SecondsFormat::Secs, false),
+        now.to_rfc3339_secs(),
     );
     Some(metadata)
 }
@@ -288,16 +281,9 @@ impl UploadManager {
 
     fn modify_last_modified_metadata(mut get_object_output: GetObjectOutput) -> GetObjectOutput {
         let mut metadata = get_object_output.metadata().cloned().unwrap_or_default();
-        let last_modified = DateTime::from_millis(
-            get_object_output
-                .last_modified()
-                .unwrap()
-                .to_millis()
-                .unwrap(),
-        )
-        .to_chrono_utc()
-        .unwrap()
-        .to_rfc3339_opts(SecondsFormat::Secs, false);
+        let last_modified = to_time_millis(get_object_output.last_modified().unwrap())
+            .unwrap()
+            .to_rfc3339_secs();
 
         metadata.insert(
             S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
@@ -416,10 +402,7 @@ impl UploadManager {
 
                 expires
             } else {
-                Some(DateTime::from_str(
-                    &self.config.expires.unwrap().to_rfc3339(),
-                    DateTimeFormat::DateTimeWithOffset,
-                )?)
+                self.config.expires.map(DateTime::from_time)
             },
             metadata: if self.config.metadata.is_none() {
                 get_object_output_first_chunk.metadata().cloned()
@@ -1089,11 +1072,11 @@ impl UploadManager {
         // `UploadMetadata` in `singlepart_upload`: the same command must not
         // produce a differently-tagged object just because the input crossed
         // --multipart-threshold and took the streaming path instead.
-        let expires = stream_upload_expires(self.config.expires)?;
+        let expires = stream_upload_expires(self.config.expires);
         let metadata = stream_upload_metadata(
             self.config.metadata.as_ref(),
             self.config.put_last_modified_metadata,
-            chrono::Utc::now(),
+            OffsetDateTime::now_utc(),
         );
 
         let create_output = self
@@ -1937,10 +1920,7 @@ impl UploadManager {
 
                 expires
             } else {
-                Some(DateTime::from_str(
-                    &self.config.expires.unwrap().to_rfc3339(),
-                    DateTimeFormat::DateTimeWithOffset,
-                )?)
+                self.config.expires.map(DateTime::from_time)
             },
             metadata: if self.config.metadata.is_none() {
                 get_object_output.metadata().cloned()
@@ -2715,34 +2695,26 @@ mod read_exact_or_eof_tests {
 #[cfg(test)]
 mod stream_upload_metadata_tests {
     use super::{stream_upload_expires, stream_upload_metadata};
-    use chrono::{TimeZone, Utc};
     use std::collections::HashMap;
+    use time::OffsetDateTime;
+    use time::macros::datetime;
 
-    fn fixed_now() -> chrono::DateTime<Utc> {
-        Utc.with_ymd_and_hms(2026, 7, 19, 12, 34, 56).unwrap()
+    fn fixed_now() -> OffsetDateTime {
+        datetime!(2026-07-19 12:34:56 UTC)
     }
 
     #[test]
     fn expires_is_none_when_flag_absent() {
-        assert!(stream_upload_expires(None).unwrap().is_none());
+        assert!(stream_upload_expires(None).is_none());
     }
 
     #[test]
     fn expires_round_trips_through_the_sdk_datetime() {
-        let expires = Utc.with_ymd_and_hms(2030, 1, 2, 3, 4, 5).unwrap();
-        let converted = stream_upload_expires(Some(expires))
-            .unwrap()
-            .expect("expires must be converted, not dropped");
-        assert_eq!(converted.secs(), expires.timestamp());
-    }
-
-    #[test]
-    fn expires_conversion_error_propagates() {
-        // RFC 3339 requires a 4-digit year; chrono renders year 99999 as
-        // "+99999-…", which the SDK's DateTimeWithOffset parser rejects. The
-        // conversion error must surface instead of being swallowed.
-        let expires = Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap();
-        assert!(stream_upload_expires(Some(expires)).is_err());
+        let expires = datetime!(2030-01-02 03:04:05.5 UTC);
+        let converted =
+            stream_upload_expires(Some(expires)).expect("expires must be converted, not dropped");
+        assert_eq!(converted.secs(), expires.unix_timestamp());
+        assert_eq!(converted.subsec_nanos(), 500_000_000);
     }
 
     #[test]
@@ -3194,7 +3166,7 @@ mod upload_error_path_tests {
     #[tokio::test]
     async fn singlepart_converts_configured_expires() {
         let mut config = dead_endpoint_config();
-        config.expires = Some(chrono::Utc::now());
+        config.expires = Some(OffsetDateTime::now_utc());
         let mut t = manager_with(config, None, Some(4)).await;
 
         let err = t
@@ -3245,7 +3217,7 @@ mod upload_error_path_tests {
     async fn multipart_converts_configured_expires_and_storage_class() {
         let mut config = dead_endpoint_config();
         config.transfer_config.multipart_threshold = 4;
-        config.expires = Some(chrono::Utc::now());
+        config.expires = Some(OffsetDateTime::now_utc());
         config.storage_class = Some(StorageClass::Glacier);
         let mut t = manager_with(config, None, Some(4)).await;
 
@@ -3373,8 +3345,6 @@ mod upload_error_path_tests {
     use std::io::{BufRead as _, BufReader, Read as _, Write as _};
     use std::net::TcpListener;
     use std::thread;
-
-    use chrono::TimeZone as _;
 
     use crate::types::token::PipelineCancellationToken;
 
@@ -4347,55 +4317,6 @@ mod upload_error_path_tests {
         assert_eq!(
             err.downcast_ref::<S3syncError>(),
             Some(&S3syncError::Cancelled)
-        );
-    }
-
-    #[tokio::test]
-    async fn auto_chunksize_expires_conversion_error_propagates() {
-        // The conversion runs while building the CreateMultipartUpload
-        // attributes, before any request — a dead endpoint proves it.
-        let mut config = dead_endpoint_config();
-        config.transfer_config.auto_chunksize = true;
-        config.expires = Some(chrono::Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap());
-        let parts = vec![
-            ObjectPart::builder().size(4).build(),
-            ObjectPart::builder().size(4).build(),
-        ];
-        let mut t = manager_with_full(
-            config,
-            Some(parts),
-            Some(8),
-            None,
-            create_pipeline_cancellation_token(),
-            Box::new(NullSource),
-        )
-        .await;
-
-        let err = t
-            .manager
-            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
-            .await
-            .unwrap_err();
-        assert!(
-            !format!("{err:#}").contains("dispatch failure"),
-            "the conversion must fail before any request is sent: {err:#}"
-        );
-    }
-
-    #[tokio::test]
-    async fn singlepart_expires_conversion_error_propagates() {
-        let mut config = dead_endpoint_config();
-        config.expires = Some(chrono::Utc.with_ymd_and_hms(99999, 1, 2, 3, 4, 5).unwrap());
-        let mut t = manager_with(config, None, Some(4)).await;
-
-        let err = t
-            .manager
-            .upload("target-bucket", "key", small_body_chunk())
-            .await
-            .unwrap_err();
-        assert!(
-            !format!("{err:#}").contains("dispatch failure"),
-            "the conversion must fail before any request is sent: {err:#}"
         );
     }
 

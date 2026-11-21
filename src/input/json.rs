@@ -19,6 +19,7 @@
 //!
 //! Per-resource structs are added by their respective family tasks.
 
+use crate::types::datetime::has_rfc3339_separator;
 use anyhow::Result;
 use aws_sdk_s3::types::{
     AbortIncompleteMultipartUpload, AccessControlTranslation, BlockedEncryptionTypes,
@@ -41,7 +42,10 @@ use aws_sdk_s3::types::{
     Transition, TransitionStorageClass, Type as GranteeType, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde::Deserialize;
+use time::OffsetDateTime;
+use time::format_description::well_known::{Rfc2822, Rfc3339};
 
 /// Mirror of `BucketLifecycleConfiguration` for the AWS-CLI input shape.
 /// Top-level wrapper for `put-bucket-lifecycle-configuration` input JSON.
@@ -434,17 +438,23 @@ fn parse_timestamp(s: &str) -> Result<DateTime> {
              (\"Mon, 01 Jan 2024 00:00:00 GMT\"), or seconds since the Unix epoch"
         )
     };
-    if let Some(dt) = parse_iso8601(s).or_else(|| chrono::DateTime::parse_from_rfc2822(s).ok()) {
-        // chrono spells a leap second (`23:59:60`) as nanos >= 1e9, which the
-        // SDK `DateTime` cannot hold (its constructor panics). S3 has no use
-        // for one either, so reject it like the AWS CLI does.
-        let nanos = dt.timestamp_subsec_nanos();
-        if nanos >= 1_000_000_000 {
-            return Err(anyhow::anyhow!(
-                "invalid timestamp {s:?}: leap seconds (\":60\") are not supported"
-            ));
+    // S3 has no use for a leap second (`23:59:60`), so reject it like the
+    // AWS CLI does. `time` would otherwise accept one at the end of a month
+    // and silently read it as `23:59:59.999999999`.
+    let leap_second =
+        || anyhow::anyhow!("invalid timestamp {s:?}: leap seconds (\":60\") are not supported");
+    match parse_iso8601(s) {
+        Some(Iso8601::Leap) => return Err(leap_second()),
+        Some(Iso8601::Parsed(dt)) => return Ok(DateTime::from_time(dt)),
+        None => {}
+    }
+    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc2822) {
+        // RFC 2822 has no fractional seconds, so the only way to get this
+        // value is the leap-second stand-in described above.
+        if dt.nanosecond() == 999_999_999 {
+            return Err(leap_second());
         }
-        return Ok(DateTime::from_secs_and_nanos(dt.timestamp(), nanos));
+        return Ok(DateTime::from_time(dt));
     }
     parse_epoch_string(s)
         .and_then(epoch_seconds_to_sdk)
@@ -472,23 +482,50 @@ fn parse_epoch_string(s: &str) -> Option<f64> {
 /// Parse the ISO 8601 profiles S3 documents for Lifecycle/Transition `Date`,
 /// normalising to UTC.
 ///
-/// Parsing is done with chrono rather than the smithy `Format::DateTime`
-/// parser: the latter accepts only a trailing `Z`, but ISO 8601 also admits
-/// numeric offsets — and `get-bucket-lifecycle-configuration` itself emits
-/// `+00:00`, so the smithy parser broke the GET -> PUT round-trip.
+/// Parsing is done with `time`'s RFC 3339 parser rather than the smithy
+/// `Format::DateTime` parser: the latter accepts only a trailing `Z`, but
+/// ISO 8601 also admits numeric offsets — and
+/// `get-bucket-lifecycle-configuration` itself emits `+00:00`, so the smithy
+/// parser broke the GET -> PUT round-trip.
 ///
 /// RFC 3339 alone is not enough either: it is a strict subset of ISO 8601 and
 /// rejects the basic format (`20240101T000000Z`), colon-less offsets
 /// (`+0000`), reduced-precision times (`T00:00Z`), a comma as the decimal
 /// sign, and a date-time with no offset at all — all of which the AWS CLI
 /// accepts, so rejecting them would turn valid input into an error.
-fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+fn parse_iso8601(s: &str) -> Option<Iso8601> {
     // The common case, and what our own `get-bucket-lifecycle-configuration`
-    // emits.
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt);
+    // emits. `time` accepts any byte between date and time, so check the
+    // separator first; anything else goes through the normaliser.
+    if has_rfc3339_separator(s)
+        && let Some(parsed) = parse_rfc3339(s)
+    {
+        return Some(parsed);
     }
-    chrono::DateTime::parse_from_rfc3339(&normalise_iso8601(s)?).ok()
+    parse_rfc3339(&normalise_iso8601(s)?)
+}
+
+/// The outcome of [`parse_iso8601`] for an input in ISO 8601 shape.
+enum Iso8601 {
+    Parsed(OffsetDateTime),
+    /// A leap second (`:60`), which is rejected rather than parsed.
+    Leap,
+}
+
+/// Parse a string already in RFC 3339 form. A leap second is reported as
+/// [`Iso8601::Leap`] wherever it falls; `time` itself accepts one only at the
+/// end of a month, and reads it as `23:59:59.999999999`.
+fn parse_rfc3339(s: &str) -> Option<Iso8601> {
+    let dt = OffsetDateTime::parse(s, &Rfc3339).ok();
+    // RFC 3339 spells the seconds at a fixed position: `YYYY-MM-DDTHH:MM:SS`.
+    // Checked only on otherwise-valid shapes, so that e.g. `T00:60:00` (minute
+    // 60) is not mistaken for a leap second.
+    let leap = s.get(17..19) == Some("60")
+        && OffsetDateTime::parse(&format!("{}59{}", &s[..17], &s[19..]), &Rfc3339).is_ok();
+    if leap {
+        return Some(Iso8601::Leap);
+    }
+    dt.map(Iso8601::Parsed)
 }
 
 /// Rewrite the ISO 8601 spellings RFC 3339 rejects into RFC 3339 form, so that
@@ -3751,6 +3788,31 @@ mod tests {
                 "{date}: {err:#}"
             );
         }
+    }
+
+    /// `time` would read a month-end leap second as `23:59:59.999999999` and
+    /// reject any other `:60` as malformed; both must instead get the
+    /// leap-second error, while a genuine `.999999999` still parses.
+    #[test]
+    fn leap_second_is_reported_as_such_wherever_it_falls() {
+        for date in [
+            r#""2024-12-31T23:59:60Z""#,      // month end: `time` accepts
+            r#""2024-06-15T12:00:60Z""#,      // mid-month: `time` rejects
+            r#""2024-06-15t12:00:60+09:00""#, // lowercase separator
+            r#""20240615T120060""#,           // basic format
+            r#""Tue, 31 Dec 2024 23:59:60 GMT""#,
+        ] {
+            let err = expiration_date(date).expect_err(date);
+            assert!(
+                format!("{err:#}").contains("leap seconds"),
+                "{date}: {err:#}"
+            );
+        }
+        let dt = expiration_date(r#""2024-12-31T23:59:59.999999999Z""#).unwrap();
+        assert_eq!(dt.subsec_nanos(), 999_999_999);
+        // Minute 60 is not a leap second; it stays an ordinary error.
+        let err = expiration_date(r#""2024-06-15T12:60:00Z""#).unwrap_err();
+        assert!(!format!("{err:#}").contains("leap seconds"), "{err:#}");
     }
 
     #[test]

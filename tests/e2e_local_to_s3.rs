@@ -2500,7 +2500,8 @@ mod tests {
         // Verify the stored value is a parseable RFC3339 timestamp.
         let stored = metadata.get("s3sync_origin_last_modified").unwrap();
         assert!(
-            chrono::DateTime::parse_from_rfc3339(stored).is_ok(),
+            time::OffsetDateTime::parse(stored, &time::format_description::well_known::Rfc3339)
+                .is_ok(),
             "expected parseable RFC3339 timestamp, got: {}",
             stored
         );

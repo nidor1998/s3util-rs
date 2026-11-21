@@ -5,6 +5,7 @@
 //! `aws s3api --output json` surface 1-to-1 (PascalCase, omission semantics,
 //! double-encoded `Policy`, etc.).
 
+use crate::types::datetime::Rfc3339Ext;
 use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_cors::GetBucketCorsOutput;
 use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
@@ -196,7 +197,7 @@ pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
 pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
     let mut map = Map::new();
     if let Some(v) = out.last_modified() {
-        if let Ok(dt) = v.to_chrono_utc() {
+        if let Ok(dt) = v.to_time() {
             map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
         }
     }
@@ -301,7 +302,7 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
                 "AnnotationName".to_string(),
                 Value::String(a.annotation_name().to_string()),
             );
-            if let Ok(dt) = a.last_modified().to_chrono_utc() {
+            if let Ok(dt) = a.last_modified().to_time() {
                 e.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
             }
             match a.e_tag() {
@@ -440,7 +441,7 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
         map.insert("ETag".to_string(), Value::String(v.to_string()));
     }
     if let Some(v) = out.last_modified() {
-        if let Ok(dt) = v.to_chrono_utc() {
+        if let Ok(dt) = v.to_time() {
             map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
         }
     }
@@ -477,7 +478,7 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     // `expires_string` is set whenever the header was present.
     #[allow(deprecated)]
     if let Some(dt) = out.expires()
-        && let Ok(c) = dt.to_chrono_utc()
+        && let Ok(c) = dt.to_time()
     {
         map.insert("Expires".to_string(), Value::String(c.to_rfc3339()));
     }
@@ -550,7 +551,7 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
         );
     }
     if let Some(v) = out.object_lock_retain_until_date() {
-        if let Ok(dt) = v.to_chrono_utc() {
+        if let Ok(dt) = v.to_time() {
             map.insert(
                 "ObjectLockRetainUntilDate".to_string(),
                 Value::String(dt.to_rfc3339()),
@@ -873,7 +874,7 @@ fn serialize_lifecycle_filter(f: &aws_sdk_s3::types::LifecycleRuleFilter) -> Val
 fn serialize_lifecycle_expiration(e: &aws_sdk_s3::types::LifecycleExpiration) -> Value {
     let mut m = Map::new();
     if let Some(d) = e.date()
-        && let Ok(dt) = d.to_chrono_utc()
+        && let Ok(dt) = d.to_time()
     {
         m.insert("Date".to_string(), Value::String(dt.to_rfc3339()));
     }
@@ -892,7 +893,7 @@ fn serialize_lifecycle_expiration(e: &aws_sdk_s3::types::LifecycleExpiration) ->
 fn serialize_transition(t: &aws_sdk_s3::types::Transition) -> Value {
     let mut m = Map::new();
     if let Some(d) = t.date()
-        && let Ok(dt) = d.to_chrono_utc()
+        && let Ok(dt) = d.to_time()
     {
         m.insert("Date".to_string(), Value::String(dt.to_rfc3339()));
     }
@@ -2095,8 +2096,8 @@ mod tests {
 
     /// Pin the exact byte format of timestamp output to match
     /// `aws s3api ... --output json` (AWS CLI v2): UTC, second precision,
-    /// `+00:00` offset. If chrono's RFC3339 default ever changes (e.g. to
-    /// `Z`), this test catches it before the format drift reaches users.
+    /// `+00:00` offset. If the RFC3339 formatter (`Rfc3339Ext`) ever changes
+    /// (e.g. to `Z`), this test catches it before the format drift reaches users.
     #[test]
     fn head_object_last_modified_matches_aws_cli_v2_format() {
         use aws_sdk_s3::primitives::DateTime;
