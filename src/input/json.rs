@@ -44,6 +44,7 @@ use aws_sdk_s3::types::{
 use aws_smithy_types::DateTime;
 use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde::Deserialize;
+use std::borrow::Cow;
 use time::OffsetDateTime;
 use time::format_description::well_known::{Rfc2822, Rfc3339};
 
@@ -448,7 +449,13 @@ fn parse_timestamp(s: &str) -> Result<DateTime> {
         Some(Iso8601::Parsed(dt)) => return Ok(DateTime::from_time(dt)),
         None => {}
     }
-    if let Ok(dt) = OffsetDateTime::parse(s, &Rfc2822) {
+    let rfc2822 = expand_rfc2822_three_digit_year(s);
+    if let Ok(dt) = OffsetDateTime::parse(&rfc2822, &Rfc2822) {
+        if !rfc2822_weekday_matches(&rfc2822, &dt) {
+            return Err(anyhow::anyhow!(
+                "invalid timestamp {s:?}: the day of the week does not match the date"
+            ));
+        }
         // RFC 2822 has no fractional seconds, so the only way to get this
         // value is the leap-second stand-in described above.
         if dt.nanosecond() == 999_999_999 {
@@ -456,12 +463,55 @@ fn parse_timestamp(s: &str) -> Result<DateTime> {
         }
         return Ok(DateTime::from_time(dt));
     }
-    if is_rfc2822_leap_second(s) {
+    if is_rfc2822_leap_second(&rfc2822) {
         return Err(leap_second());
     }
     parse_epoch_string(s)
         .and_then(epoch_seconds_to_sdk)
         .ok_or_else(invalid)
+}
+
+/// Rewrite a three-digit RFC 2822 year as four digits by adding 1900
+/// (`Mon, 01 Jan 124 ...` -> `Mon, 01 Jan 2024 ...`), as RFC 2822 section 4.3
+/// prescribes for the obsolete year syntax and as `chrono` did. `time` accepts
+/// only two- and four-digit years.
+///
+/// Only the token right after the month name is considered; anything else is
+/// returned unchanged and left for the RFC 2822 parser to judge.
+fn expand_rfc2822_three_digit_year(s: &str) -> Cow<'_, str> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut tokens = s.split_ascii_whitespace();
+    // `time` matches month names case-insensitively, so do the same here.
+    let Some(year) = tokens
+        .by_ref()
+        .find(|t| MONTHS.iter().any(|m| m.eq_ignore_ascii_case(t)))
+        .and(tokens.next())
+    else {
+        return Cow::Borrowed(s);
+    };
+    if year.len() != 3 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return Cow::Borrowed(s);
+    }
+    // `year` is a subslice of `s`, so this is its byte offset within `s`.
+    let start = year.as_ptr() as usize - s.as_ptr() as usize;
+    let expanded = 1900 + year.parse::<u16>().expect("three ASCII digits");
+    Cow::Owned(format!("{}{expanded}{}", &s[..start], &s[start + 3..]))
+}
+
+/// Whether the optional day of the week of an RFC 2822 date-time (`Mon, ...`)
+/// names the day `dt` falls on. `time` parses the weekday but never checks it,
+/// whereas `chrono` rejected a mismatch, and so does the AWS CLI; a mismatch
+/// means the date was mistyped. Input without a weekday always matches.
+fn rfc2822_weekday_matches(s: &str, dt: &OffsetDateTime) -> bool {
+    let Some((name, _)) = s.trim_start().split_once(',') else {
+        return true;
+    };
+    // `dt` keeps the offset as written, so this is the weekday of the date as
+    // written, which is what the weekday name refers to.
+    let expected = dt.weekday().to_string();
+    name.eq_ignore_ascii_case(&expected[..3])
 }
 
 /// Whether `s` is an RFC 2822 date-time that would be valid if its seconds
@@ -3837,6 +3887,74 @@ mod tests {
             let err = expiration_date(date).unwrap_err();
             assert!(!format!("{err:#}").contains("leap seconds"), "{err:#}");
         }
+    }
+
+    /// RFC 2822 section 4.3: a three-digit year means 1900 plus its value, as
+    /// `chrono` read it; `time` itself rejects three-digit years.
+    #[test]
+    fn rfc2822_three_digit_year_adds_1900() {
+        for date in [
+            r#""Mon, 01 Jan 124 00:00:00 GMT""#,
+            r#""01 Jan 124 00:00:00 +0000""#,
+            r#""Mon,  01  Jan  124  09:00:00  +0900""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        // 009 -> 1909, as chrono read it.
+        assert_eq!(
+            expiration_date(r#""Fri, 01 Jan 009 00:00:00 GMT""#)
+                .unwrap()
+                .secs(),
+            -1_924_992_000
+        );
+        // Two- and four-digit years are untouched.
+        for date in [
+            r#""Mon, 01 Jan 24 00:00:00 GMT""#,
+            r#""Mon, 01 Jan 2024 00:00:00 GMT""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        // Lowercase month, as `time` accepts.
+        assert_eq!(
+            expiration_date(r#""mon, 01 jan 124 00:00:00 GMT""#)
+                .unwrap()
+                .secs(),
+            NEW_YEAR_2024
+        );
+        // The expanded date is still checked: wrong weekday, bad day.
+        assert!(expiration_date(r#""Tue, 01 Jan 124 00:00:00 GMT""#).is_err());
+        assert!(expiration_date(r#""Mon, 32 Jan 124 00:00:00 GMT""#).is_err());
+        // A leap second with a three-digit year still gets the leap-second error.
+        let err = expiration_date(r#""Sat, 15 Jun 124 12:00:60 GMT""#).unwrap_err();
+        assert!(format!("{err:#}").contains("leap seconds"), "{err:#}");
+    }
+
+    /// `time` ignores the RFC 2822 day of the week; a mismatch must still be
+    /// rejected, as it was with `chrono`.
+    #[test]
+    fn rfc2822_weekday_must_match_the_date() {
+        for date in [
+            r#""Mon, 01 Jan 2024 00:00:00 GMT""#,
+            r#""MON, 01 Jan 2024 00:00:00 GMT""#,
+            r#""01 Jan 2024 00:00:00 GMT""#,
+            // 2023-12-31T15:00:00Z: the weekday refers to the date as written.
+            r#""Mon, 01 Jan 2024 00:00:00 +0900""#,
+        ] {
+            assert!(expiration_date(date).is_ok(), "{date}");
+        }
+        let err = expiration_date(r#""Tue, 01 Jan 2024 00:00:00 GMT""#).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("day of the week does not match"),
+            "{err:#}"
+        );
     }
 
     #[test]
