@@ -20,8 +20,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previously accepted, such as an offset without a colon (`2023-02-19T12:00:00+0900`), are now rejected with an
   argument error. A value outside `0001-01-01T00:00:00Z`..`9999-12-31T23:59:59Z` (after conversion to UTC) is now
   also rejected at argument parsing, instead of failing the upload. Standard RFC 3339 timestamps such as
-  `2023-02-19T12:00:00Z` and `2023-02-19T12:00:00+09:00` work as before.
-- The library type of `Config::expires` changed from `chrono::DateTime<Utc>` to `time::OffsetDateTime`.
+  `2023-02-19T12:00:00Z` and `2023-02-19T12:00:00+09:00` work as before. A leap second (`23:59:60`) is now rejected
+  with an argument error; previously it was accepted.
+- [Breaking change] A lifecycle `Date` written as an RFC 2822 date with a year before 1900
+  (`Mon, 01 Jan 1800 00:00:00 GMT`) is now rejected. S3 lifecycle dates are never that early, and the ISO 8601
+  spelling of the same date (`1800-01-01T00:00:00Z`) is still accepted.
+- The library type of `Config::expires` changed from `chrono::DateTime<Utc>` to `time::OffsetDateTime`. A value
+  outside `0001-01-01T00:00:00Z`..`9999-12-31T23:59:59Z` (after conversion to UTC) fails the upload with a clear error
+  before any request is sent.
 
 ## [1.10.7] - 2026-11-15
 

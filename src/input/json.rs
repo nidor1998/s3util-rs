@@ -456,9 +456,26 @@ fn parse_timestamp(s: &str) -> Result<DateTime> {
         }
         return Ok(DateTime::from_time(dt));
     }
+    if is_rfc2822_leap_second(s) {
+        return Err(leap_second());
+    }
     parse_epoch_string(s)
         .and_then(epoch_seconds_to_sdk)
         .ok_or_else(invalid)
+}
+
+/// Whether `s` is an RFC 2822 date-time that would be valid if its seconds
+/// (`HH:MM:60`) were `59`. `time` accepts a leap second only at the end of a
+/// month and rejects any other as malformed, which would otherwise surface as
+/// the generic "invalid timestamp" error rather than the leap-second one.
+fn is_rfc2822_leap_second(s: &str) -> bool {
+    s.match_indices(":60").any(|(i, _)| {
+        // Only the seconds field: `:60` must follow `HH:MM`, so that minute 60
+        // (`12:60:00`) is not mistaken for a leap second.
+        i >= 3
+            && s.as_bytes()[i - 3] == b':'
+            && OffsetDateTime::parse(&format!("{}:59{}", &s[..i], &s[i + 3..]), &Rfc2822).is_ok()
+    })
 }
 
 /// A string holding a plain decimal number is read as seconds since the Unix
@@ -3796,11 +3813,13 @@ mod tests {
     #[test]
     fn leap_second_is_reported_as_such_wherever_it_falls() {
         for date in [
-            r#""2024-12-31T23:59:60Z""#,      // month end: `time` accepts
-            r#""2024-06-15T12:00:60Z""#,      // mid-month: `time` rejects
-            r#""2024-06-15t12:00:60+09:00""#, // lowercase separator
-            r#""20240615T120060""#,           // basic format
-            r#""Tue, 31 Dec 2024 23:59:60 GMT""#,
+            r#""2024-12-31T23:59:60Z""#,          // month end: `time` accepts
+            r#""2024-06-15T12:00:60Z""#,          // mid-month: `time` rejects
+            r#""2024-06-15t12:00:60+09:00""#,     // lowercase separator
+            r#""20240615T120060""#,               // basic format
+            r#""Tue, 31 Dec 2024 23:59:60 GMT""#, // RFC 2822, month end
+            r#""Sat, 15 Jun 2024 12:00:60 GMT""#, // RFC 2822, mid-month
+            r#""15 Jun 2024 12:00:60 +0900""#,    // RFC 2822, no weekday
         ] {
             let err = expiration_date(date).expect_err(date);
             assert!(
@@ -3811,8 +3830,13 @@ mod tests {
         let dt = expiration_date(r#""2024-12-31T23:59:59.999999999Z""#).unwrap();
         assert_eq!(dt.subsec_nanos(), 999_999_999);
         // Minute 60 is not a leap second; it stays an ordinary error.
-        let err = expiration_date(r#""2024-06-15T12:60:00Z""#).unwrap_err();
-        assert!(!format!("{err:#}").contains("leap seconds"), "{err:#}");
+        for date in [
+            r#""2024-06-15T12:60:00Z""#,
+            r#""Sat, 15 Jun 2024 12:60:00 GMT""#,
+        ] {
+            let err = expiration_date(date).unwrap_err();
+            assert!(!format!("{err:#}").contains("leap seconds"), "{err:#}");
+        }
     }
 
     #[test]

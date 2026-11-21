@@ -34,7 +34,7 @@ use crate::storage::{
 use crate::types::SyncStatistics::{
     ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
 };
-use crate::types::datetime::{Rfc3339Ext, to_time_millis};
+use crate::types::datetime::{Rfc3339Ext, to_time_millis, unix_secs_to_rfc3339_secs};
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
@@ -62,11 +62,24 @@ struct UploadMetadata {
     pub tagging: Option<String>,
 }
 
-/// Convert `--expires` into the SDK's `DateTime` for a stdin-sourced streaming
-/// upload. Split out from `upload_stream` (and kept free of `Config`) so the
-/// conversion is testable without an S3 client.
-fn stream_upload_expires(expires: Option<OffsetDateTime>) -> Option<DateTime> {
-    expires.map(DateTime::from_time)
+/// Convert `Config::expires` into the SDK's `DateTime` for every upload path.
+/// Kept free of `Config` so the conversion is testable without an S3 client.
+///
+/// `--expires` is range-checked by `parse_expires`, but `Config::expires` is a
+/// public field a library caller can set directly. The value is sent as an HTTP
+/// date, which only supports years `0001..=9999`; anything else is rejected
+/// here with a clear error rather than failing inside request serialization.
+fn expires_to_sdk(expires: Option<OffsetDateTime>) -> Result<Option<DateTime>> {
+    let Some(expires) = expires else {
+        return Ok(None);
+    };
+    match expires.checked_to_offset(time::UtcOffset::UTC) {
+        Some(utc) if (1..=9999).contains(&utc.year()) => Ok(Some(DateTime::from_time(utc))),
+        _ => Err(anyhow!(
+            "expires must be between 0001-01-01T00:00:00Z and 9999-12-31T23:59:59Z: {}",
+            expires.to_rfc3339()
+        )),
+    }
 }
 
 /// Build the user-metadata map for a stdin-sourced streaming upload.
@@ -281,9 +294,13 @@ impl UploadManager {
 
     fn modify_last_modified_metadata(mut get_object_output: GetObjectOutput) -> GetObjectOutput {
         let mut metadata = get_object_output.metadata().cloned().unwrap_or_default();
-        let last_modified = to_time_millis(get_object_output.last_modified().unwrap())
-            .unwrap()
-            .to_rfc3339_secs();
+        let source_last_modified = get_object_output.last_modified().unwrap();
+        // A local file's mtime can lie outside `OffsetDateTime`'s range
+        // (years -9999..=9999); format those directly instead of panicking.
+        let last_modified = match to_time_millis(source_last_modified) {
+            Ok(t) => t.to_rfc3339_secs(),
+            Err(_) => unix_secs_to_rfc3339_secs(source_last_modified.secs()),
+        };
 
         metadata.insert(
             S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY.to_string(),
@@ -402,7 +419,7 @@ impl UploadManager {
 
                 expires
             } else {
-                self.config.expires.map(DateTime::from_time)
+                expires_to_sdk(self.config.expires)?
             },
             metadata: if self.config.metadata.is_none() {
                 get_object_output_first_chunk.metadata().cloned()
@@ -1072,7 +1089,7 @@ impl UploadManager {
         // `UploadMetadata` in `singlepart_upload`: the same command must not
         // produce a differently-tagged object just because the input crossed
         // --multipart-threshold and took the streaming path instead.
-        let expires = stream_upload_expires(self.config.expires);
+        let expires = expires_to_sdk(self.config.expires)?;
         let metadata = stream_upload_metadata(
             self.config.metadata.as_ref(),
             self.config.put_last_modified_metadata,
@@ -1920,7 +1937,7 @@ impl UploadManager {
 
                 expires
             } else {
-                self.config.expires.map(DateTime::from_time)
+                expires_to_sdk(self.config.expires)?
             },
             metadata: if self.config.metadata.is_none() {
                 get_object_output.metadata().cloned()
@@ -2310,6 +2327,27 @@ mod tests {
         );
     }
 
+    /// A local file's mtime can be past year 9999, beyond `OffsetDateTime`'s
+    /// range. That used to panic the upload; it must be formatted instead.
+    #[test]
+    fn modify_last_modified_metadata_beyond_year_9999_does_not_panic() {
+        init_dummy_tracing_subscriber();
+
+        let mut get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs_and_nanos(253_402_300_800, 500_000_000))
+            .build();
+        get_object_output = UploadManager::modify_last_modified_metadata(get_object_output);
+
+        assert_eq!(
+            get_object_output
+                .metadata()
+                .unwrap()
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "+10000-01-01T00:00:00+00:00"
+        );
+    }
+
     #[test]
     fn modify_last_modified_metadata_with_update() {
         init_dummy_tracing_subscriber();
@@ -2694,7 +2732,7 @@ mod read_exact_or_eof_tests {
 /// are checkable here.
 #[cfg(test)]
 mod stream_upload_metadata_tests {
-    use super::{stream_upload_expires, stream_upload_metadata};
+    use super::{expires_to_sdk, stream_upload_metadata};
     use std::collections::HashMap;
     use time::OffsetDateTime;
     use time::macros::datetime;
@@ -2705,16 +2743,42 @@ mod stream_upload_metadata_tests {
 
     #[test]
     fn expires_is_none_when_flag_absent() {
-        assert!(stream_upload_expires(None).is_none());
+        assert!(expires_to_sdk(None).unwrap().is_none());
     }
 
     #[test]
     fn expires_round_trips_through_the_sdk_datetime() {
         let expires = datetime!(2030-01-02 03:04:05.5 UTC);
-        let converted =
-            stream_upload_expires(Some(expires)).expect("expires must be converted, not dropped");
+        let converted = expires_to_sdk(Some(expires))
+            .unwrap()
+            .expect("expires must be converted, not dropped");
         assert_eq!(converted.secs(), expires.unix_timestamp());
         assert_eq!(converted.subsec_nanos(), 500_000_000);
+    }
+
+    #[test]
+    fn expires_with_offset_is_converted_to_utc_first() {
+        // 9999-12-31T23:00:00Z: the last hour of the range, reached via an offset.
+        let expires = datetime!(9999-12-31 22:00 -01:00);
+        assert_eq!(
+            expires_to_sdk(Some(expires)).unwrap().unwrap().secs(),
+            expires.unix_timestamp()
+        );
+    }
+
+    #[test]
+    fn expires_out_of_http_date_range_is_an_error() {
+        // `Config::expires` is public, so a library caller can bypass
+        // `parse_expires`; the conversion must still fail early and clearly.
+        for expires in [
+            datetime!(0000-12-31 23:59:59 UTC),
+            datetime!(-0001-01-01 0:00 UTC),
+            datetime!(0001-01-01 0:00 +01:00), // 0000-12-31T23:00:00Z
+            datetime!(9999-12-31 23:59:59 -01:00), // year 10000 in UTC
+        ] {
+            let err = expires_to_sdk(Some(expires)).unwrap_err();
+            assert!(err.to_string().contains("expires must be between"), "{err}");
+        }
     }
 
     #[test]

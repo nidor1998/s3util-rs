@@ -17,12 +17,21 @@ use time::{OffsetDateTime, UtcOffset};
 /// The date/time separator must be `T`, `t`, or a space (as RFC 3339 allows);
 /// `time` itself accepts any byte there.
 ///
+/// A leap second (`:60`) is rejected. `time` would otherwise accept one at the
+/// end of a UTC month and silently read it as `23:59:59.999999999`.
+///
 /// Returns an error (rather than panicking) if the value is out of range after
 /// conversion to UTC.
 pub fn parse_rfc3339_utc(value: &str) -> Result<OffsetDateTime, String> {
     if !has_rfc3339_separator(value) {
         return Err(format!(
             "invalid RFC 3339 date-time (expected 'T' between date and time): {value}"
+        ));
+    }
+    // RFC 3339 spells the seconds at a fixed position: `YYYY-MM-DDTHH:MM:SS`.
+    if value.get(16..20).is_some_and(|s| s.starts_with(":60")) {
+        return Err(format!(
+            "invalid RFC 3339 date-time (leap seconds (\":60\") are not supported): {value}"
         ));
     }
     let dt = OffsetDateTime::parse(value, &Rfc3339).map_err(|e| e.to_string())?;
@@ -55,6 +64,45 @@ pub fn parse_expires(value: &str) -> Result<OffsetDateTime, String> {
 /// millisecond precision.
 pub fn to_time_millis(dt: &DateTime) -> anyhow::Result<OffsetDateTime> {
     Ok(DateTime::from_millis(dt.to_millis()?).to_time()?)
+}
+
+/// Formats seconds since the Unix epoch as RFC 3339 in UTC with whole seconds,
+/// e.g. `2023-01-20T17:56:37+00:00`.
+///
+/// Same output as [`Rfc3339Ext::to_rfc3339_secs`], but without
+/// [`OffsetDateTime`]'s year range limit (`-9999..=9999`): a year past `9999`
+/// is written with an explicit sign (`+10000-01-01T00:00:00+00:00`), as
+/// `chrono` did. Used where the timestamp comes from the local file system,
+/// which can hold such values.
+pub fn unix_secs_to_rfc3339_secs(secs: i64) -> String {
+    let days = secs.div_euclid(86_400);
+    let secs_of_day = secs.rem_euclid(86_400);
+
+    // Howard Hinnant's `civil_from_days`, in i128 so no input can overflow.
+    let z = i128::from(days) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i128::from(month <= 2);
+
+    let mut s = String::with_capacity(35);
+    if (0..=9999).contains(&year) {
+        let _ = write!(s, "{year:04}");
+    } else {
+        let _ = write!(s, "{year:+05}");
+    }
+    let _ = write!(
+        s,
+        "-{month:02}-{day:02}T{:02}:{:02}:{:02}+00:00",
+        secs_of_day / 3_600,
+        secs_of_day / 60 % 60,
+        secs_of_day % 60
+    );
+    s
 }
 
 /// RFC 3339 formatting helpers for [`OffsetDateTime`].
@@ -179,15 +227,67 @@ mod tests {
 
     #[test]
     fn parse_leap_second() {
-        // `time` accepts a leap second only at the end of a UTC month and
-        // clamps it to the last representable instant of that minute.
+        // `time` would accept a month-end leap second as 23:59:59.999999999;
+        // it must be rejected like any other `:60`, for `--expires` too.
+        for v in [
+            "2016-12-31T23:59:60Z",
+            "2016-12-31T23:59:60.5+09:00",
+            "2016-12-31T12:00:60Z",
+        ] {
+            let err = parse_rfc3339_utc(v).unwrap_err();
+            assert!(err.contains("leap seconds"), "{v}: {err}");
+            let err = parse_expires(v).unwrap_err();
+            assert!(err.contains("leap seconds"), "{v}: {err}");
+        }
+        // A genuine .999999999 still parses, and minute 60 is not a leap second.
         assert_eq!(
-            parse_rfc3339_utc("2016-12-31T23:59:60Z")
+            parse_rfc3339_utc("2016-12-31T23:59:59.999999999Z")
                 .unwrap()
                 .to_rfc3339(),
             "2016-12-31T23:59:59.999999999+00:00"
         );
-        assert!(parse_rfc3339_utc("2016-12-31T12:00:60Z").is_err());
+        let err = parse_rfc3339_utc("2016-12-31T12:60:00Z").unwrap_err();
+        assert!(!err.contains("leap seconds"), "{err}");
+    }
+
+    #[test]
+    fn unix_secs_to_rfc3339_secs_matches_to_rfc3339_secs() {
+        for secs in [
+            0,
+            -1,
+            86_399,
+            86_400,
+            951_782_400,      // 2000-02-29
+            1_674_237_397,    // 2023-01-20T17:56:37Z
+            -62_135_596_800,  // 0001-01-01
+            -62_167_219_200,  // 0000-01-01
+            -62_167_219_201,  // -0001-12-31T23:59:59
+            253_402_300_799,  // 9999-12-31T23:59:59
+            -377_705_116_800, // -9999-01-01
+        ] {
+            assert_eq!(
+                unix_secs_to_rfc3339_secs(secs),
+                OffsetDateTime::from_unix_timestamp(secs)
+                    .unwrap()
+                    .to_rfc3339_secs(),
+                "{secs}"
+            );
+        }
+    }
+
+    #[test]
+    fn unix_secs_to_rfc3339_secs_beyond_time_range() {
+        assert_eq!(
+            unix_secs_to_rfc3339_secs(253_402_300_800),
+            "+10000-01-01T00:00:00+00:00"
+        );
+        assert_eq!(
+            unix_secs_to_rfc3339_secs(-377_705_116_801),
+            "-10000-12-31T23:59:59+00:00"
+        );
+        // Must not panic or overflow at the extremes.
+        unix_secs_to_rfc3339_secs(i64::MAX);
+        unix_secs_to_rfc3339_secs(i64::MIN);
     }
 
     #[test]
