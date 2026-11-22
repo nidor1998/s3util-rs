@@ -504,14 +504,63 @@ fn expand_rfc2822_three_digit_year(s: &str) -> Cow<'_, str> {
 /// names the day `dt` falls on. `time` parses the weekday but never checks it,
 /// whereas `chrono` rejected a mismatch, and so does the AWS CLI; a mismatch
 /// means the date was mistyped. Input without a weekday always matches.
+///
+/// `time` accepts RFC 2822 comments and whitespace (CFWS) before the weekday,
+/// so they are skipped here; like `time`, the `,` must follow the weekday
+/// directly. A comma elsewhere (e.g. inside a trailing comment) is not a
+/// weekday.
 fn rfc2822_weekday_matches(s: &str, dt: &OffsetDateTime) -> bool {
-    let Some((name, _)) = s.trim_start().split_once(',') else {
+    let rest = skip_rfc2822_cfws(s);
+    let Some(name) = rest
+        .get(..3)
+        .filter(|n| n.bytes().all(|b| b.is_ascii_alphabetic()))
+    else {
         return true;
     };
+    if !rest[3..].starts_with(',') {
+        return true;
+    }
     // `dt` keeps the offset as written, so this is the weekday of the date as
     // written, which is what the weekday name refers to.
     let expected = dt.weekday().to_string();
     name.eq_ignore_ascii_case(&expected[..3])
+}
+
+/// Skips leading RFC 2822 CFWS: whitespace and (possibly nested) comments,
+/// in which `\` escapes the next character. An unterminated comment is left
+/// in place; the input already parsed, so that does not happen in practice.
+fn skip_rfc2822_cfws(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start();
+        if !s.starts_with('(') {
+            return s;
+        }
+        let mut depth = 0usize;
+        let mut escaped = false;
+        let mut end = None;
+        for (i, c) in s.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match c {
+                '\\' => escaped = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(end) => s = &s[end..],
+            None => return s,
+        }
+    }
 }
 
 /// Whether `s` is an RFC 2822 date-time that would be valid if its seconds
@@ -3955,6 +4004,34 @@ mod tests {
             format!("{err:#}").contains("day of the week does not match"),
             "{err:#}"
         );
+    }
+
+    /// RFC 2822 comments are accepted by `time`; a comma inside one, or a
+    /// comment before the weekday, must not confuse the weekday check.
+    #[test]
+    fn rfc2822_weekday_check_skips_comments() {
+        for date in [
+            r#""01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+            r#""Mon, 01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+            r#""(c) Mon, 01 Jan 2024 00:00:00 GMT""#,
+            r#""(a (nested\\) one)) Mon, 01 Jan 2024 00:00:00 GMT""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        for date in [
+            r#""(c) Tue, 01 Jan 2024 00:00:00 GMT""#,
+            r#""Tue, 01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+        ] {
+            let err = expiration_date(date).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("day of the week does not match"),
+                "{date}: {err:#}"
+            );
+        }
     }
 
     #[test]

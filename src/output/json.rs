@@ -5,7 +5,7 @@
 //! `aws s3api --output json` surface 1-to-1 (PascalCase, omission semantics,
 //! double-encoded `Policy`, etc.).
 
-use crate::types::datetime::Rfc3339Ext;
+use crate::types::datetime::aws_datetime_to_rfc3339;
 use aws_sdk_s3::operation::get_bucket_accelerate_configuration::GetBucketAccelerateConfigurationOutput;
 use aws_sdk_s3::operation::get_bucket_cors::GetBucketCorsOutput;
 use aws_sdk_s3::operation::get_bucket_encryption::GetBucketEncryptionOutput;
@@ -26,7 +26,6 @@ use aws_sdk_s3::operation::head_bucket::HeadBucketOutput;
 use aws_sdk_s3::operation::head_object::HeadObjectOutput;
 use aws_sdk_s3::operation::list_object_annotations::ListObjectAnnotationsOutput;
 use aws_sdk_s3::operation::put_object_annotation::PutObjectAnnotationOutput;
-use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde_json::{Map, Value};
 
 /// Serialise a `GetBucketPolicyOutput` to AWS CLI v2 `--output json` shape.
@@ -197,9 +196,10 @@ pub fn put_object_annotation_to_json(out: &PutObjectAnnotationOutput) -> Value {
 pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
     let mut map = Map::new();
     if let Some(v) = out.last_modified() {
-        if let Ok(dt) = v.to_time() {
-            map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
-        }
+        map.insert(
+            "LastModified".to_string(),
+            Value::String(aws_datetime_to_rfc3339(v)),
+        );
     }
     if let Some(v) = out.content_length() {
         map.insert(
@@ -302,9 +302,10 @@ pub fn list_object_annotations_to_json(out: &ListObjectAnnotationsOutput) -> Val
                 "AnnotationName".to_string(),
                 Value::String(a.annotation_name().to_string()),
             );
-            if let Ok(dt) = a.last_modified().to_time() {
-                e.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
-            }
+            e.insert(
+                "LastModified".to_string(),
+                Value::String(aws_datetime_to_rfc3339(a.last_modified())),
+            );
             match a.e_tag() {
                 Some(v) => {
                     e.insert("ETag".to_string(), Value::String(v.to_string()));
@@ -441,9 +442,10 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
         map.insert("ETag".to_string(), Value::String(v.to_string()));
     }
     if let Some(v) = out.last_modified() {
-        if let Ok(dt) = v.to_time() {
-            map.insert("LastModified".to_string(), Value::String(dt.to_rfc3339()));
-        }
+        map.insert(
+            "LastModified".to_string(),
+            Value::String(aws_datetime_to_rfc3339(v)),
+        );
     }
     if let Some(v) = out.content_length() {
         map.insert(
@@ -477,10 +479,11 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
     // The SDK populates `expires` only when the header parsed successfully;
     // `expires_string` is set whenever the header was present.
     #[allow(deprecated)]
-    if let Some(dt) = out.expires()
-        && let Ok(c) = dt.to_time()
-    {
-        map.insert("Expires".to_string(), Value::String(c.to_rfc3339()));
+    if let Some(dt) = out.expires() {
+        map.insert(
+            "Expires".to_string(),
+            Value::String(aws_datetime_to_rfc3339(dt)),
+        );
     }
     if let Some(v) = out.expires_string() {
         map.insert("ExpiresString".to_string(), Value::String(v.to_string()));
@@ -551,12 +554,10 @@ pub fn head_object_to_json(out: &HeadObjectOutput) -> Value {
         );
     }
     if let Some(v) = out.object_lock_retain_until_date() {
-        if let Ok(dt) = v.to_time() {
-            map.insert(
-                "ObjectLockRetainUntilDate".to_string(),
-                Value::String(dt.to_rfc3339()),
-            );
-        }
+        map.insert(
+            "ObjectLockRetainUntilDate".to_string(),
+            Value::String(aws_datetime_to_rfc3339(v)),
+        );
     }
     if let Some(v) = out.object_lock_legal_hold_status() {
         map.insert(
@@ -873,10 +874,11 @@ fn serialize_lifecycle_filter(f: &aws_sdk_s3::types::LifecycleRuleFilter) -> Val
 
 fn serialize_lifecycle_expiration(e: &aws_sdk_s3::types::LifecycleExpiration) -> Value {
     let mut m = Map::new();
-    if let Some(d) = e.date()
-        && let Ok(dt) = d.to_time()
-    {
-        m.insert("Date".to_string(), Value::String(dt.to_rfc3339()));
+    if let Some(d) = e.date() {
+        m.insert(
+            "Date".to_string(),
+            Value::String(aws_datetime_to_rfc3339(d)),
+        );
     }
     if let Some(d) = e.days() {
         m.insert(
@@ -892,10 +894,11 @@ fn serialize_lifecycle_expiration(e: &aws_sdk_s3::types::LifecycleExpiration) ->
 
 fn serialize_transition(t: &aws_sdk_s3::types::Transition) -> Value {
     let mut m = Map::new();
-    if let Some(d) = t.date()
-        && let Ok(dt) = d.to_time()
-    {
-        m.insert("Date".to_string(), Value::String(dt.to_rfc3339()));
+    if let Some(d) = t.date() {
+        m.insert(
+            "Date".to_string(),
+            Value::String(aws_datetime_to_rfc3339(d)),
+        );
     }
     if let Some(d) = t.days() {
         m.insert(
@@ -2277,6 +2280,50 @@ mod tests {
             json["Rules"][0]["Transitions"][0]["StorageClass"],
             Value::String("GLACIER".into())
         );
+    }
+
+    /// Timestamps beyond `OffsetDateTime`'s year range (`-9999..=9999`) are
+    /// still emitted, with a signed year, instead of being dropped.
+    #[test]
+    fn timestamps_beyond_year_9999_are_emitted() {
+        use aws_sdk_s3::operation::get_bucket_lifecycle_configuration::GetBucketLifecycleConfigurationOutput;
+        use aws_sdk_s3::primitives::DateTime;
+        use aws_sdk_s3::types::{
+            ExpirationStatus, LifecycleExpiration, LifecycleRule, Transition,
+            TransitionStorageClass,
+        };
+        // 10000-01-01T00:00:00Z
+        let dt = DateTime::from_secs(253_402_300_800);
+        let expected = Value::String("+10000-01-01T00:00:00+00:00".into());
+
+        #[allow(deprecated)]
+        let out = HeadObjectOutput::builder()
+            .last_modified(dt)
+            .expires(dt)
+            .object_lock_retain_until_date(dt)
+            .build();
+        let json = head_object_to_json(&out);
+        assert_eq!(json["LastModified"], expected);
+        assert_eq!(json["Expires"], expected);
+        assert_eq!(json["ObjectLockRetainUntilDate"], expected);
+
+        let rule = LifecycleRule::builder()
+            .status(ExpirationStatus::Enabled)
+            .expiration(LifecycleExpiration::builder().date(dt).build())
+            .transitions(
+                Transition::builder()
+                    .date(dt)
+                    .storage_class(TransitionStorageClass::Glacier)
+                    .build(),
+            )
+            .build()
+            .unwrap();
+        let out = GetBucketLifecycleConfigurationOutput::builder()
+            .rules(rule)
+            .build();
+        let json = get_bucket_lifecycle_configuration_to_json(&out);
+        assert_eq!(json["Rules"][0]["Expiration"]["Date"], expected);
+        assert_eq!(json["Rules"][0]["Transitions"][0]["Date"], expected);
     }
 
     // ----- get_bucket_encryption_to_json -----

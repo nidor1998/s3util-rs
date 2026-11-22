@@ -75,6 +75,50 @@ pub fn to_time_millis(dt: &DateTime) -> anyhow::Result<OffsetDateTime> {
 /// `chrono` did. Used where the timestamp comes from the local file system,
 /// which can hold such values.
 pub fn unix_secs_to_rfc3339_secs(secs: i64) -> String {
+    let mut s = unix_secs_date_time(secs);
+    s.push_str("+00:00");
+    s
+}
+
+/// Formats an AWS [`DateTime`] as RFC 3339 in UTC, like
+/// [`Rfc3339Ext::to_rfc3339`] (0, 3, 6, or 9 fractional digits).
+///
+/// Never fails: a value outside [`OffsetDateTime`]'s year range
+/// (`-9999..=9999`) is formatted from its Unix seconds and nanoseconds
+/// instead, with a signed year (`+10000-01-01T00:00:00+00:00`), as `chrono`
+/// did.
+pub fn aws_datetime_to_rfc3339(dt: &DateTime) -> String {
+    match dt.to_time() {
+        Ok(t) => t.to_rfc3339(),
+        Err(_) => unix_to_rfc3339(dt.secs(), dt.subsec_nanos()),
+    }
+}
+
+/// Like [`aws_datetime_to_rfc3339`], but truncated to millisecond precision
+/// first (same output as `to_time_millis(dt)?.to_rfc3339()` when that
+/// succeeds).
+pub fn aws_datetime_to_rfc3339_millis(dt: &DateTime) -> String {
+    match to_time_millis(dt) {
+        Ok(t) => t.to_rfc3339(),
+        Err(_) => {
+            let nanos = dt.subsec_nanos();
+            unix_to_rfc3339(dt.secs(), nanos - nanos % 1_000_000)
+        }
+    }
+}
+
+/// Formats Unix seconds plus nanoseconds as RFC 3339 in UTC, without
+/// [`OffsetDateTime`]'s year range limit.
+fn unix_to_rfc3339(secs: i64, nanos: u32) -> String {
+    let mut s = unix_secs_date_time(secs);
+    push_fraction(&mut s, nanos);
+    s.push_str("+00:00");
+    s
+}
+
+/// `YYYY-MM-DDTHH:MM:SS` (signed year outside `0..=9999`) for Unix seconds,
+/// without an offset.
+fn unix_secs_date_time(secs: i64) -> String {
     let days = secs.div_euclid(86_400);
     let secs_of_day = secs.rem_euclid(86_400);
 
@@ -97,12 +141,26 @@ pub fn unix_secs_to_rfc3339_secs(secs: i64) -> String {
     }
     let _ = write!(
         s,
-        "-{month:02}-{day:02}T{:02}:{:02}:{:02}+00:00",
+        "-{month:02}-{day:02}T{:02}:{:02}:{:02}",
         secs_of_day / 3_600,
         secs_of_day / 60 % 60,
         secs_of_day % 60
     );
     s
+}
+
+/// Appends `.fff`, `.ffffff`, or `.fffffffff` (nothing when `nanos` is 0).
+fn push_fraction(s: &mut String, nanos: u32) {
+    if nanos == 0 {
+        return;
+    }
+    if nanos.is_multiple_of(1_000_000) {
+        let _ = write!(s, ".{:03}", nanos / 1_000_000);
+    } else if nanos.is_multiple_of(1_000) {
+        let _ = write!(s, ".{:06}", nanos / 1_000);
+    } else {
+        let _ = write!(s, ".{nanos:09}");
+    }
 }
 
 /// RFC 3339 formatting helpers for [`OffsetDateTime`].
@@ -128,16 +186,7 @@ impl Rfc3339Ext for OffsetDateTime {
         let dt = utc_or_self(self);
         let mut s = format_date_time_secs(&dt);
 
-        let nanos = dt.nanosecond();
-        if nanos != 0 {
-            if nanos.is_multiple_of(1_000_000) {
-                let _ = write!(s, ".{:03}", nanos / 1_000_000);
-            } else if nanos.is_multiple_of(1_000) {
-                let _ = write!(s, ".{:06}", nanos / 1_000);
-            } else {
-                let _ = write!(s, ".{nanos:09}");
-            }
-        }
+        push_fraction(&mut s, dt.nanosecond());
 
         push_offset(&mut s, dt.offset());
         s
@@ -288,6 +337,55 @@ mod tests {
         // Must not panic or overflow at the extremes.
         unix_secs_to_rfc3339_secs(i64::MAX);
         unix_secs_to_rfc3339_secs(i64::MIN);
+    }
+
+    #[test]
+    fn aws_datetime_to_rfc3339_in_range_matches_time() {
+        for (secs, nanos) in [
+            (0, 0),
+            (1_674_237_397, 552_000_000),
+            (1_674_237_397, 552_123_000),
+            (1_674_237_397, 552_123_456),
+            (-62_167_219_201, 1),
+            (253_402_300_799, 999_999_999),
+        ] {
+            let dt = DateTime::from_secs_and_nanos(secs, nanos);
+            assert_eq!(
+                aws_datetime_to_rfc3339(&dt),
+                dt.to_time().unwrap().to_rfc3339(),
+                "{secs}.{nanos}"
+            );
+            assert_eq!(
+                aws_datetime_to_rfc3339_millis(&dt),
+                to_time_millis(&dt).unwrap().to_rfc3339(),
+                "{secs}.{nanos}"
+            );
+            // The fallback path agrees with `time` wherever both apply.
+            assert_eq!(
+                unix_to_rfc3339(secs, nanos),
+                dt.to_time().unwrap().to_rfc3339(),
+                "{secs}.{nanos}"
+            );
+        }
+    }
+
+    #[test]
+    fn aws_datetime_to_rfc3339_beyond_time_range() {
+        let dt = DateTime::from_secs_and_nanos(253_402_300_800, 552_123_456);
+        assert_eq!(
+            aws_datetime_to_rfc3339(&dt),
+            "+10000-01-01T00:00:00.552123456+00:00"
+        );
+        assert_eq!(
+            aws_datetime_to_rfc3339_millis(&dt),
+            "+10000-01-01T00:00:00.552+00:00"
+        );
+        let dt = DateTime::from_secs(-377_705_116_801);
+        assert_eq!(aws_datetime_to_rfc3339(&dt), "-10000-12-31T23:59:59+00:00");
+        // Must not panic at the extremes (`to_millis` overflows here).
+        aws_datetime_to_rfc3339(&DateTime::from_secs(i64::MAX));
+        aws_datetime_to_rfc3339_millis(&DateTime::from_secs(i64::MAX));
+        aws_datetime_to_rfc3339_millis(&DateTime::from_secs(i64::MIN));
     }
 
     #[test]

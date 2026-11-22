@@ -32,7 +32,7 @@ use crate::storage::s3::upload_manager::UploadManager;
 use crate::storage::{
     Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
 };
-use crate::types::datetime::{Rfc3339Ext, to_time_millis};
+use crate::types::datetime::aws_datetime_to_rfc3339_millis;
 use crate::types::error::S3syncError;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{
@@ -383,8 +383,10 @@ impl StorageTrait for S3Storage {
             version_id = source_version_id.to_string();
         }
         let target_key = key.to_string();
+        // Only logged. A local file's mtime can lie beyond `OffsetDateTime`'s
+        // range, so format it without failing the upload.
         let source_last_modified =
-            to_time_millis(get_object_output_first_chunk.last_modified().unwrap())?.to_rfc3339();
+            aws_datetime_to_rfc3339_millis(get_object_output_first_chunk.last_modified().unwrap());
 
         // In the case of full object checksum, we don't need to calculate checksum for each part and
         // don't need to pass it to the upload manager.

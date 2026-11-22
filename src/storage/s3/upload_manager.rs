@@ -4384,6 +4384,64 @@ mod upload_error_path_tests {
         );
     }
 
+    /// Year 0 is representable by `OffsetDateTime` but not as an HTTP date,
+    /// so it reaches `expires_to_sdk` and must be rejected there.
+    fn out_of_range_expires() -> Option<time::OffsetDateTime> {
+        Some(time::macros::datetime!(0000-12-31 23:59:59 UTC))
+    }
+
+    fn assert_expires_rejected_before_any_request(err: anyhow::Error) {
+        let msg = format!("{err:#}");
+        assert!(msg.contains("expires must be between"), "{msg}");
+        assert!(
+            !msg.contains("dispatch failure"),
+            "the conversion must fail before any request is sent: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_expires_conversion_error_propagates() {
+        // The conversion runs while building the CreateMultipartUpload
+        // attributes, before any request — a dead endpoint proves it.
+        let mut config = dead_endpoint_config();
+        config.transfer_config.auto_chunksize = true;
+        config.expires = out_of_range_expires();
+        let parts = vec![
+            ObjectPart::builder().size(4).build(),
+            ObjectPart::builder().size(4).build(),
+        ];
+        let mut t = manager_with_full(
+            config,
+            Some(parts),
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        assert_expires_rejected_before_any_request(err);
+    }
+
+    #[tokio::test]
+    async fn singlepart_expires_conversion_error_propagates() {
+        let mut config = dead_endpoint_config();
+        config.expires = out_of_range_expires();
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", small_body_chunk())
+            .await
+            .unwrap_err();
+        assert_expires_rejected_before_any_request(err);
+    }
+
     // ---- upload_stream (stdin-sourced streaming multipart) ----
 
     /// MD5-of-part-MD5s for `PART_DATA` split into two 4-byte parts — the
