@@ -85,7 +85,7 @@ version = ["dep:shadow-rs"]
 
 [dev-dependencies]
 time = { version = "0.3.55", features = ["macros"] }
-nix = { version = "0.31.3", features = ["user", "process", "signal"] }
+nix = { version = "0.32.0", features = ["user", "process", "signal"] }
 once_cell = "1.21.4"
 # Used by `tests/e2e_presign.rs` to GET presigned URLs without depending on
 # system `curl` (Windows e2e parity). Default features pull rustls +
