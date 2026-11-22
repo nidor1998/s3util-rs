@@ -1,8 +1,9 @@
+use std::fs::FileTimes;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
 use aws_sdk_s3::primitives::DateTime;
-use filetime::{FileTime, set_file_mtime};
 use regex::Regex;
 use tempfile::NamedTempFile;
 use tokio::fs::File;
@@ -23,14 +24,39 @@ pub fn set_last_modified(
     seconds: i64,
     nanos: u32,
 ) -> std::io::Result<()> {
-    set_file_mtime(
-        key_to_file_path(path, key),
-        FileTime::from_unix_time(seconds, nanos),
-    )
+    set_last_modified_for_path(&key_to_file_path(path, key), seconds, nanos)
 }
 
 pub fn set_last_modified_for_path(path: &PathBuf, seconds: i64, nanos: u32) -> std::io::Result<()> {
-    set_file_mtime(path, FileTime::from_unix_time(seconds, nanos))
+    let mtime = unix_time_to_system_time(seconds, nanos)?;
+    std::fs::set_times(path, FileTimes::new().set_modified(mtime))
+}
+
+/// Converts a Unix timestamp (`seconds` may be negative, `nanos` is always added forward) to `SystemTime`.
+///
+/// `nanos` must be less than 1,000,000,000; otherwise `InvalidInput` is returned (as `utimensat` does).
+fn unix_time_to_system_time(seconds: i64, nanos: u32) -> std::io::Result<SystemTime> {
+    if nanos >= 1_000_000_000 {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            format!("last modified time nanoseconds are out of range: nanos={nanos}"),
+        ));
+    }
+
+    let whole_seconds = if seconds >= 0 {
+        SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(seconds.unsigned_abs()))
+    } else {
+        SystemTime::UNIX_EPOCH.checked_sub(Duration::from_secs(seconds.unsigned_abs()))
+    };
+
+    whole_seconds
+        .and_then(|time| time.checked_add(Duration::from_nanos(u64::from(nanos))))
+        .ok_or_else(|| {
+            std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                format!("last modified time is out of range: seconds={seconds}, nanos={nanos}"),
+            )
+        })
 }
 
 /// True when `path` ends with a component separator, i.e. the user spelled a
@@ -844,7 +870,7 @@ mod tests {
             Ok(p) => p,
             Err(_) => return false,
         };
-        if set_file_mtime(probe.path(), FileTime::from_unix_time(0, nanos)).is_err() {
+        if set_last_modified_for_path(&probe.path().to_path_buf(), 0, nanos).is_err() {
             return false;
         }
         let modified = match std::fs::metadata(probe.path()).and_then(|m| m.modified()) {
@@ -986,6 +1012,53 @@ mod tests {
 
         assert_eq!(remove_root_slash("key1"), "key1");
         assert_eq!(remove_root_slash("key1/"), "key1/");
+    }
+
+    #[test]
+    fn unix_time_to_system_time_converts_positive_and_negative_seconds() {
+        init_dummy_tracing_subscriber();
+
+        assert_eq!(
+            unix_time_to_system_time(0, 0).unwrap(),
+            SystemTime::UNIX_EPOCH
+        );
+        assert_eq!(
+            unix_time_to_system_time(777, 999).unwrap(),
+            SystemTime::UNIX_EPOCH + Duration::new(777, 999)
+        );
+        assert_eq!(
+            unix_time_to_system_time(-2, 500_000_000).unwrap(),
+            SystemTime::UNIX_EPOCH - Duration::from_millis(1_500)
+        );
+    }
+
+    // On Unix, `SystemTime` can represent every `i64` second value, so only Windows
+    // (100ns intervals since 1601) can overflow from `seconds` alone.
+    #[cfg(windows)]
+    #[test]
+    fn unix_time_to_system_time_rejects_out_of_range_seconds() {
+        init_dummy_tracing_subscriber();
+
+        assert_eq!(
+            unix_time_to_system_time(i64::MAX, 0).unwrap_err().kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+    }
+
+    #[test]
+    fn unix_time_to_system_time_rejects_out_of_range_nanos() {
+        init_dummy_tracing_subscriber();
+
+        assert_eq!(
+            unix_time_to_system_time(10, 1_000_000_000)
+                .unwrap_err()
+                .kind(),
+            std::io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            unix_time_to_system_time(10, 999_999_999).unwrap(),
+            SystemTime::UNIX_EPOCH + Duration::new(10, 999_999_999)
+        );
     }
 
     fn init_dummy_tracing_subscriber() {

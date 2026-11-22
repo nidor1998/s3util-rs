@@ -5,7 +5,9 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.11.0] - 2026-11-22
+
+Update for the end of life (EOL) of the `chrono` crate.
 
 ### Security
 
@@ -13,6 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   ([RUSTSEC-2026-0543](https://rustsec.org/advisories/RUSTSEC-2026-0543)).
 - Updated `libz-sys` to `v1.1.33` to address
   [RUSTSEC-2026-0544](https://rustsec.org/advisories/RUSTSEC-2026-0544).
+- Shortened the minimum publish age for dependency resolution (`.cargo/min-publish-age.toml`) from 7 days to 3 days
+  so that security fixes in dependencies can be adopted sooner.
 
 ### Changed
 
@@ -28,6 +32,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The library type of `Config::expires` changed from `chrono::DateTime<Utc>` to `time::OffsetDateTime`. A value
   outside `0001-01-01T00:00:00Z`..`9999-12-31T23:59:59Z` (after conversion to UTC) fails the upload with a clear error
   before any request is sent.
+- aws-sdk-s3 `v1.157.0 -> v1.161.0`
+- MSRV `1.94.1 -> 1.99.0`
+- Replaced the `filetime` crate with `std::fs::set_times` for setting the modification time of local files.
+- Updated other dependencies
 
 ## [1.10.7] - 2026-11-15
 
