@@ -4,9 +4,9 @@ use aws_sdk_s3::types::{
     StorageClass,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation;
-use chrono::{DateTime, Utc};
 use std::collections::HashMap;
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 
 pub mod args;
@@ -43,7 +43,7 @@ pub struct Config {
     pub content_encoding: Option<String>,
     pub content_language: Option<String>,
     pub content_type: Option<String>,
-    pub expires: Option<DateTime<Utc>>,
+    pub expires: Option<OffsetDateTime>,
     pub metadata: Option<HashMap<String, String>>,
     pub no_sync_system_metadata: bool,
     pub no_sync_user_defined_metadata: bool,

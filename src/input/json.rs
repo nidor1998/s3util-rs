@@ -19,6 +19,7 @@
 //!
 //! Per-resource structs are added by their respective family tasks.
 
+use crate::types::datetime::has_rfc3339_separator;
 use anyhow::Result;
 use aws_sdk_s3::types::{
     AbortIncompleteMultipartUpload, AccessControlTranslation, BlockedEncryptionTypes,
@@ -41,7 +42,11 @@ use aws_sdk_s3::types::{
     Transition, TransitionStorageClass, Type as GranteeType, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
+use aws_smithy_types_convert::date_time::DateTimeExt;
 use serde::Deserialize;
+use std::borrow::Cow;
+use time::OffsetDateTime;
+use time::format_description::well_known::{Rfc2822, Rfc3339};
 
 /// Mirror of `BucketLifecycleConfiguration` for the AWS-CLI input shape.
 /// Top-level wrapper for `put-bucket-lifecycle-configuration` input JSON.
@@ -434,21 +439,142 @@ fn parse_timestamp(s: &str) -> Result<DateTime> {
              (\"Mon, 01 Jan 2024 00:00:00 GMT\"), or seconds since the Unix epoch"
         )
     };
-    if let Some(dt) = parse_iso8601(s).or_else(|| chrono::DateTime::parse_from_rfc2822(s).ok()) {
-        // chrono spells a leap second (`23:59:60`) as nanos >= 1e9, which the
-        // SDK `DateTime` cannot hold (its constructor panics). S3 has no use
-        // for one either, so reject it like the AWS CLI does.
-        let nanos = dt.timestamp_subsec_nanos();
-        if nanos >= 1_000_000_000 {
+    // S3 has no use for a leap second (`23:59:60`), so reject it like the
+    // AWS CLI does. `time` would otherwise accept one at the end of a month
+    // and silently read it as `23:59:59.999999999`.
+    let leap_second =
+        || anyhow::anyhow!("invalid timestamp {s:?}: leap seconds (\":60\") are not supported");
+    match parse_iso8601(s) {
+        Some(Iso8601::Leap) => return Err(leap_second()),
+        Some(Iso8601::Parsed(dt)) => return Ok(DateTime::from_time(dt)),
+        None => {}
+    }
+    let rfc2822 = expand_rfc2822_three_digit_year(s);
+    if let Ok(dt) = OffsetDateTime::parse(&rfc2822, &Rfc2822) {
+        if !rfc2822_weekday_matches(&rfc2822, &dt) {
             return Err(anyhow::anyhow!(
-                "invalid timestamp {s:?}: leap seconds (\":60\") are not supported"
+                "invalid timestamp {s:?}: the day of the week does not match the date"
             ));
         }
-        return Ok(DateTime::from_secs_and_nanos(dt.timestamp(), nanos));
+        // RFC 2822 has no fractional seconds, so the only way to get this
+        // value is the leap-second stand-in described above.
+        if dt.nanosecond() == 999_999_999 {
+            return Err(leap_second());
+        }
+        return Ok(DateTime::from_time(dt));
+    }
+    if is_rfc2822_leap_second(&rfc2822) {
+        return Err(leap_second());
     }
     parse_epoch_string(s)
         .and_then(epoch_seconds_to_sdk)
         .ok_or_else(invalid)
+}
+
+/// Rewrite a three-digit RFC 2822 year as four digits by adding 1900
+/// (`Mon, 01 Jan 124 ...` -> `Mon, 01 Jan 2024 ...`), as RFC 2822 section 4.3
+/// prescribes for the obsolete year syntax and as `chrono` did. `time` accepts
+/// only two- and four-digit years.
+///
+/// Only the token right after the month name is considered; anything else is
+/// returned unchanged and left for the RFC 2822 parser to judge.
+fn expand_rfc2822_three_digit_year(s: &str) -> Cow<'_, str> {
+    const MONTHS: [&str; 12] = [
+        "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
+    ];
+    let mut tokens = s.split_ascii_whitespace();
+    // `time` matches month names case-insensitively, so do the same here.
+    let Some(year) = tokens
+        .by_ref()
+        .find(|t| MONTHS.iter().any(|m| m.eq_ignore_ascii_case(t)))
+        .and(tokens.next())
+    else {
+        return Cow::Borrowed(s);
+    };
+    if year.len() != 3 || !year.bytes().all(|b| b.is_ascii_digit()) {
+        return Cow::Borrowed(s);
+    }
+    // `year` is a subslice of `s`, so this is its byte offset within `s`.
+    let start = year.as_ptr() as usize - s.as_ptr() as usize;
+    let expanded = 1900 + year.parse::<u16>().expect("three ASCII digits");
+    Cow::Owned(format!("{}{expanded}{}", &s[..start], &s[start + 3..]))
+}
+
+/// Whether the optional day of the week of an RFC 2822 date-time (`Mon, ...`)
+/// names the day `dt` falls on. `time` parses the weekday but never checks it,
+/// whereas `chrono` rejected a mismatch, and so does the AWS CLI; a mismatch
+/// means the date was mistyped. Input without a weekday always matches.
+///
+/// `time` accepts RFC 2822 comments and whitespace (CFWS) before the weekday,
+/// so they are skipped here; like `time`, the `,` must follow the weekday
+/// directly. A comma elsewhere (e.g. inside a trailing comment) is not a
+/// weekday.
+fn rfc2822_weekday_matches(s: &str, dt: &OffsetDateTime) -> bool {
+    let rest = skip_rfc2822_cfws(s);
+    let Some(name) = rest
+        .get(..3)
+        .filter(|n| n.bytes().all(|b| b.is_ascii_alphabetic()))
+    else {
+        return true;
+    };
+    if !rest[3..].starts_with(',') {
+        return true;
+    }
+    // `dt` keeps the offset as written, so this is the weekday of the date as
+    // written, which is what the weekday name refers to.
+    let expected = dt.weekday().to_string();
+    name.eq_ignore_ascii_case(&expected[..3])
+}
+
+/// Skips leading RFC 2822 CFWS: whitespace and (possibly nested) comments,
+/// in which `\` escapes the next character. An unterminated comment is left
+/// in place; the input already parsed, so that does not happen in practice.
+fn skip_rfc2822_cfws(mut s: &str) -> &str {
+    loop {
+        s = s.trim_start();
+        if !s.starts_with('(') {
+            return s;
+        }
+        let mut depth = 0usize;
+        let mut escaped = false;
+        let mut end = None;
+        for (i, c) in s.char_indices() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            match c {
+                '\\' => escaped = true,
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        end = Some(i + 1);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+        match end {
+            Some(end) => s = &s[end..],
+            None => return s,
+        }
+    }
+}
+
+/// Whether `s` is an RFC 2822 date-time that would be valid if its seconds
+/// (`HH:MM:60`) were `59`. `time` accepts a leap second only at the end of a
+/// month and rejects any other as malformed, which would otherwise surface as
+/// the generic "invalid timestamp" error rather than the leap-second one.
+fn is_rfc2822_leap_second(s: &str) -> bool {
+    s.match_indices(":60").any(|(i, _)| {
+        // Only the seconds field: `:60` must follow `HH:MM`, so that minute 60
+        // (`12:60:00`) is not mistaken for a leap second.
+        i >= 3
+            && s.as_bytes()[i - 3] == b':'
+            && OffsetDateTime::parse(&format!("{}:59{}", &s[..i], &s[i + 3..]), &Rfc2822).is_ok()
+    })
 }
 
 /// A string holding a plain decimal number is read as seconds since the Unix
@@ -472,23 +598,50 @@ fn parse_epoch_string(s: &str) -> Option<f64> {
 /// Parse the ISO 8601 profiles S3 documents for Lifecycle/Transition `Date`,
 /// normalising to UTC.
 ///
-/// Parsing is done with chrono rather than the smithy `Format::DateTime`
-/// parser: the latter accepts only a trailing `Z`, but ISO 8601 also admits
-/// numeric offsets — and `get-bucket-lifecycle-configuration` itself emits
-/// `+00:00`, so the smithy parser broke the GET -> PUT round-trip.
+/// Parsing is done with `time`'s RFC 3339 parser rather than the smithy
+/// `Format::DateTime` parser: the latter accepts only a trailing `Z`, but
+/// ISO 8601 also admits numeric offsets — and
+/// `get-bucket-lifecycle-configuration` itself emits `+00:00`, so the smithy
+/// parser broke the GET -> PUT round-trip.
 ///
 /// RFC 3339 alone is not enough either: it is a strict subset of ISO 8601 and
 /// rejects the basic format (`20240101T000000Z`), colon-less offsets
 /// (`+0000`), reduced-precision times (`T00:00Z`), a comma as the decimal
 /// sign, and a date-time with no offset at all — all of which the AWS CLI
 /// accepts, so rejecting them would turn valid input into an error.
-fn parse_iso8601(s: &str) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+fn parse_iso8601(s: &str) -> Option<Iso8601> {
     // The common case, and what our own `get-bucket-lifecycle-configuration`
-    // emits.
-    if let Ok(dt) = chrono::DateTime::parse_from_rfc3339(s) {
-        return Some(dt);
+    // emits. `time` accepts any byte between date and time, so check the
+    // separator first; anything else goes through the normaliser.
+    if has_rfc3339_separator(s)
+        && let Some(parsed) = parse_rfc3339(s)
+    {
+        return Some(parsed);
     }
-    chrono::DateTime::parse_from_rfc3339(&normalise_iso8601(s)?).ok()
+    parse_rfc3339(&normalise_iso8601(s)?)
+}
+
+/// The outcome of [`parse_iso8601`] for an input in ISO 8601 shape.
+enum Iso8601 {
+    Parsed(OffsetDateTime),
+    /// A leap second (`:60`), which is rejected rather than parsed.
+    Leap,
+}
+
+/// Parse a string already in RFC 3339 form. A leap second is reported as
+/// [`Iso8601::Leap`] wherever it falls; `time` itself accepts one only at the
+/// end of a month, and reads it as `23:59:59.999999999`.
+fn parse_rfc3339(s: &str) -> Option<Iso8601> {
+    let dt = OffsetDateTime::parse(s, &Rfc3339).ok();
+    // RFC 3339 spells the seconds at a fixed position: `YYYY-MM-DDTHH:MM:SS`.
+    // Checked only on otherwise-valid shapes, so that e.g. `T00:60:00` (minute
+    // 60) is not mistaken for a leap second.
+    let leap = s.get(17..19) == Some("60")
+        && OffsetDateTime::parse(&format!("{}59{}", &s[..17], &s[19..]), &Rfc3339).is_ok();
+    if leap {
+        return Some(Iso8601::Leap);
+    }
+    dt.map(Iso8601::Parsed)
 }
 
 /// Rewrite the ISO 8601 spellings RFC 3339 rejects into RFC 3339 form, so that
@@ -3748,6 +3901,134 @@ mod tests {
             let err = expiration_date(date).expect_err(date);
             assert!(
                 format!("{err:#}").contains("invalid timestamp"),
+                "{date}: {err:#}"
+            );
+        }
+    }
+
+    /// `time` would read a month-end leap second as `23:59:59.999999999` and
+    /// reject any other `:60` as malformed; both must instead get the
+    /// leap-second error, while a genuine `.999999999` still parses.
+    #[test]
+    fn leap_second_is_reported_as_such_wherever_it_falls() {
+        for date in [
+            r#""2024-12-31T23:59:60Z""#,          // month end: `time` accepts
+            r#""2024-06-15T12:00:60Z""#,          // mid-month: `time` rejects
+            r#""2024-06-15t12:00:60+09:00""#,     // lowercase separator
+            r#""20240615T120060""#,               // basic format
+            r#""Tue, 31 Dec 2024 23:59:60 GMT""#, // RFC 2822, month end
+            r#""Sat, 15 Jun 2024 12:00:60 GMT""#, // RFC 2822, mid-month
+            r#""15 Jun 2024 12:00:60 +0900""#,    // RFC 2822, no weekday
+        ] {
+            let err = expiration_date(date).expect_err(date);
+            assert!(
+                format!("{err:#}").contains("leap seconds"),
+                "{date}: {err:#}"
+            );
+        }
+        let dt = expiration_date(r#""2024-12-31T23:59:59.999999999Z""#).unwrap();
+        assert_eq!(dt.subsec_nanos(), 999_999_999);
+        // Minute 60 is not a leap second; it stays an ordinary error.
+        for date in [
+            r#""2024-06-15T12:60:00Z""#,
+            r#""Sat, 15 Jun 2024 12:60:00 GMT""#,
+        ] {
+            let err = expiration_date(date).unwrap_err();
+            assert!(!format!("{err:#}").contains("leap seconds"), "{err:#}");
+        }
+    }
+
+    /// RFC 2822 section 4.3: a three-digit year means 1900 plus its value, as
+    /// `chrono` read it; `time` itself rejects three-digit years.
+    #[test]
+    fn rfc2822_three_digit_year_adds_1900() {
+        for date in [
+            r#""Mon, 01 Jan 124 00:00:00 GMT""#,
+            r#""01 Jan 124 00:00:00 +0000""#,
+            r#""Mon,  01  Jan  124  09:00:00  +0900""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        // 009 -> 1909, as chrono read it.
+        assert_eq!(
+            expiration_date(r#""Fri, 01 Jan 009 00:00:00 GMT""#)
+                .unwrap()
+                .secs(),
+            -1_924_992_000
+        );
+        // Two- and four-digit years are untouched.
+        for date in [
+            r#""Mon, 01 Jan 24 00:00:00 GMT""#,
+            r#""Mon, 01 Jan 2024 00:00:00 GMT""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        // Lowercase month, as `time` accepts.
+        assert_eq!(
+            expiration_date(r#""mon, 01 jan 124 00:00:00 GMT""#)
+                .unwrap()
+                .secs(),
+            NEW_YEAR_2024
+        );
+        // The expanded date is still checked: wrong weekday, bad day.
+        assert!(expiration_date(r#""Tue, 01 Jan 124 00:00:00 GMT""#).is_err());
+        assert!(expiration_date(r#""Mon, 32 Jan 124 00:00:00 GMT""#).is_err());
+        // A leap second with a three-digit year still gets the leap-second error.
+        let err = expiration_date(r#""Sat, 15 Jun 124 12:00:60 GMT""#).unwrap_err();
+        assert!(format!("{err:#}").contains("leap seconds"), "{err:#}");
+    }
+
+    /// `time` ignores the RFC 2822 day of the week; a mismatch must still be
+    /// rejected, as it was with `chrono`.
+    #[test]
+    fn rfc2822_weekday_must_match_the_date() {
+        for date in [
+            r#""Mon, 01 Jan 2024 00:00:00 GMT""#,
+            r#""MON, 01 Jan 2024 00:00:00 GMT""#,
+            r#""01 Jan 2024 00:00:00 GMT""#,
+            // 2023-12-31T15:00:00Z: the weekday refers to the date as written.
+            r#""Mon, 01 Jan 2024 00:00:00 +0900""#,
+        ] {
+            assert!(expiration_date(date).is_ok(), "{date}");
+        }
+        let err = expiration_date(r#""Tue, 01 Jan 2024 00:00:00 GMT""#).unwrap_err();
+        assert!(
+            format!("{err:#}").contains("day of the week does not match"),
+            "{err:#}"
+        );
+    }
+
+    /// RFC 2822 comments are accepted by `time`; a comma inside one, or a
+    /// comment before the weekday, must not confuse the weekday check.
+    #[test]
+    fn rfc2822_weekday_check_skips_comments() {
+        for date in [
+            r#""01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+            r#""Mon, 01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+            r#""(c) Mon, 01 Jan 2024 00:00:00 GMT""#,
+            r#""(a (nested\\) one)) Mon, 01 Jan 2024 00:00:00 GMT""#,
+        ] {
+            assert_eq!(
+                expiration_date(date).unwrap().secs(),
+                NEW_YEAR_2024,
+                "{date}"
+            );
+        }
+        for date in [
+            r#""(c) Tue, 01 Jan 2024 00:00:00 GMT""#,
+            r#""Tue, 01 Jan 2024 00:00:00 GMT (UTC, midnight)""#,
+        ] {
+            let err = expiration_date(date).unwrap_err();
+            assert!(
+                format!("{err:#}").contains("day of the week does not match"),
                 "{date}: {err:#}"
             );
         }

@@ -188,7 +188,9 @@ async fn transfer_buffered(
         .set_body(Some(byte_stream))
         .set_content_length(Some(source_size as i64))
         .set_content_type(config.content_type.clone())
-        .set_last_modified(Some(DateTime::from_secs(chrono::Utc::now().timestamp())))
+        .set_last_modified(Some(DateTime::from_secs(
+            time::OffsetDateTime::now_utc().unix_timestamp(),
+        )))
         .set_checksum_sha256(checksum_sha256)
         .set_checksum_sha1(checksum_sha1)
         .set_checksum_crc32(checksum_crc32)

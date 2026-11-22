@@ -4,6 +4,7 @@ use crate::config::args::value_parser::{
 };
 use crate::config::{CLITimeoutConfig, ClientConfig, Config, RetryConfig};
 use crate::storage::local::fs_util;
+use crate::types::datetime::parse_expires;
 use crate::types::{
     AccessKeys, ClientConfigLocation, S3Credentials, SseCustomerKey, SseKmsKeyId, StoragePath,
 };
@@ -12,13 +13,13 @@ use aws_sdk_s3::types::{
     StorageClass,
 };
 use aws_smithy_types::checksum_config::RequestChecksumCalculation;
-use chrono::{DateTime, Utc};
 use clap::Parser;
 use clap::builder::NonEmptyStringValueParser;
 use clap_verbosity_flag::{Verbosity, WarnLevel};
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::sync::Arc;
+use time::OffsetDateTime;
 use tokio::sync::Semaphore;
 
 pub(crate) const DEFAULT_AWS_MAX_ATTEMPTS: u32 = 10;
@@ -301,11 +302,12 @@ It takes extra HEAD requests(1 API call per part)."#)]
     #[arg(
         long,
         env,
+        value_parser = parse_expires,
         help_heading = "Metadata/Headers",
         long_help = r#"Expires HTTP header to set on the target object(RFC3339 datetime)
 Example: 2023-02-19T12:00:00Z"#
     )]
-    pub expires: Option<DateTime<Utc>>,
+    pub expires: Option<OffsetDateTime>,
 
     #[arg(long, env, value_parser = metadata::check_metadata, help_heading = "Metadata/Headers", long_help=r#"Metadata to set on the target object
 Example: key1=value1,key2=value2"#)]
