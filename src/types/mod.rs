@@ -259,7 +259,8 @@ pub fn sha1_digest_from_key(key: &str) -> Sha1Digest {
 /// Detect which checksum algorithm the source object uses by inspecting the GetObjectOutput fields.
 /// Returns the algorithm and its value if found.
 ///
-/// Priority favors explicitly user-chosen algorithms (SHA256/SHA1/CRC32/CRC32C) over CRC64NVME,
+/// Priority favors explicitly user-chosen algorithms
+/// (SHA256/SHA1/CRC32C/CRC32/SHA512/MD5/XXHASH128/XXHASH64/XXHASH3) over CRC64NVME,
 /// which S3 often auto-adds to objects uploaded with a different explicit algorithm. This ensures
 /// a multipart object uploaded with `--additional-checksum-algorithm SHA256` is verified with
 /// SHA256, not with the auto-added full-object CRC64NVME.
@@ -278,6 +279,21 @@ pub fn detect_additional_checksum(
     if let Some(v) = get_object_output.checksum_crc32() {
         return Some((ChecksumAlgorithm::Crc32, v.to_string()));
     }
+    if let Some(v) = get_object_output.checksum_sha512() {
+        return Some((ChecksumAlgorithm::Sha512, v.to_string()));
+    }
+    if let Some(v) = get_object_output.checksum_md5() {
+        return Some((ChecksumAlgorithm::Md5, v.to_string()));
+    }
+    if let Some(v) = get_object_output.checksum_xxhash128() {
+        return Some((ChecksumAlgorithm::Xxhash128, v.to_string()));
+    }
+    if let Some(v) = get_object_output.checksum_xxhash64() {
+        return Some((ChecksumAlgorithm::Xxhash64, v.to_string()));
+    }
+    if let Some(v) = get_object_output.checksum_xxhash3() {
+        return Some((ChecksumAlgorithm::Xxhash3, v.to_string()));
+    }
     if let Some(v) = get_object_output.checksum_crc64_nvme() {
         return Some((ChecksumAlgorithm::Crc64Nvme, v.to_string()));
     }
@@ -287,7 +303,8 @@ pub fn detect_additional_checksum(
 /// Detect which checksum algorithm the source object uses by inspecting the HeadObjectOutput fields.
 /// Returns the algorithm and its value if found.
 ///
-/// Priority favors explicitly user-chosen algorithms (SHA256/SHA1/CRC32/CRC32C) over CRC64NVME,
+/// Priority favors explicitly user-chosen algorithms
+/// (SHA256/SHA1/CRC32C/CRC32/SHA512/MD5/XXHASH128/XXHASH64/XXHASH3) over CRC64NVME,
 /// which S3 often auto-adds to objects uploaded with a different explicit algorithm. This ensures
 /// a multipart object uploaded with `--additional-checksum-algorithm SHA256` is verified with
 /// SHA256, not with the auto-added full-object CRC64NVME.
@@ -305,6 +322,21 @@ pub fn detect_additional_checksum_with_head_object(
     }
     if let Some(v) = head_object_output.checksum_crc32() {
         return Some((ChecksumAlgorithm::Crc32, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_sha512() {
+        return Some((ChecksumAlgorithm::Sha512, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_md5() {
+        return Some((ChecksumAlgorithm::Md5, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_xxhash128() {
+        return Some((ChecksumAlgorithm::Xxhash128, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_xxhash64() {
+        return Some((ChecksumAlgorithm::Xxhash64, v.to_string()));
+    }
+    if let Some(v) = head_object_output.checksum_xxhash3() {
+        return Some((ChecksumAlgorithm::Xxhash3, v.to_string()));
     }
     if let Some(v) = head_object_output.checksum_crc64_nvme() {
         return Some((ChecksumAlgorithm::Crc64Nvme, v.to_string()));
@@ -334,6 +366,21 @@ pub fn get_additional_checksum(
         ChecksumAlgorithm::Crc64Nvme => get_object_output
             .checksum_crc64_nvme()
             .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Sha512 => get_object_output
+            .checksum_sha512()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Md5 => get_object_output
+            .checksum_md5()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash128 => get_object_output
+            .checksum_xxhash128()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash64 => get_object_output
+            .checksum_xxhash64()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash3 => get_object_output
+            .checksum_xxhash3()
+            .map(|checksum| checksum.to_string()),
         _ => {
             panic!("unknown algorithm")
         }
@@ -361,6 +408,21 @@ pub fn get_additional_checksum_with_head_object(
             .map(|checksum| checksum.to_string()),
         ChecksumAlgorithm::Crc64Nvme => head_object_output
             .checksum_crc64_nvme()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Sha512 => head_object_output
+            .checksum_sha512()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Md5 => head_object_output
+            .checksum_md5()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash128 => head_object_output
+            .checksum_xxhash128()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash64 => head_object_output
+            .checksum_xxhash64()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash3 => head_object_output
+            .checksum_xxhash3()
             .map(|checksum| checksum.to_string()),
         _ => {
             panic!("unknown algorithm")
@@ -792,18 +854,217 @@ mod tests {
     #[test]
     #[should_panic(expected = "unknown algorithm")]
     fn get_additional_checksum_panics_on_unsupported_algorithm() {
-        // ChecksumAlgorithm has variants (Md5, Sha512, Xxhash*, Unknown) that the
-        // function does not support. Selecting any of them must panic — guarding
-        // against accidental future additions slipping through silently.
+        // An algorithm the function does not know (an `Unknown` variant, or one
+        // added to the SDK later) must panic — guarding against accidental
+        // future additions slipping through silently.
         let get = GetObjectOutput::builder().build();
-        let _ = get_additional_checksum(&get, Some(ChecksumAlgorithm::Md5));
+        let _ = get_additional_checksum(&get, Some(ChecksumAlgorithm::from("UNKNOWN")));
     }
 
     #[test]
     #[should_panic(expected = "unknown algorithm")]
     fn get_additional_checksum_with_head_object_panics_on_unsupported_algorithm() {
         let head = HeadObjectOutput::builder().build();
-        let _ = get_additional_checksum_with_head_object(&head, Some(ChecksumAlgorithm::Md5));
+        let _ = get_additional_checksum_with_head_object(
+            &head,
+            Some(ChecksumAlgorithm::from("UNKNOWN")),
+        );
+    }
+
+    // Every checksum field has a distinct value, so reading a wrong field is detected.
+    const ALL_ADDITIONAL_CHECKSUMS: [(ChecksumAlgorithm, &str); 10] = [
+        (ChecksumAlgorithm::Crc32, "crc32"),
+        (ChecksumAlgorithm::Crc32C, "crc32c"),
+        (ChecksumAlgorithm::Crc64Nvme, "crc64nvme"),
+        (ChecksumAlgorithm::Sha1, "sha1"),
+        (ChecksumAlgorithm::Sha256, "sha256"),
+        (ChecksumAlgorithm::Sha512, "sha512"),
+        (ChecksumAlgorithm::Md5, "md5"),
+        (ChecksumAlgorithm::Xxhash128, "xxhash128"),
+        (ChecksumAlgorithm::Xxhash3, "xxhash3"),
+        (ChecksumAlgorithm::Xxhash64, "xxhash64"),
+    ];
+
+    fn get_object_output_with_all_checksums() -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .build()
+    }
+
+    fn head_object_output_with_all_checksums() -> HeadObjectOutput {
+        HeadObjectOutput::builder()
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .build()
+    }
+
+    #[test]
+    fn get_additional_checksum_all_algorithms_test() {
+        let get = get_object_output_with_all_checksums();
+        for (algorithm, expected) in ALL_ADDITIONAL_CHECKSUMS {
+            assert_eq!(
+                get_additional_checksum(&get, Some(algorithm.clone())),
+                Some(expected.to_string()),
+                "{algorithm}"
+            );
+        }
+
+        let empty = GetObjectOutput::builder().build();
+        for (algorithm, _) in ALL_ADDITIONAL_CHECKSUMS {
+            assert!(
+                get_additional_checksum(&empty, Some(algorithm.clone())).is_none(),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_additional_checksum_with_head_object_all_algorithms_test() {
+        let head = head_object_output_with_all_checksums();
+        for (algorithm, expected) in ALL_ADDITIONAL_CHECKSUMS {
+            assert_eq!(
+                get_additional_checksum_with_head_object(&head, Some(algorithm.clone())),
+                Some(expected.to_string()),
+                "{algorithm}"
+            );
+        }
+
+        let empty = HeadObjectOutput::builder().build();
+        for (algorithm, _) in ALL_ADDITIONAL_CHECKSUMS {
+            assert!(
+                get_additional_checksum_with_head_object(&empty, Some(algorithm.clone())).is_none(),
+                "{algorithm}"
+            );
+        }
+    }
+
+    // Each algorithm is detected on its own, with its own value.
+    #[test]
+    fn detect_additional_checksum_detects_each_algorithm() {
+        for (algorithm, value) in ALL_ADDITIONAL_CHECKSUMS {
+            let mut get = GetObjectOutput::builder();
+            let mut head = HeadObjectOutput::builder();
+            match algorithm {
+                ChecksumAlgorithm::Crc32 => {
+                    get = get.checksum_crc32(value);
+                    head = head.checksum_crc32(value);
+                }
+                ChecksumAlgorithm::Crc32C => {
+                    get = get.checksum_crc32_c(value);
+                    head = head.checksum_crc32_c(value);
+                }
+                ChecksumAlgorithm::Crc64Nvme => {
+                    get = get.checksum_crc64_nvme(value);
+                    head = head.checksum_crc64_nvme(value);
+                }
+                ChecksumAlgorithm::Sha1 => {
+                    get = get.checksum_sha1(value);
+                    head = head.checksum_sha1(value);
+                }
+                ChecksumAlgorithm::Sha256 => {
+                    get = get.checksum_sha256(value);
+                    head = head.checksum_sha256(value);
+                }
+                ChecksumAlgorithm::Sha512 => {
+                    get = get.checksum_sha512(value);
+                    head = head.checksum_sha512(value);
+                }
+                ChecksumAlgorithm::Md5 => {
+                    get = get.checksum_md5(value);
+                    head = head.checksum_md5(value);
+                }
+                ChecksumAlgorithm::Xxhash128 => {
+                    get = get.checksum_xxhash128(value);
+                    head = head.checksum_xxhash128(value);
+                }
+                ChecksumAlgorithm::Xxhash3 => {
+                    get = get.checksum_xxhash3(value);
+                    head = head.checksum_xxhash3(value);
+                }
+                ChecksumAlgorithm::Xxhash64 => {
+                    get = get.checksum_xxhash64(value);
+                    head = head.checksum_xxhash64(value);
+                }
+                _ => unreachable!(),
+            }
+
+            assert_eq!(
+                detect_additional_checksum(&get.build()),
+                Some((algorithm.clone(), value.to_string())),
+                "{algorithm}"
+            );
+            assert_eq!(
+                detect_additional_checksum_with_head_object(&head.build()),
+                Some((algorithm.clone(), value.to_string())),
+                "{algorithm}"
+            );
+        }
+    }
+
+    // S3 may auto-add CRC64NVME alongside an explicitly chosen algorithm. The
+    // explicitly chosen one must win, so a multipart object uploaded with
+    // e.g. XXHASH64 is verified with its composite XXHASH64 checksum.
+    #[test]
+    fn detect_additional_checksum_prefers_new_algorithms_over_auto_added_crc64nvme() {
+        let cases = [
+            (
+                ChecksumAlgorithm::Sha512,
+                GetObjectOutput::builder().checksum_sha512("v-2"),
+                HeadObjectOutput::builder().checksum_sha512("v-2"),
+            ),
+            (
+                ChecksumAlgorithm::Md5,
+                GetObjectOutput::builder().checksum_md5("v-2"),
+                HeadObjectOutput::builder().checksum_md5("v-2"),
+            ),
+            (
+                ChecksumAlgorithm::Xxhash128,
+                GetObjectOutput::builder().checksum_xxhash128("v-2"),
+                HeadObjectOutput::builder().checksum_xxhash128("v-2"),
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                GetObjectOutput::builder().checksum_xxhash64("v-2"),
+                HeadObjectOutput::builder().checksum_xxhash64("v-2"),
+            ),
+            (
+                ChecksumAlgorithm::Xxhash3,
+                GetObjectOutput::builder().checksum_xxhash3("v-2"),
+                HeadObjectOutput::builder().checksum_xxhash3("v-2"),
+            ),
+        ];
+
+        for (algorithm, get, head) in cases {
+            let get = get.checksum_crc64_nvme("crc64-value").build();
+            let head = head.checksum_crc64_nvme("crc64-value").build();
+            assert_eq!(
+                detect_additional_checksum(&get),
+                Some((algorithm.clone(), "v-2".to_string())),
+                "{algorithm}"
+            );
+            assert_eq!(
+                detect_additional_checksum_with_head_object(&head),
+                Some((algorithm.clone(), "v-2".to_string())),
+                "{algorithm}"
+            );
+        }
     }
 
     #[test]

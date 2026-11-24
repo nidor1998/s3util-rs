@@ -4,6 +4,7 @@ mod tests {
     use crate::config::Config;
     use crate::config::args::{Cli, Commands, build_config_from_args, parse_from_args};
     use crate::types::{S3Credentials, StoragePath};
+    use aws_sdk_s3::types::ChecksumAlgorithm;
 
     fn args_with(source: &str, target: &str) -> Vec<String> {
         vec![
@@ -452,7 +453,7 @@ mod tests {
     #[test]
     fn full_object_checksum_accepts_crc32() {
         // Positive case: --full-object-checksum + CRC32 must build successfully,
-        // exercising the fall-through past the SHA1/SHA256 reject branch.
+        // exercising the CRC-only allow-list (CRC32/CRC32C/CRC64NVME pass).
         let result = build_config_from_args(args_with_extra(
             "/tmp/src",
             "s3://b/k",
@@ -509,6 +510,156 @@ mod tests {
             result
                 .unwrap_err()
                 .contains("Only CRC32/CRC32C/CRC64NVME supports full object checksum")
+        );
+    }
+
+    #[test]
+    fn full_object_checksum_rejects_every_hash_algorithm() {
+        // Only the CRC family has a full object checksum type.
+        for algorithm in ["SHA512", "MD5", "XXHASH128", "XXHASH3", "XXHASH64"] {
+            let result = build_config_from_args(args_with_extra(
+                "/tmp/src",
+                "s3://b/k",
+                &[
+                    "--full-object-checksum",
+                    "--additional-checksum-algorithm",
+                    algorithm,
+                ],
+            ));
+            assert!(result.is_err(), "{algorithm} must be rejected");
+            assert!(
+                result
+                    .unwrap_err()
+                    .contains("Only CRC32/CRC32C/CRC64NVME supports full object checksum"),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn additional_checksum_algorithm_builds_every_algorithm() {
+        for (value, expected) in [
+            ("CRC32", ChecksumAlgorithm::Crc32),
+            ("CRC32C", ChecksumAlgorithm::Crc32C),
+            ("CRC64NVME", ChecksumAlgorithm::Crc64Nvme),
+            ("SHA1", ChecksumAlgorithm::Sha1),
+            ("SHA256", ChecksumAlgorithm::Sha256),
+            ("SHA512", ChecksumAlgorithm::Sha512),
+            ("MD5", ChecksumAlgorithm::Md5),
+            ("XXHASH128", ChecksumAlgorithm::Xxhash128),
+            ("XXHASH3", ChecksumAlgorithm::Xxhash3),
+            ("XXHASH64", ChecksumAlgorithm::Xxhash64),
+        ] {
+            let config = build_config_from_args(args_with_extra(
+                "/tmp/src",
+                "s3://b/k",
+                &["--additional-checksum-algorithm", value],
+            ))
+            .unwrap();
+            assert_eq!(
+                config.additional_checksum_algorithm,
+                Some(expected.clone()),
+                "{value}"
+            );
+            // Only CRC64NVME forces the full object checksum.
+            assert_eq!(
+                config.full_object_checksum,
+                expected == ChecksumAlgorithm::Crc64Nvme,
+                "{value}"
+            );
+        }
+    }
+
+    #[test]
+    fn additional_checksum_algorithm_rejects_unknown_value() {
+        for value in ["SHA3", "md5", "XXHASH32"] {
+            let result = parse_from_args(args_with_extra(
+                "/tmp/src",
+                "s3://b/k",
+                &["--additional-checksum-algorithm", value],
+            ));
+            assert!(result.is_err(), "{value} must be rejected");
+        }
+    }
+
+    // The valid choices are written out twice: in the `--help` text of
+    // `--additional-checksum-algorithm` and in the parser's error message.
+    // Both lists must be the same, and must match what the parser accepts.
+    #[test]
+    fn additional_checksum_algorithm_help_lists_exactly_the_parser_choices() {
+        use crate::config::args::value_parser::checksum_algorithm::parse_checksum_algorithm;
+        use clap::CommandFactory;
+
+        fn split_choices(list: &str) -> Vec<String> {
+            list.split('|').map(|c| c.trim().to_string()).collect()
+        }
+
+        // The list in the parser's error message: "... valid choices: A | B ."
+        let parser_error = parse_checksum_algorithm("").unwrap_err();
+        let parser_choices = split_choices(
+            parser_error
+                .split_once("valid choices:")
+                .expect("parser error must list the valid choices")
+                .1
+                .trim()
+                .trim_end_matches('.'),
+        );
+
+        fn check(cmd: &clap::Command, path: &str, parser_choices: &[String], checked: &mut usize) {
+            for arg in cmd.get_arguments() {
+                if arg.get_id().as_str() != "additional_checksum_algorithm" {
+                    continue;
+                }
+                *checked += 1;
+                let long_help = arg
+                    .get_long_help()
+                    .unwrap_or_else(|| {
+                        panic!("{path}: --additional-checksum-algorithm has no long help")
+                    })
+                    .to_string();
+                let help_choices = split_choices(
+                    long_help
+                        .lines()
+                        .find_map(|line| line.trim().strip_prefix("Valid choices:"))
+                        .unwrap_or_else(|| {
+                            panic!("{path}: help must list the valid choices: {long_help}")
+                        }),
+                );
+
+                assert_eq!(
+                    help_choices, parser_choices,
+                    "{path}: --help and the parser error list different choices"
+                );
+                for choice in &help_choices {
+                    assert!(
+                        parse_checksum_algorithm(choice).is_ok(),
+                        "{path}: --help lists {choice}, but the parser rejects it"
+                    );
+                }
+                for algo in ChecksumAlgorithm::values() {
+                    assert!(
+                        help_choices.iter().any(|c| c == algo),
+                        "{path}: the parser accepts {algo}, but --help does not list it"
+                    );
+                }
+            }
+            for sub in cmd.get_subcommands() {
+                check(
+                    sub,
+                    &format!("{path} {}", sub.get_name()),
+                    parser_choices,
+                    checked,
+                );
+            }
+        }
+
+        let cmd = Cli::command();
+        let mut checked = 0;
+        check(&cmd, cmd.get_name(), &parser_choices, &mut checked);
+        // At least `cp` and `mv` take the option; zero means the walk went wrong.
+        assert!(
+            checked >= 2,
+            "found --additional-checksum-algorithm on only {checked} subcommand(s)"
         );
     }
 
@@ -1919,7 +2070,7 @@ mod tests {
     #[test]
     fn full_object_checksum_without_algorithm_builds() {
         // --full-object-checksum with no --additional-checksum-algorithm at
-        // all: the SHA1/SHA256 reject check must be skipped entirely.
+        // all: the CRC-only allow-list check must be skipped entirely.
         let result = build_config_from_args(args_with_extra(
             "/tmp/src",
             "s3://b/k",

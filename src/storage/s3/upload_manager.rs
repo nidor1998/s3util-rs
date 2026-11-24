@@ -5,6 +5,9 @@ use aws_sdk_s3::operation::abort_multipart_upload::AbortMultipartUploadOutput;
 use aws_sdk_s3::operation::complete_multipart_upload::CompleteMultipartUploadOutput;
 use aws_sdk_s3::operation::get_object::GetObjectOutput;
 use aws_sdk_s3::operation::put_object::PutObjectOutput;
+use aws_sdk_s3::operation::put_object::builders::PutObjectFluentBuilder;
+use aws_sdk_s3::operation::upload_part::UploadPartOutput;
+use aws_sdk_s3::operation::upload_part::builders::UploadPartFluentBuilder;
 use aws_sdk_s3::primitives::ByteStream;
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
 use aws_sdk_s3::types::{
@@ -26,6 +29,7 @@ use tracing::{debug, error, trace, warn};
 
 use crate::config::Config;
 use crate::storage;
+use crate::storage::checksum::AdditionalChecksum;
 use crate::storage::e_tag_verify::{generate_e_tag_hash, is_multipart_upload_e_tag};
 use crate::storage::{
     Storage, convert_copy_to_put_object_output, convert_copy_to_upload_part_output,
@@ -172,6 +176,136 @@ async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
         total += n;
     }
     Ok(total)
+}
+
+/// The additional checksum of one request body (a single-part object or one
+/// part of a multipart upload). Only the field of the configured algorithm is
+/// set.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct AdditionalChecksumValues {
+    crc32: Option<String>,
+    crc32_c: Option<String>,
+    crc64_nvme: Option<String>,
+    sha1: Option<String>,
+    sha256: Option<String>,
+    sha512: Option<String>,
+    md5: Option<String>,
+    xxhash128: Option<String>,
+    xxhash3: Option<String>,
+    xxhash64: Option<String>,
+}
+
+/// Calculate the additional checksum of `data` for `algorithm`.
+///
+/// The SDK calculates request checksums only for CRC32/CRC32C/CRC64NVME/SHA1/
+/// SHA256, and it maps `MD5` to `CRC32`. So the checksum is always calculated
+/// here and sent explicitly: when a checksum header is set, the SDK sends it
+/// as is and does not calculate one itself.
+///
+/// The value is the checksum of `data` alone. For a multipart upload, S3 makes
+/// the composite (or full object) checksum from these per-part values.
+///
+/// `md5_digest_base64` is the base64 MD5 digest of `data` if the caller has
+/// already calculated it (for `Content-MD5`); it is reused for the `MD5`
+/// algorithm instead of digesting the data twice.
+///
+/// An algorithm that s3util cannot calculate (an `Unknown` variant) gets no
+/// value, and the SDK rejects the request as before.
+fn calculate_additional_checksum_values(
+    algorithm: Option<&ChecksumAlgorithm>,
+    data: &[u8],
+    md5_digest_base64: Option<&str>,
+) -> AdditionalChecksumValues {
+    let Some(algorithm) = algorithm else {
+        return AdditionalChecksumValues::default();
+    };
+    if !AdditionalChecksum::is_supported(algorithm) {
+        return AdditionalChecksumValues::default();
+    }
+
+    let value = match (algorithm, md5_digest_base64) {
+        (ChecksumAlgorithm::Md5, Some(md5_digest_base64)) => md5_digest_base64.to_string(),
+        _ => {
+            // The checksum of a single body is the same with or without the
+            // full object checksum type.
+            let mut checksum = AdditionalChecksum::new(algorithm.clone(), false);
+            checksum.update(data);
+            checksum.finalize()
+        }
+    };
+
+    let mut values = AdditionalChecksumValues::default();
+    let field = match algorithm {
+        ChecksumAlgorithm::Crc32 => &mut values.crc32,
+        ChecksumAlgorithm::Crc32C => &mut values.crc32_c,
+        ChecksumAlgorithm::Crc64Nvme => &mut values.crc64_nvme,
+        ChecksumAlgorithm::Sha1 => &mut values.sha1,
+        ChecksumAlgorithm::Sha256 => &mut values.sha256,
+        ChecksumAlgorithm::Sha512 => &mut values.sha512,
+        ChecksumAlgorithm::Md5 => &mut values.md5,
+        ChecksumAlgorithm::Xxhash128 => &mut values.xxhash128,
+        ChecksumAlgorithm::Xxhash3 => &mut values.xxhash3,
+        ChecksumAlgorithm::Xxhash64 => &mut values.xxhash64,
+        // Unreachable: `is_supported` returned true.
+        _ => return AdditionalChecksumValues::default(),
+    };
+    *field = Some(value);
+    values
+}
+
+fn set_upload_part_additional_checksum(
+    builder: UploadPartFluentBuilder,
+    values: AdditionalChecksumValues,
+) -> UploadPartFluentBuilder {
+    builder
+        .set_checksum_crc32(values.crc32)
+        .set_checksum_crc32_c(values.crc32_c)
+        .set_checksum_crc64_nvme(values.crc64_nvme)
+        .set_checksum_sha1(values.sha1)
+        .set_checksum_sha256(values.sha256)
+        .set_checksum_sha512(values.sha512)
+        .set_checksum_md5(values.md5)
+        .set_checksum_xxhash128(values.xxhash128)
+        .set_checksum_xxhash3(values.xxhash3)
+        .set_checksum_xxhash64(values.xxhash64)
+}
+
+fn set_put_object_additional_checksum(
+    builder: PutObjectFluentBuilder,
+    values: AdditionalChecksumValues,
+) -> PutObjectFluentBuilder {
+    builder
+        .set_checksum_crc32(values.crc32)
+        .set_checksum_crc32_c(values.crc32_c)
+        .set_checksum_crc64_nvme(values.crc64_nvme)
+        .set_checksum_sha1(values.sha1)
+        .set_checksum_sha256(values.sha256)
+        .set_checksum_sha512(values.sha512)
+        .set_checksum_md5(values.md5)
+        .set_checksum_xxhash128(values.xxhash128)
+        .set_checksum_xxhash3(values.xxhash3)
+        .set_checksum_xxhash64(values.xxhash64)
+}
+
+/// Build the `CompletedPart` for `CompleteMultipartUpload` from the response
+/// of `UploadPart` (or `UploadPartCopy`). S3 requires the per-part checksum of
+/// the upload's algorithm in each part, so every checksum is copied.
+fn build_completed_part(upload_part_output: &UploadPartOutput, part_number: i32) -> CompletedPart {
+    let to_string = |value: Option<&str>| value.map(|value| value.to_string());
+    CompletedPart::builder()
+        .e_tag(upload_part_output.e_tag().unwrap())
+        .set_checksum_crc32(to_string(upload_part_output.checksum_crc32()))
+        .set_checksum_crc32_c(to_string(upload_part_output.checksum_crc32_c()))
+        .set_checksum_crc64_nvme(to_string(upload_part_output.checksum_crc64_nvme()))
+        .set_checksum_sha1(to_string(upload_part_output.checksum_sha1()))
+        .set_checksum_sha256(to_string(upload_part_output.checksum_sha256()))
+        .set_checksum_sha512(to_string(upload_part_output.checksum_sha512()))
+        .set_checksum_md5(to_string(upload_part_output.checksum_md5()))
+        .set_checksum_xxhash128(to_string(upload_part_output.checksum_xxhash128()))
+        .set_checksum_xxhash3(to_string(upload_part_output.checksum_xxhash3()))
+        .set_checksum_xxhash64(to_string(upload_part_output.checksum_xxhash64()))
+        .part_number(part_number)
+        .build()
 }
 
 impl UploadManager {
@@ -904,6 +1038,11 @@ impl UploadManager {
 
                 let upload_part_output;
                 if !server_side_copy {
+                    let additional_checksum_values = calculate_additional_checksum_values(
+                        additional_checksum_algorithm.as_ref(),
+                        &buffer,
+                        md5_digest_base64.as_deref(),
+                    );
                     let builder = target
                         .upload_part()
                         .set_request_payer(request_payer)
@@ -918,6 +1057,8 @@ impl UploadManager {
                         .set_sse_customer_key(target_sse_c_key)
                         .set_sse_customer_key_md5(target_sse_c_key_md5)
                         .body(ByteStream::from(buffer));
+                    let builder =
+                        set_upload_part_additional_checksum(builder, additional_checksum_values);
 
                     upload_part_output = if disable_payload_signing {
                         builder
@@ -989,37 +1130,7 @@ impl UploadManager {
                 upload_size_vec.push(upload_size);
 
                 let mut locked_upload_parts = upload_parts.lock().unwrap();
-                locked_upload_parts.push(
-                    CompletedPart::builder()
-                        .e_tag(upload_part_output.e_tag().unwrap())
-                        .set_checksum_sha256(
-                            upload_part_output
-                                .checksum_sha256()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_sha1(
-                            upload_part_output
-                                .checksum_sha1()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc32(
-                            upload_part_output
-                                .checksum_crc32()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc32_c(
-                            upload_part_output
-                                .checksum_crc32_c()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc64_nvme(
-                            upload_part_output
-                                .checksum_crc64_nvme()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .part_number(part_number)
-                        .build(),
-                );
+                locked_upload_parts.push(build_completed_part(&upload_part_output, part_number));
 
                 trace!(
                     key = &target_key,
@@ -1220,8 +1331,6 @@ impl UploadManager {
         upload_id: &str,
         mut reader: Box<dyn tokio::io::AsyncRead + Send + Unpin>,
     ) -> Result<(Vec<CompletedPart>, u64, Option<String>)> {
-        use crate::storage::checksum::AdditionalChecksum;
-
         let shared_multipart_etags = Arc::new(Mutex::new(Vec::<MutipartEtags>::new()));
         let shared_upload_parts = Arc::new(Mutex::new(Vec::<CompletedPart>::new()));
 
@@ -1310,11 +1419,11 @@ impl UploadManager {
                 };
 
                 // Compute per-part additional checksum for the upload_part call itself.
-                let part_additional_checksum = additional_checksum_algorithm.as_ref().map(|algo| {
-                    let mut c = AdditionalChecksum::new(algo.clone(), false);
-                    c.update(&buffer);
-                    c.finalize()
-                });
+                let additional_checksum_values = calculate_additional_checksum_values(
+                    additional_checksum_algorithm.as_ref(),
+                    &buffer,
+                    md5_digest_base64.as_deref(),
+                );
 
                 let body = ByteStream::from(buffer);
 
@@ -1335,30 +1444,11 @@ impl UploadManager {
                 if let Some(algo) = additional_checksum_algorithm.as_ref() {
                     upload_part_builder =
                         upload_part_builder.set_checksum_algorithm(Some(algo.clone()));
-                    match algo {
-                        ChecksumAlgorithm::Sha256 => {
-                            upload_part_builder = upload_part_builder
-                                .set_checksum_sha256(part_additional_checksum.clone());
-                        }
-                        ChecksumAlgorithm::Sha1 => {
-                            upload_part_builder = upload_part_builder
-                                .set_checksum_sha1(part_additional_checksum.clone());
-                        }
-                        ChecksumAlgorithm::Crc32 => {
-                            upload_part_builder = upload_part_builder
-                                .set_checksum_crc32(part_additional_checksum.clone());
-                        }
-                        ChecksumAlgorithm::Crc32C => {
-                            upload_part_builder = upload_part_builder
-                                .set_checksum_crc32_c(part_additional_checksum.clone());
-                        }
-                        ChecksumAlgorithm::Crc64Nvme => {
-                            upload_part_builder = upload_part_builder
-                                .set_checksum_crc64_nvme(part_additional_checksum.clone());
-                        }
-                        _ => {}
-                    }
                 }
+                let upload_part_builder = set_upload_part_additional_checksum(
+                    upload_part_builder,
+                    additional_checksum_values,
+                );
 
                 let upload_part_output = if disable_payload_signing {
                     upload_part_builder
@@ -1390,29 +1480,10 @@ impl UploadManager {
                 }
 
                 let mut locked_upload_parts = upload_parts.lock().unwrap();
-                locked_upload_parts.push(
-                    CompletedPart::builder()
-                        .e_tag(upload_part_output.e_tag().unwrap())
-                        .set_checksum_sha256(
-                            upload_part_output.checksum_sha256().map(|s| s.to_string()),
-                        )
-                        .set_checksum_sha1(
-                            upload_part_output.checksum_sha1().map(|s| s.to_string()),
-                        )
-                        .set_checksum_crc32(
-                            upload_part_output.checksum_crc32().map(|s| s.to_string()),
-                        )
-                        .set_checksum_crc32_c(
-                            upload_part_output.checksum_crc32_c().map(|s| s.to_string()),
-                        )
-                        .set_checksum_crc64_nvme(
-                            upload_part_output
-                                .checksum_crc64_nvme()
-                                .map(|s| s.to_string()),
-                        )
-                        .part_number(current_part_number)
-                        .build(),
-                );
+                locked_upload_parts.push(build_completed_part(
+                    &upload_part_output,
+                    current_part_number,
+                ));
                 drop(locked_upload_parts);
 
                 let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(part_size as u64));
@@ -1648,6 +1719,11 @@ impl UploadManager {
 
                 let upload_part_output;
                 if !server_side_copy {
+                    let additional_checksum_values = calculate_additional_checksum_values(
+                        additional_checksum_algorithm.as_ref(),
+                        &buffer,
+                        md5_digest_base64.as_deref(),
+                    );
                     let builder = target
                         .upload_part()
                         .set_request_payer(request_payer)
@@ -1662,6 +1738,8 @@ impl UploadManager {
                         .set_sse_customer_key(target_sse_c_key)
                         .set_sse_customer_key_md5(target_sse_c_key_md5)
                         .body(ByteStream::from(buffer));
+                    let builder =
+                        set_upload_part_additional_checksum(builder, additional_checksum_values);
 
                     upload_part_output = if disable_payload_signing {
                         builder
@@ -1731,37 +1809,7 @@ impl UploadManager {
                 }
 
                 let mut locked_upload_parts = upload_parts.lock().unwrap();
-                locked_upload_parts.push(
-                    CompletedPart::builder()
-                        .e_tag(upload_part_output.e_tag().unwrap())
-                        .set_checksum_sha256(
-                            upload_part_output
-                                .checksum_sha256()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_sha1(
-                            upload_part_output
-                                .checksum_sha1()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc32(
-                            upload_part_output
-                                .checksum_crc32()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc32_c(
-                            upload_part_output
-                                .checksum_crc32_c()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .set_checksum_crc64_nvme(
-                            upload_part_output
-                                .checksum_crc64_nvme()
-                                .map(|digest| digest.to_string()),
-                        )
-                        .part_number(part_number)
-                        .build(),
-                );
+                locked_upload_parts.push(build_completed_part(&upload_part_output, part_number));
 
                 let mut upload_size_vec = total_upload_size.lock().unwrap();
                 upload_size_vec.push(upload_size);
@@ -1868,6 +1916,18 @@ impl UploadManager {
             Some(general_purpose::STANDARD.encode(md5_digest.as_slice()))
         } else {
             None
+        };
+
+        // Server-side copy does not read the body. S3 calculates the checksum
+        // of the copy itself.
+        let additional_checksum_values = if self.config.server_side_copy {
+            AdditionalChecksumValues::default()
+        } else {
+            calculate_additional_checksum_values(
+                self.config.additional_checksum_algorithm.as_ref(),
+                &buffer,
+                md5_digest_base64.as_deref(),
+            )
         };
 
         let buffer_stream = ByteStream::from(buffer);
@@ -2029,6 +2089,7 @@ impl UploadManager {
                 .set_acl(upload_metadata.acl)
                 .set_checksum_algorithm(self.config.additional_checksum_algorithm.as_ref().cloned())
                 .set_if_none_match(self.if_none_match.clone());
+            let builder = set_put_object_additional_checksum(builder, additional_checksum_values);
 
             if self.config.disable_payload_signing {
                 builder
@@ -2268,6 +2329,21 @@ pub fn get_additional_checksum_from_put_object_result(
         ChecksumAlgorithm::Crc64Nvme => put_object_output
             .checksum_crc64_nvme()
             .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Sha512 => put_object_output
+            .checksum_sha512()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Md5 => put_object_output
+            .checksum_md5()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash128 => put_object_output
+            .checksum_xxhash128()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash3 => put_object_output
+            .checksum_xxhash3()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash64 => put_object_output
+            .checksum_xxhash64()
+            .map(|checksum| checksum.to_string()),
         _ => {
             panic!("unknown algorithm")
         }
@@ -2295,6 +2371,21 @@ pub fn get_additional_checksum_from_multipart_upload_result(
             .map(|checksum| checksum.to_string()),
         ChecksumAlgorithm::Crc64Nvme => complete_multipart_upload_result
             .checksum_crc64_nvme()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Sha512 => complete_multipart_upload_result
+            .checksum_sha512()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Md5 => complete_multipart_upload_result
+            .checksum_md5()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash128 => complete_multipart_upload_result
+            .checksum_xxhash128()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash3 => complete_multipart_upload_result
+            .checksum_xxhash3()
+            .map(|checksum| checksum.to_string()),
+        ChecksumAlgorithm::Xxhash64 => complete_multipart_upload_result
+            .checksum_xxhash64()
             .map(|checksum| checksum.to_string()),
         _ => {
             panic!("unknown algorithm")
@@ -2520,15 +2611,402 @@ mod tests {
         // surface as a panic, not silently return None — callers depend on
         // each known algorithm being faithfully extracted.
         let put = PutObjectOutput::builder().build();
-        let _ = get_additional_checksum_from_put_object_result(&put, Some(ChecksumAlgorithm::Md5));
+        let _ = get_additional_checksum_from_put_object_result(
+            &put,
+            Some(ChecksumAlgorithm::from("UNKNOWN")),
+        );
     }
 
     #[test]
     #[should_panic(expected = "unknown algorithm")]
     fn get_additional_checksum_from_multipart_result_panics_on_unsupported_algorithm() {
         let mp = CompleteMultipartUploadOutput::builder().build();
-        let _ =
-            get_additional_checksum_from_multipart_upload_result(&mp, Some(ChecksumAlgorithm::Md5));
+        let _ = get_additional_checksum_from_multipart_upload_result(
+            &mp,
+            Some(ChecksumAlgorithm::from("UNKNOWN")),
+        );
+    }
+
+    // Every checksum field has a distinct value, so reading a wrong field is detected.
+    const ALL_ADDITIONAL_CHECKSUMS: [(ChecksumAlgorithm, &str); 10] = [
+        (ChecksumAlgorithm::Crc32, "crc32"),
+        (ChecksumAlgorithm::Crc32C, "crc32c"),
+        (ChecksumAlgorithm::Crc64Nvme, "crc64nvme"),
+        (ChecksumAlgorithm::Sha1, "sha1"),
+        (ChecksumAlgorithm::Sha256, "sha256"),
+        (ChecksumAlgorithm::Sha512, "sha512"),
+        (ChecksumAlgorithm::Md5, "md5"),
+        (ChecksumAlgorithm::Xxhash128, "xxhash128"),
+        (ChecksumAlgorithm::Xxhash3, "xxhash3"),
+        (ChecksumAlgorithm::Xxhash64, "xxhash64"),
+    ];
+
+    /// The value of the field of `algorithm` in `values`, and whether every
+    /// other field is `None`.
+    fn only_value_of(
+        values: &AdditionalChecksumValues,
+        algorithm: &ChecksumAlgorithm,
+    ) -> (Option<String>, bool) {
+        let fields = [
+            (ChecksumAlgorithm::Crc32, &values.crc32),
+            (ChecksumAlgorithm::Crc32C, &values.crc32_c),
+            (ChecksumAlgorithm::Crc64Nvme, &values.crc64_nvme),
+            (ChecksumAlgorithm::Sha1, &values.sha1),
+            (ChecksumAlgorithm::Sha256, &values.sha256),
+            (ChecksumAlgorithm::Sha512, &values.sha512),
+            (ChecksumAlgorithm::Md5, &values.md5),
+            (ChecksumAlgorithm::Xxhash128, &values.xxhash128),
+            (ChecksumAlgorithm::Xxhash3, &values.xxhash3),
+            (ChecksumAlgorithm::Xxhash64, &values.xxhash64),
+        ];
+        let value = fields
+            .iter()
+            .find(|(field_algorithm, _)| field_algorithm == algorithm)
+            .and_then(|(_, value)| (*value).clone());
+        let others_are_none = fields
+            .iter()
+            .filter(|(field_algorithm, _)| field_algorithm != algorithm)
+            .all(|(_, value)| value.is_none());
+        (value, others_are_none)
+    }
+
+    #[test]
+    fn get_additional_checksum_from_put_object_result_all_algorithms_test() {
+        let put = PutObjectOutput::builder()
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .build();
+
+        for (algorithm, expected) in ALL_ADDITIONAL_CHECKSUMS {
+            assert_eq!(
+                get_additional_checksum_from_put_object_result(&put, Some(algorithm.clone())),
+                Some(expected.to_string()),
+                "{algorithm}"
+            );
+        }
+
+        let empty = PutObjectOutput::builder().build();
+        for (algorithm, _) in ALL_ADDITIONAL_CHECKSUMS {
+            assert!(
+                get_additional_checksum_from_put_object_result(&empty, Some(algorithm.clone()))
+                    .is_none(),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn get_additional_checksum_from_multipart_upload_result_all_algorithms_test() {
+        let mp = CompleteMultipartUploadOutput::builder()
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .build();
+
+        for (algorithm, expected) in ALL_ADDITIONAL_CHECKSUMS {
+            assert_eq!(
+                get_additional_checksum_from_multipart_upload_result(&mp, Some(algorithm.clone())),
+                Some(expected.to_string()),
+                "{algorithm}"
+            );
+        }
+
+        let empty = CompleteMultipartUploadOutput::builder().build();
+        for (algorithm, _) in ALL_ADDITIONAL_CHECKSUMS {
+            assert!(
+                get_additional_checksum_from_multipart_upload_result(
+                    &empty,
+                    Some(algorithm.clone())
+                )
+                .is_none(),
+                "{algorithm}"
+            );
+        }
+    }
+
+    #[test]
+    fn calculate_additional_checksum_values_none_without_algorithm() {
+        assert_eq!(
+            calculate_additional_checksum_values(None, b"abc", None),
+            AdditionalChecksumValues::default()
+        );
+        // The MD5 digest for Content-MD5 alone must not produce an MD5 checksum.
+        assert_eq!(
+            calculate_additional_checksum_values(None, b"abc", Some("kAFQmDzST7DWlj99KOF/cg==")),
+            AdditionalChecksumValues::default()
+        );
+    }
+
+    // The SDK cannot calculate MD5/SHA512/XXHASH request checksums (and maps
+    // MD5 to CRC32), so the value must be set for every algorithm, in the
+    // field of that algorithm only, and be the single-part checksum of the data.
+    #[test]
+    fn calculate_additional_checksum_values_sets_only_the_field_of_the_algorithm() {
+        let data: Vec<u8> = (0..70_000u32).map(|i| (i % 253) as u8).collect();
+
+        for (algorithm, _) in ALL_ADDITIONAL_CHECKSUMS {
+            let values = calculate_additional_checksum_values(Some(&algorithm), &data, None);
+
+            let mut expected = AdditionalChecksum::new(algorithm.clone(), false);
+            expected.update(&data);
+            let expected = expected.finalize();
+
+            let (value, others_are_none) = only_value_of(&values, &algorithm);
+            assert_eq!(value, Some(expected), "{algorithm}");
+            assert!(others_are_none, "{algorithm}: {values:?}");
+        }
+    }
+
+    // Values computed independently with Python's hashlib (base64 of the digest of "abc").
+    #[test]
+    fn calculate_additional_checksum_values_known_answers() {
+        for (algorithm, expected) in [
+            (ChecksumAlgorithm::Md5, "kAFQmDzST7DWlj99KOF/cg=="),
+            (ChecksumAlgorithm::Sha1, "qZk+NkcGgWq6PiVxeFDCbJzQ2J0="),
+            (
+                ChecksumAlgorithm::Sha256,
+                "ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=",
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                "3a81oZNherrMQXNJriBBMRLm+k6JqX6iCp7u5ktV05ohkpkqJ0/BqDa6PCOj/uu9RU1EI2Q86A4qmslPpUyknw==",
+            ),
+        ] {
+            let values = calculate_additional_checksum_values(Some(&algorithm), b"abc", None);
+            let (value, others_are_none) = only_value_of(&values, &algorithm);
+            assert_eq!(value.as_deref(), Some(expected), "{algorithm}");
+            assert!(others_are_none, "{algorithm}");
+        }
+    }
+
+    #[test]
+    fn calculate_additional_checksum_values_reuses_content_md5_digest() {
+        // The Content-MD5 digest is reused for the MD5 checksum, so both always match.
+        let values = calculate_additional_checksum_values(
+            Some(&ChecksumAlgorithm::Md5),
+            b"abc",
+            Some("precomputed"),
+        );
+        assert_eq!(values.md5.as_deref(), Some("precomputed"));
+
+        // Other algorithms ignore the MD5 digest.
+        let values = calculate_additional_checksum_values(
+            Some(&ChecksumAlgorithm::Sha256),
+            b"abc",
+            Some("precomputed"),
+        );
+        assert!(values.md5.is_none());
+        assert_eq!(
+            values.sha256.as_deref(),
+            Some("ungWv48Bz+pBQUDeXa4iI7ADYaOWF3qctBD/YfIAFa0=")
+        );
+    }
+
+    #[test]
+    fn calculate_additional_checksum_values_empty_body() {
+        // A zero-byte object still has a well-defined checksum.
+        let values = calculate_additional_checksum_values(Some(&ChecksumAlgorithm::Md5), b"", None);
+        assert_eq!(values.md5.as_deref(), Some("1B2M2Y8AsgTpgAmY7PhCfg=="));
+
+        let values =
+            calculate_additional_checksum_values(Some(&ChecksumAlgorithm::Xxhash64), b"", None);
+        assert_eq!(values.xxhash64.as_deref(), Some("70bbN1HY6Zk="));
+    }
+
+    #[test]
+    fn calculate_additional_checksum_values_unknown_algorithm_sets_nothing() {
+        // Must not panic: the request is left to the SDK, which rejects it.
+        assert_eq!(
+            calculate_additional_checksum_values(
+                Some(&ChecksumAlgorithm::from("UNKNOWN")),
+                b"abc",
+                None
+            ),
+            AdditionalChecksumValues::default()
+        );
+    }
+
+    // The CRC value of a part does not depend on the full object checksum
+    // type; S3 combines the per-part CRCs itself.
+    #[test]
+    fn calculate_additional_checksum_values_crc_matches_full_object_variant() {
+        let data: Vec<u8> = (0..10_000u32).map(|i| (i % 13) as u8).collect();
+        for algorithm in [
+            ChecksumAlgorithm::Crc32,
+            ChecksumAlgorithm::Crc32C,
+            ChecksumAlgorithm::Crc64Nvme,
+        ] {
+            let values = calculate_additional_checksum_values(Some(&algorithm), &data, None);
+            let mut full_object = AdditionalChecksum::new(algorithm.clone(), true);
+            full_object.update(&data);
+            let (value, _) = only_value_of(&values, &algorithm);
+            assert_eq!(value, Some(full_object.finalize()), "{algorithm}");
+        }
+    }
+
+    #[test]
+    fn set_upload_part_additional_checksum_sets_every_field() {
+        let client = Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .build(),
+        );
+        let values = all_distinct_values();
+
+        let builder = set_upload_part_additional_checksum(client.upload_part(), values);
+
+        assert_eq!(builder.get_checksum_crc32().as_deref(), Some("crc32"));
+        assert_eq!(builder.get_checksum_crc32_c().as_deref(), Some("crc32c"));
+        assert_eq!(
+            builder.get_checksum_crc64_nvme().as_deref(),
+            Some("crc64nvme")
+        );
+        assert_eq!(builder.get_checksum_sha1().as_deref(), Some("sha1"));
+        assert_eq!(builder.get_checksum_sha256().as_deref(), Some("sha256"));
+        assert_eq!(builder.get_checksum_sha512().as_deref(), Some("sha512"));
+        assert_eq!(builder.get_checksum_md5().as_deref(), Some("md5"));
+        assert_eq!(
+            builder.get_checksum_xxhash128().as_deref(),
+            Some("xxhash128")
+        );
+        assert_eq!(builder.get_checksum_xxhash3().as_deref(), Some("xxhash3"));
+        assert_eq!(builder.get_checksum_xxhash64().as_deref(), Some("xxhash64"));
+
+        // An empty value leaves every checksum unset, so the SDK decides as before.
+        let builder = set_upload_part_additional_checksum(
+            client.upload_part(),
+            AdditionalChecksumValues::default(),
+        );
+        assert!(builder.get_checksum_crc32().is_none());
+        assert!(builder.get_checksum_md5().is_none());
+        assert!(builder.get_checksum_xxhash64().is_none());
+    }
+
+    #[test]
+    fn set_put_object_additional_checksum_sets_every_field() {
+        let client = Client::from_conf(
+            aws_sdk_s3::Config::builder()
+                .behavior_version(aws_sdk_s3::config::BehaviorVersion::latest())
+                .region(aws_sdk_s3::config::Region::new("us-east-1"))
+                .build(),
+        );
+        let values = all_distinct_values();
+
+        let builder = set_put_object_additional_checksum(client.put_object(), values);
+
+        assert_eq!(builder.get_checksum_crc32().as_deref(), Some("crc32"));
+        assert_eq!(builder.get_checksum_crc32_c().as_deref(), Some("crc32c"));
+        assert_eq!(
+            builder.get_checksum_crc64_nvme().as_deref(),
+            Some("crc64nvme")
+        );
+        assert_eq!(builder.get_checksum_sha1().as_deref(), Some("sha1"));
+        assert_eq!(builder.get_checksum_sha256().as_deref(), Some("sha256"));
+        assert_eq!(builder.get_checksum_sha512().as_deref(), Some("sha512"));
+        assert_eq!(builder.get_checksum_md5().as_deref(), Some("md5"));
+        assert_eq!(
+            builder.get_checksum_xxhash128().as_deref(),
+            Some("xxhash128")
+        );
+        assert_eq!(builder.get_checksum_xxhash3().as_deref(), Some("xxhash3"));
+        assert_eq!(builder.get_checksum_xxhash64().as_deref(), Some("xxhash64"));
+    }
+
+    fn all_distinct_values() -> AdditionalChecksumValues {
+        AdditionalChecksumValues {
+            crc32: Some("crc32".to_string()),
+            crc32_c: Some("crc32c".to_string()),
+            crc64_nvme: Some("crc64nvme".to_string()),
+            sha1: Some("sha1".to_string()),
+            sha256: Some("sha256".to_string()),
+            sha512: Some("sha512".to_string()),
+            md5: Some("md5".to_string()),
+            xxhash128: Some("xxhash128".to_string()),
+            xxhash3: Some("xxhash3".to_string()),
+            xxhash64: Some("xxhash64".to_string()),
+        }
+    }
+
+    // CompleteMultipartUpload needs each part's checksum of the upload's
+    // algorithm; dropping one (e.g. MD5) makes S3 reject the completion.
+    #[test]
+    fn build_completed_part_copies_every_checksum() {
+        let upload_part_output = UploadPartOutput::builder()
+            .e_tag("\"etag\"")
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .build();
+
+        let part = build_completed_part(&upload_part_output, 7);
+
+        assert_eq!(part.e_tag(), Some("\"etag\""));
+        assert_eq!(part.part_number(), Some(7));
+        assert_eq!(part.checksum_crc32(), Some("crc32"));
+        assert_eq!(part.checksum_crc32_c(), Some("crc32c"));
+        assert_eq!(part.checksum_crc64_nvme(), Some("crc64nvme"));
+        assert_eq!(part.checksum_sha1(), Some("sha1"));
+        assert_eq!(part.checksum_sha256(), Some("sha256"));
+        assert_eq!(part.checksum_sha512(), Some("sha512"));
+        assert_eq!(part.checksum_md5(), Some("md5"));
+        assert_eq!(part.checksum_xxhash128(), Some("xxhash128"));
+        assert_eq!(part.checksum_xxhash3(), Some("xxhash3"));
+        assert_eq!(part.checksum_xxhash64(), Some("xxhash64"));
+
+        // A part without checksums (no additional checksum algorithm).
+        let part = build_completed_part(&UploadPartOutput::builder().e_tag("e").build(), 1);
+        assert_eq!(part.e_tag(), Some("e"));
+        assert!(part.checksum_crc32().is_none());
+        assert!(part.checksum_md5().is_none());
+        assert!(part.checksum_xxhash128().is_none());
+    }
+
+    // Server-side copy parts come from UploadPartCopy; their checksums must
+    // reach the CompletedPart too.
+    #[test]
+    fn build_completed_part_from_upload_part_copy_keeps_new_checksums() {
+        let upload_part_copy_output =
+            aws_sdk_s3::operation::upload_part_copy::UploadPartCopyOutput::builder()
+                .copy_part_result(
+                    aws_sdk_s3::types::CopyPartResult::builder()
+                        .e_tag("etag")
+                        .checksum_xxhash3("xxhash3")
+                        .checksum_md5("md5")
+                        .build(),
+                )
+                .build();
+
+        let part = build_completed_part(
+            &convert_copy_to_upload_part_output(upload_part_copy_output),
+            2,
+        );
+
+        assert_eq!(part.checksum_xxhash3(), Some("xxhash3"));
+        assert_eq!(part.checksum_md5(), Some("md5"));
+        assert_eq!(part.part_number(), Some(2));
     }
 
     #[test]

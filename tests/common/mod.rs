@@ -598,6 +598,80 @@ impl TestHelper {
             .unwrap();
     }
 
+    /// Put an annotation with an explicit additional checksum of `algorithm`
+    /// (e.g. "SHA512"), calculated here from the payload.
+    pub async fn put_object_annotation_with_checksum(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+        annotation_payload: &str,
+        algorithm: &str,
+    ) {
+        let checksum = Some(Self::compute_additional_checksum(
+            algorithm,
+            annotation_payload.as_bytes(),
+        ));
+        let (crc32, crc32_c, crc64_nvme, sha1, sha256, sha512, md5, xxhash128, xxhash3, xxhash64) =
+            match algorithm {
+                "CRC32" => (
+                    checksum, None, None, None, None, None, None, None, None, None,
+                ),
+                "CRC32C" => (
+                    None, checksum, None, None, None, None, None, None, None, None,
+                ),
+                "CRC64NVME" => (
+                    None, None, checksum, None, None, None, None, None, None, None,
+                ),
+                "SHA1" => (
+                    None, None, None, checksum, None, None, None, None, None, None,
+                ),
+                "SHA256" => (
+                    None, None, None, None, checksum, None, None, None, None, None,
+                ),
+                "SHA512" => (
+                    None, None, None, None, None, checksum, None, None, None, None,
+                ),
+                "MD5" => (
+                    None, None, None, None, None, None, checksum, None, None, None,
+                ),
+                "XXHASH128" => (
+                    None, None, None, None, None, None, None, checksum, None, None,
+                ),
+                "XXHASH3" => (
+                    None, None, None, None, None, None, None, None, checksum, None,
+                ),
+                "XXHASH64" => (
+                    None, None, None, None, None, None, None, None, None, checksum,
+                ),
+                _ => panic!("unknown additional checksum algorithm: {algorithm}"),
+            };
+
+        let _result = self
+            .client
+            .put_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
+            .annotation_payload(ByteStream::from(annotation_payload.as_bytes().to_vec()))
+            .checksum_algorithm(ChecksumAlgorithm::from(algorithm))
+            .set_checksum_crc32(crc32)
+            .set_checksum_crc32_c(crc32_c)
+            .set_checksum_crc64_nvme(crc64_nvme)
+            .set_checksum_sha1(sha1)
+            .set_checksum_sha256(sha256)
+            .set_checksum_sha512(sha512)
+            .set_checksum_md5(md5)
+            .set_checksum_xxhash128(xxhash128)
+            .set_checksum_xxhash3(xxhash3)
+            .set_checksum_xxhash64(xxhash64)
+            .send()
+            .await
+            .unwrap();
+    }
+
     pub async fn get_object_annotation(
         &self,
         bucket: &str,
@@ -623,6 +697,147 @@ impl TestHelper {
         let mut body = result.annotation_payload.into_async_read();
         body.read_exact(buffer.as_mut_slice()).await.unwrap();
         String::from_utf8(buffer).unwrap()
+    }
+
+    /// The additional checksum of `algorithm` (e.g. "SHA512") on an
+    /// annotation, read with checksum mode enabled.
+    pub async fn get_object_annotation_additional_checksum(
+        &self,
+        bucket: &str,
+        key: &str,
+        version_id: Option<String>,
+        annotation_name: &str,
+        algorithm: &str,
+    ) -> Option<String> {
+        let result = self
+            .client
+            .get_object_annotation()
+            .bucket(bucket)
+            .key(key)
+            .set_version_id(version_id)
+            .annotation_name(annotation_name)
+            .checksum_mode(ChecksumMode::Enabled)
+            .send()
+            .await
+            .unwrap();
+
+        let value = match algorithm {
+            "CRC32" => result.checksum_crc32(),
+            "CRC32C" => result.checksum_crc32_c(),
+            "CRC64NVME" => result.checksum_crc64_nvme(),
+            "SHA1" => result.checksum_sha1(),
+            "SHA256" => result.checksum_sha256(),
+            "SHA512" => result.checksum_sha512(),
+            "MD5" => result.checksum_md5(),
+            "XXHASH128" => result.checksum_xxhash128(),
+            "XXHASH3" => result.checksum_xxhash3(),
+            "XXHASH64" => result.checksum_xxhash64(),
+            _ => panic!("unknown additional checksum algorithm: {algorithm}"),
+        };
+        value.map(|value| value.to_string())
+    }
+
+    /// Uploads `body` to `s3://bucket/key` with an `algorithm` additional
+    /// checksum (through s3util's own cp path, as the SDK cannot calculate
+    /// SHA512/MD5/XXHASH*), and asserts that S3 stored it.
+    pub async fn put_object_with_additional_checksum(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: &[u8],
+        algorithm: &str,
+    ) {
+        let local_dir = Self::create_temp_dir();
+        let seed_file = Self::create_test_file(&local_dir, "seed.bin", body);
+        let target = format!("s3://{bucket}/{key}");
+        let stats = self
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                algorithm,
+                seed_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = self.head_object(bucket, key, None).await;
+        assert_eq!(
+            Self::head_additional_checksum(&head, algorithm),
+            Some(Self::compute_additional_checksum(algorithm, body)),
+            "s3://{bucket}/{key} must carry the {algorithm} checksum of its body"
+        );
+    }
+
+    /// Uploads `body` as a new version of `s3://bucket/key` with an
+    /// `algorithm` additional checksum (through s3util's own cp path, like
+    /// `put_object_with_additional_checksum`), asserts that S3 stored that
+    /// checksum, and returns the version ID S3 assigned. The bucket must have
+    /// versioning enabled.
+    ///
+    /// `part_size_mib` = `Some(n)` sets both `--multipart-threshold` and
+    /// `--multipart-chunksize` to `n` MiB; `None` keeps the 8 MiB defaults. A
+    /// body of at least the part size is uploaded as multipart and gets a
+    /// composite checksum. Versioning tests upload two versions with
+    /// different part sizes, so reading the wrong version's part layout makes
+    /// verification fail.
+    pub async fn put_versioned_object_with_additional_checksum(
+        &self,
+        bucket: &str,
+        key: &str,
+        body: &[u8],
+        algorithm: &str,
+        part_size_mib: Option<usize>,
+    ) -> String {
+        let local_dir = Self::create_temp_dir();
+        let seed_file = Self::create_test_file(&local_dir, "seed.bin", body);
+        let target = format!("s3://{bucket}/{key}");
+        let part_size_arg = part_size_mib.map(|mib| format!("{mib}MiB"));
+        let mut args = vec![
+            "s3util",
+            "cp",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--additional-checksum-algorithm",
+            algorithm,
+        ];
+        if let Some(part_size_arg) = part_size_arg.as_deref() {
+            args.extend_from_slice(&[
+                "--multipart-threshold",
+                part_size_arg,
+                "--multipart-chunksize",
+                part_size_arg,
+            ]);
+        }
+        args.push(seed_file.to_str().unwrap());
+        args.push(&target);
+        let stats = self.cp_test_data(args).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        // Nothing else writes this key, so the latest version is the one just
+        // uploaded.
+        let head = self.head_object(bucket, key, None).await;
+        let part_size = part_size_mib.unwrap_or(8) * 1024 * 1024;
+        let expected_checksum = if body.len() >= part_size {
+            Self::compute_composite_additional_checksum(algorithm, body, part_size)
+        } else {
+            Self::compute_additional_checksum(algorithm, body)
+        };
+        assert_eq!(
+            Self::head_additional_checksum(&head, algorithm),
+            Some(expected_checksum),
+            "s3://{bucket}/{key} must carry the {algorithm} checksum of its body"
+        );
+        head.version_id()
+            .expect("a versioned bucket must return a version ID")
+            .to_string()
     }
 
     pub async fn is_object_annotation_exist(
@@ -1089,6 +1304,77 @@ impl TestHelper {
             .iter()
             .map(|b| format!("{:02x}", b))
             .collect::<String>()
+    }
+
+    /// The raw digest of `data` for an additional checksum `algorithm`
+    /// (e.g. "SHA512", "XXHASH64"), calculated with the hash crates directly
+    /// (independently of s3util's own checksum code). CRC and XXHash values are
+    /// big-endian, as S3 encodes them.
+    pub fn raw_additional_checksum(algorithm: &str, data: &[u8]) -> Vec<u8> {
+        match algorithm {
+            "CRC32" => crc32fast::hash(data).to_be_bytes().to_vec(),
+            "CRC32C" => crc32c::crc32c(data).to_be_bytes().to_vec(),
+            "CRC64NVME" => crc_fast::checksum(crc_fast::CrcAlgorithm::Crc64Nvme, data)
+                .to_be_bytes()
+                .to_vec(),
+            "SHA1" => sha1::Sha1::digest(data).to_vec(),
+            "SHA256" => Sha256::digest(data).to_vec(),
+            "SHA512" => sha2::Sha512::digest(data).to_vec(),
+            "MD5" => md5::compute(data).0.to_vec(),
+            "XXHASH128" => twox_hash::XxHash3_128::oneshot(data).to_be_bytes().to_vec(),
+            "XXHASH3" => twox_hash::XxHash3_64::oneshot(data).to_be_bytes().to_vec(),
+            "XXHASH64" => twox_hash::XxHash64::oneshot(0, data).to_be_bytes().to_vec(),
+            _ => panic!("unknown additional checksum algorithm: {algorithm}"),
+        }
+    }
+
+    /// The base64 single-part (whole object) additional checksum of `data`,
+    /// as S3 returns it for an object uploaded with one PutObject.
+    pub fn compute_additional_checksum(algorithm: &str, data: &[u8]) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD
+            .encode(Self::raw_additional_checksum(algorithm, data))
+    }
+
+    /// The composite additional checksum S3 returns for a multipart upload of
+    /// `data` in `chunk_size` parts: `base64(H(H(part1) || ... || H(partN)))-N`.
+    /// Only for composite algorithms (not CRC64NVME, and not a full object
+    /// CRC32/CRC32C checksum).
+    pub fn compute_composite_additional_checksum(
+        algorithm: &str,
+        data: &[u8],
+        chunk_size: usize,
+    ) -> String {
+        use base64::Engine as _;
+        let concatenated: Vec<u8> = data
+            .chunks(chunk_size)
+            .flat_map(|part| Self::raw_additional_checksum(algorithm, part))
+            .collect();
+        format!(
+            "{}-{}",
+            base64::engine::general_purpose::STANDARD
+                .encode(Self::raw_additional_checksum(algorithm, &concatenated)),
+            data.len().div_ceil(chunk_size)
+        )
+    }
+
+    /// The additional checksum of `algorithm` (e.g. "XXHASH3") in a
+    /// HeadObject response.
+    pub fn head_additional_checksum(head: &HeadObjectOutput, algorithm: &str) -> Option<String> {
+        let value = match algorithm {
+            "CRC32" => head.checksum_crc32(),
+            "CRC32C" => head.checksum_crc32_c(),
+            "CRC64NVME" => head.checksum_crc64_nvme(),
+            "SHA1" => head.checksum_sha1(),
+            "SHA256" => head.checksum_sha256(),
+            "SHA512" => head.checksum_sha512(),
+            "MD5" => head.checksum_md5(),
+            "XXHASH128" => head.checksum_xxhash128(),
+            "XXHASH3" => head.checksum_xxhash3(),
+            "XXHASH64" => head.checksum_xxhash64(),
+            _ => panic!("unknown additional checksum algorithm: {algorithm}"),
+        };
+        value.map(|value| value.to_string())
     }
 
     pub fn md5_digest(path: &str) -> String {

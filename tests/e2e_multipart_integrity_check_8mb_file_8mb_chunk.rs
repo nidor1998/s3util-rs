@@ -9,18 +9,34 @@ mod tests {
     use super::*;
 
     const SHA256_8M_FILE_8M_CHUNK: &str = "U+ZIEj2OXjCTTOp7PlJy43aKT7mL2X5NzgfjpYzeozw=-1";
+    const SHA512_8M_FILE_8M_CHUNK: &str = "kdD0Vw7x4SAHTk5zRigiitx2ZcjLKMsmj+4dMXF7WUghf3yBJwkt+oblRY9n7JqwZq6uYNT+lMAY5RCScDbExA==-1";
+    const MD5_8M_FILE_8M_CHUNK: &str = "E2mLRe402/BhH+Un92q/xw==-1";
+    const XXHASH128_8M_FILE_8M_CHUNK: &str = "dFmQnYRAwlVeW/D3rEBFlw==-1";
+    const XXHASH3_8M_FILE_8M_CHUNK: &str = "BfITU4XY0eE=-1";
+    const XXHASH64_8M_FILE_8M_CHUNK: &str = "GoCcifNVbBw=-1";
     const CRC64NVME_8M_FILE_8M_CHUNK: &str = "io2hnVvxKgU=";
     const CRC32_8M_FILE_8M_CHUNK: &str = "ghmN/g==-1";
     const CRC32C_8M_FILE_8M_CHUNK: &str = "m+F8yQ==-1";
     const SHA1_8M_FILE_8M_CHUNK: &str = "6HmzyyliR8bIKVsBsFcL3Ocs/oQ=-1";
     const ETAG_8M_FILE_8M_CHUNK: &str = "\"13698b45ee34dbf0611fe527f76abfc7-1\"";
     const SHA256_8M_PLUS_1_FILE_8M_CHUNK: &str = "fMRKvd1OLwQTon7VE4yRXsWmVDtF8uLVJT9aKIM2SC8=-2";
+    const SHA512_8M_PLUS_1_FILE_8M_CHUNK: &str = "oGQwLP/SfarmPS5RPYuH0aLBw/VNUWa00/vAvMigAB2Kkz+mHVl2U/0Onny1+0hi8D4oXZvM5TPmHF43fEADfA==-2";
+    const MD5_8M_PLUS_1_FILE_8M_CHUNK: &str = "YbBSShV/k5HEXAmuK0jd5A==-2";
+    const XXHASH128_8M_PLUS_1_FILE_8M_CHUNK: &str = "QhqrTVYIdZ8eGvfnpZrQQg==-2";
+    const XXHASH3_8M_PLUS_1_FILE_8M_CHUNK: &str = "X0d0Vb3ua1w=-2";
+    const XXHASH64_8M_PLUS_1_FILE_8M_CHUNK: &str = "hox53Ff04nA=-2";
     const SHA1_8M_PLUS_1_FILE_8M_CHUNK: &str = "o71VQaKqumjAbkSbJyNYKS4RXwI=-2";
     const CRC64NVME_8M_PLUS_1_FILE_8M_CHUNK: &str = "lCfg/yBs550=";
     const CRC32_8M_PLUS_1_FILE_8M_CHUNK: &str = "assFew==-2";
     const CRC32C_8M_PLUS_1_FILE_8M_CHUNK: &str = "oJX2nw==-2";
     const ETAG_8M_PLUS_1_FILE_8M_CHUNK: &str = "\"61b0524a157f9391c45c09ae2b48dde4-2\"";
     const SHA256_8M_MINUS_1_FILE_8M_CHUNK: &str = "LH/6UUEm4g2eT855uX/3OcshOFJADcHasHpSnaTsPkQ=";
+    const SHA512_8M_MINUS_1_FILE_8M_CHUNK: &str =
+        "jAJA4vmhM3YDLhQdNqtGGjU513R0qlsL8SIb4gpfitfcBct2GItm0aRlOST8rH1mX5qaMLRc3uorQBKZBaL5oQ==";
+    const MD5_8M_MINUS_1_FILE_8M_CHUNK: &str = "yce2WhdfQ/+BR9gCdAPhdw==";
+    const XXHASH128_8M_MINUS_1_FILE_8M_CHUNK: &str = "O7MN/IrAtv7/fvFeLCdfoQ==";
+    const XXHASH3_8M_MINUS_1_FILE_8M_CHUNK: &str = "/37xXiwnX6E=";
+    const XXHASH64_8M_MINUS_1_FILE_8M_CHUNK: &str = "Plf0ggymKGk=";
     const SHA1_8M_MINUS_1_FILE_8M_CHUNK: &str = "2TX5C09wq0eial8QWuHx97tciVg=";
     const CRC64NVME_8M_MINUS_1_FILE_8M_CHUNK: &str = "GPMNBOmnUuA=";
     const CRC32_8M_MINUS_1_FILE_8M_CHUNK: &str = "p0SZTQ==";
@@ -281,6 +297,224 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// 8 MiB file with SHA512 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_sha512.bin", 8, 0).unwrap();
+
+        let target = format!("s3://{}/8mb_sha512.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(&bucket, "8mb_sha512.bin", ETAG_8M_FILE_8M_CHUNK)
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_sha512.bin", None).await;
+        assert_eq!(head.checksum_sha512().unwrap(), SHA512_8M_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB file with MD5 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_md5.bin", 8, 0).unwrap();
+
+        let target = format!("s3://{}/8mb_md5.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "MD5",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(&bucket, "8mb_md5.bin", ETAG_8M_FILE_8M_CHUNK)
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_md5.bin", None).await;
+        assert_eq!(head.checksum_md5().unwrap(), MD5_8M_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB file with XXHASH128 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_xxhash128.bin", 8, 0).unwrap();
+
+        let target = format!("s3://{}/8mb_xxhash128.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(&bucket, "8mb_xxhash128.bin", ETAG_8M_FILE_8M_CHUNK)
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_xxhash128.bin", None).await;
+        assert_eq!(
+            head.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB file with XXHASH3 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_xxhash3.bin", 8, 0).unwrap();
+
+        let target = format!("s3://{}/8mb_xxhash3.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(&bucket, "8mb_xxhash3.bin", ETAG_8M_FILE_8M_CHUNK)
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_xxhash3.bin", None).await;
+        assert_eq!(head.checksum_xxhash3().unwrap(), XXHASH3_8M_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB file with XXHASH64 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_xxhash64.bin", 8, 0).unwrap();
+
+        let target = format!("s3://{}/8mb_xxhash64.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(&bucket, "8mb_xxhash64.bin", ETAG_8M_FILE_8M_CHUNK)
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_xxhash64.bin", None).await;
+        assert_eq!(head.checksum_xxhash64().unwrap(), XXHASH64_8M_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     /// 8 MiB file with CRC64NVME checksum.
     #[tokio::test]
     async fn test_multipart_upload_8mb_crc64nvme() {
@@ -508,6 +742,263 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// 8 MiB + 1 byte file (2 parts) with SHA512 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_sha512.bin", 8, 1).unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_sha512.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_plus1_sha512.bin",
+                ETAG_8M_PLUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_sha512.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_sha512().unwrap(),
+            SHA512_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with MD5 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_md5.bin", 8, 1).unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_md5.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "MD5",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_plus1_md5.bin",
+                ETAG_8M_PLUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper.head_object(&bucket, "8mb_plus1_md5.bin", None).await;
+        assert_eq!(head.checksum_md5().unwrap(), MD5_8M_PLUS_1_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH128 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash128.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash128.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_plus1_xxhash128.bin",
+                ETAG_8M_PLUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash128.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH3 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash3.bin", 8, 1).unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash3.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_plus1_xxhash3.bin",
+                ETAG_8M_PLUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash3.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH64 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash64.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash64.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_plus1_xxhash64.bin",
+                ETAG_8M_PLUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash64.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     /// 8 MiB + 1 byte file (2 parts) with CRC64NVME checksum.
     #[tokio::test]
     async fn test_multipart_upload_8mb_plus_1_crc64nvme() {
@@ -613,6 +1104,267 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// 8 MiB - 1 byte file (single put) with SHA512 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_minus_1_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_minus1_sha512.bin", 8, -1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_minus1_sha512.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_minus1_sha512.bin",
+                ETAG_8M_MINUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_minus1_sha512.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_sha512().unwrap(),
+            SHA512_8M_MINUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB - 1 byte file (single put) with MD5 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_minus_1_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_minus1_md5.bin", 8, -1).unwrap();
+
+        let target = format!("s3://{}/8mb_minus1_md5.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "MD5",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_minus1_md5.bin",
+                ETAG_8M_MINUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_minus1_md5.bin", None)
+            .await;
+        assert_eq!(head.checksum_md5().unwrap(), MD5_8M_MINUS_1_FILE_8M_CHUNK);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB - 1 byte file (single put) with XXHASH128 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_minus_1_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_minus1_xxhash128.bin", 8, -1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_minus1_xxhash128.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_minus1_xxhash128.bin",
+                ETAG_8M_MINUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_minus1_xxhash128.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_MINUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB - 1 byte file (single put) with XXHASH3 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_minus_1_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_minus1_xxhash3.bin", 8, -1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_minus1_xxhash3.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_minus1_xxhash3.bin",
+                ETAG_8M_MINUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_minus1_xxhash3.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_MINUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB - 1 byte file (single put) with XXHASH64 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_minus_1_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_minus1_xxhash64.bin", 8, -1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_minus1_xxhash64.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        helper
+            .verify_uploaded_object_etag_value(
+                &bucket,
+                "8mb_minus1_xxhash64.bin",
+                ETAG_8M_MINUS_1_FILE_8M_CHUNK,
+            )
+            .await;
+
+        let head = helper
+            .head_object(&bucket, "8mb_minus1_xxhash64.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_MINUS_1_FILE_8M_CHUNK
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     /// 8 MiB - 1 byte file (single put) with CRC64NVME checksum.
     #[tokio::test]
     async fn test_multipart_upload_8mb_minus_1_crc64nvme() {
@@ -707,6 +1459,242 @@ mod tests {
         assert_eq!(
             head.checksum_sha256().unwrap(),
             SHA256_8M_PLUS_1_FILE_8M_CHUNK,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SSE KMS and SHA512 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_sha512_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_sha512_kms.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_sha512_kms.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--sse",
+                "aws:kms",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_sha512_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_sha512().unwrap(),
+            SHA512_8M_PLUS_1_FILE_8M_CHUNK,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SSE KMS and MD5 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_md5_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_md5_kms.bin", 8, 1).unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_md5_kms.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--sse",
+                "aws:kms",
+                "--additional-checksum-algorithm",
+                "MD5",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_md5_kms.bin", None)
+            .await;
+        assert_eq!(head.checksum_md5().unwrap(), MD5_8M_PLUS_1_FILE_8M_CHUNK,);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SSE KMS and XXHASH128 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash128_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash128_kms.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash128_kms.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--sse",
+                "aws:kms",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash128_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_PLUS_1_FILE_8M_CHUNK,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SSE KMS and XXHASH3 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash3_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash3_kms.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash3_kms.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--sse",
+                "aws:kms",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash3_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_PLUS_1_FILE_8M_CHUNK,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SSE KMS and XXHASH64 checksum.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash64_kms() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_xxhash64_kms.bin", 8, 1)
+                .unwrap();
+
+        let target = format!("s3://{}/8mb_plus1_xxhash64_kms.bin", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--sse",
+                "aws:kms",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stats.checksum_verified, 1);
+        // Skip ETag verification for SSE-KMS (ETag is not MD5-based)
+        let head = helper
+            .head_object(&bucket, "8mb_plus1_xxhash64_kms.bin", None)
+            .await;
+        assert_eq!(
+            head.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_PLUS_1_FILE_8M_CHUNK,
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -1756,6 +2744,736 @@ mod tests {
 
         // Scope 4: S3 (bucket2) → local, verify file contents.
         let download_file = local_dir.join("downloaded_8mb_plus1_ac_sha256.bin");
+        let dl_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &target_s3,
+                download_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(dl_stats.sync_complete, 1);
+        assert_eq!(dl_stats.sync_error, 0);
+        assert_eq!(dl_stats.sync_warning, 0);
+        assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 1);
+
+        TestHelper::verify_downloaded_file_sha256(
+            download_file.to_str().unwrap(),
+            SHA256_8M_PLUS_1_FILE_WHOLE,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with SHA512 checksum and auto-chunksize S3-to-S3 copy.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_sha512_auto_chunksize() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_ac_sha512.bin", 8, 1)
+                .unwrap();
+
+        let source_s3 = format!("s3://{}/8mb_plus1_ac_sha512.bin", bucket1);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "8MiB",
+                "--multipart-chunksize",
+                "8MiB",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                test_file.to_str().unwrap(),
+                &source_s3,
+            ])
+            .await;
+
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let head = helper
+            .head_object(&bucket1, "8mb_plus1_ac_sha512.bin", None)
+            .await;
+        assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head.checksum_sha512().unwrap(),
+            SHA512_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        let target_s3 = format!("s3://{}/8mb_plus1_ac_sha512.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head2 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_sha512.bin", None)
+            .await;
+        assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head2.checksum_sha512().unwrap(),
+            SHA512_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 3: S3 (bucket1) → S3 (bucket2) server-side copy with SHA512 checksum.
+        helper.delete_all_objects(&bucket2).await;
+        let ssc_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(ssc_stats.sync_complete, 1);
+        assert_eq!(ssc_stats.sync_error, 0);
+        assert_eq!(ssc_stats.sync_warning, 0);
+        assert_eq!(ssc_stats.e_tag_verified, 1);
+        assert_eq!(ssc_stats.checksum_verified, 1);
+
+        let head3 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_sha512.bin", None)
+            .await;
+        assert_eq!(head3.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head3.checksum_sha512().unwrap(),
+            SHA512_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 4: S3 (bucket2) → local, verify file contents.
+        let download_file = local_dir.join("downloaded_8mb_plus1_ac_sha512.bin");
+        let dl_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &target_s3,
+                download_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(dl_stats.sync_complete, 1);
+        assert_eq!(dl_stats.sync_error, 0);
+        assert_eq!(dl_stats.sync_warning, 0);
+        assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 1);
+
+        TestHelper::verify_downloaded_file_sha256(
+            download_file.to_str().unwrap(),
+            SHA256_8M_PLUS_1_FILE_WHOLE,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with MD5 checksum and auto-chunksize S3-to-S3 copy.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_md5_auto_chunksize() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_ac_md5.bin", 8, 1).unwrap();
+
+        let source_s3 = format!("s3://{}/8mb_plus1_ac_md5.bin", bucket1);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "8MiB",
+                "--multipart-chunksize",
+                "8MiB",
+                "--additional-checksum-algorithm",
+                "MD5",
+                test_file.to_str().unwrap(),
+                &source_s3,
+            ])
+            .await;
+
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let head = helper
+            .head_object(&bucket1, "8mb_plus1_ac_md5.bin", None)
+            .await;
+        assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(head.checksum_md5().unwrap(), MD5_8M_PLUS_1_FILE_8M_CHUNK);
+
+        let target_s3 = format!("s3://{}/8mb_plus1_ac_md5.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "MD5",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head2 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_md5.bin", None)
+            .await;
+        assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(head2.checksum_md5().unwrap(), MD5_8M_PLUS_1_FILE_8M_CHUNK);
+
+        // Scope 3: S3 (bucket1) → S3 (bucket2) server-side copy with MD5 checksum.
+        helper.delete_all_objects(&bucket2).await;
+        let ssc_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "MD5",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(ssc_stats.sync_complete, 1);
+        assert_eq!(ssc_stats.sync_error, 0);
+        assert_eq!(ssc_stats.sync_warning, 0);
+        assert_eq!(ssc_stats.e_tag_verified, 1);
+        assert_eq!(ssc_stats.checksum_verified, 1);
+
+        let head3 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_md5.bin", None)
+            .await;
+        assert_eq!(head3.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(head3.checksum_md5().unwrap(), MD5_8M_PLUS_1_FILE_8M_CHUNK);
+
+        // Scope 4: S3 (bucket2) → local, verify file contents.
+        let download_file = local_dir.join("downloaded_8mb_plus1_ac_md5.bin");
+        let dl_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &target_s3,
+                download_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(dl_stats.sync_complete, 1);
+        assert_eq!(dl_stats.sync_error, 0);
+        assert_eq!(dl_stats.sync_warning, 0);
+        assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 1);
+
+        TestHelper::verify_downloaded_file_sha256(
+            download_file.to_str().unwrap(),
+            SHA256_8M_PLUS_1_FILE_WHOLE,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH128 checksum and auto-chunksize S3-to-S3 copy.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash128_auto_chunksize() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_ac_xxhash128.bin", 8, 1)
+                .unwrap();
+
+        let source_s3 = format!("s3://{}/8mb_plus1_ac_xxhash128.bin", bucket1);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "8MiB",
+                "--multipart-chunksize",
+                "8MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                test_file.to_str().unwrap(),
+                &source_s3,
+            ])
+            .await;
+
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let head = helper
+            .head_object(&bucket1, "8mb_plus1_ac_xxhash128.bin", None)
+            .await;
+        assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        let target_s3 = format!("s3://{}/8mb_plus1_ac_xxhash128.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head2 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash128.bin", None)
+            .await;
+        assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head2.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 3: S3 (bucket1) → S3 (bucket2) server-side copy with XXHASH128 checksum.
+        helper.delete_all_objects(&bucket2).await;
+        let ssc_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(ssc_stats.sync_complete, 1);
+        assert_eq!(ssc_stats.sync_error, 0);
+        assert_eq!(ssc_stats.sync_warning, 0);
+        assert_eq!(ssc_stats.e_tag_verified, 1);
+        assert_eq!(ssc_stats.checksum_verified, 1);
+
+        let head3 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash128.bin", None)
+            .await;
+        assert_eq!(head3.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head3.checksum_xxhash128().unwrap(),
+            XXHASH128_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 4: S3 (bucket2) → local, verify file contents.
+        let download_file = local_dir.join("downloaded_8mb_plus1_ac_xxhash128.bin");
+        let dl_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &target_s3,
+                download_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(dl_stats.sync_complete, 1);
+        assert_eq!(dl_stats.sync_error, 0);
+        assert_eq!(dl_stats.sync_warning, 0);
+        assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 1);
+
+        TestHelper::verify_downloaded_file_sha256(
+            download_file.to_str().unwrap(),
+            SHA256_8M_PLUS_1_FILE_WHOLE,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH3 checksum and auto-chunksize S3-to-S3 copy.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash3_auto_chunksize() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_ac_xxhash3.bin", 8, 1)
+                .unwrap();
+
+        let source_s3 = format!("s3://{}/8mb_plus1_ac_xxhash3.bin", bucket1);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "8MiB",
+                "--multipart-chunksize",
+                "8MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                test_file.to_str().unwrap(),
+                &source_s3,
+            ])
+            .await;
+
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let head = helper
+            .head_object(&bucket1, "8mb_plus1_ac_xxhash3.bin", None)
+            .await;
+        assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        let target_s3 = format!("s3://{}/8mb_plus1_ac_xxhash3.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head2 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash3.bin", None)
+            .await;
+        assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head2.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 3: S3 (bucket1) → S3 (bucket2) server-side copy with XXHASH3 checksum.
+        helper.delete_all_objects(&bucket2).await;
+        let ssc_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(ssc_stats.sync_complete, 1);
+        assert_eq!(ssc_stats.sync_error, 0);
+        assert_eq!(ssc_stats.sync_warning, 0);
+        assert_eq!(ssc_stats.e_tag_verified, 1);
+        assert_eq!(ssc_stats.checksum_verified, 1);
+
+        let head3 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash3.bin", None)
+            .await;
+        assert_eq!(head3.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head3.checksum_xxhash3().unwrap(),
+            XXHASH3_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 4: S3 (bucket2) → local, verify file contents.
+        let download_file = local_dir.join("downloaded_8mb_plus1_ac_xxhash3.bin");
+        let dl_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &target_s3,
+                download_file.to_str().unwrap(),
+            ])
+            .await;
+
+        assert_eq!(dl_stats.sync_complete, 1);
+        assert_eq!(dl_stats.sync_error, 0);
+        assert_eq!(dl_stats.sync_warning, 0);
+        assert_eq!(dl_stats.e_tag_verified, 1);
+        assert_eq!(dl_stats.checksum_verified, 1);
+
+        TestHelper::verify_downloaded_file_sha256(
+            download_file.to_str().unwrap(),
+            SHA256_8M_PLUS_1_FILE_WHOLE,
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// 8 MiB + 1 byte file (2 parts) with XXHASH64 checksum and auto-chunksize S3-to-S3 copy.
+    #[tokio::test]
+    async fn test_multipart_upload_8mb_plus_1_xxhash64_auto_chunksize() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_random_data_file(&local_dir, "8mb_plus1_ac_xxhash64.bin", 8, 1)
+                .unwrap();
+
+        let source_s3 = format!("s3://{}/8mb_plus1_ac_xxhash64.bin", bucket1);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "8MiB",
+                "--multipart-chunksize",
+                "8MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                test_file.to_str().unwrap(),
+                &source_s3,
+            ])
+            .await;
+
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.sync_error, 0);
+        assert_eq!(upload_stats.sync_warning, 0);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let head = helper
+            .head_object(&bucket1, "8mb_plus1_ac_xxhash64.bin", None)
+            .await;
+        assert_eq!(head.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        let target_s3 = format!("s3://{}/8mb_plus1_ac_xxhash64.bin", bucket2);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head2 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash64.bin", None)
+            .await;
+        assert_eq!(head2.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head2.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 3: S3 (bucket1) → S3 (bucket2) server-side copy with XXHASH64 checksum.
+        helper.delete_all_objects(&bucket2).await;
+        let ssc_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--server-side-copy",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                &source_s3,
+                &target_s3,
+            ])
+            .await;
+
+        assert_eq!(ssc_stats.sync_complete, 1);
+        assert_eq!(ssc_stats.sync_error, 0);
+        assert_eq!(ssc_stats.sync_warning, 0);
+        assert_eq!(ssc_stats.e_tag_verified, 1);
+        assert_eq!(ssc_stats.checksum_verified, 1);
+
+        let head3 = helper
+            .head_object(&bucket2, "8mb_plus1_ac_xxhash64.bin", None)
+            .await;
+        assert_eq!(head3.e_tag().unwrap(), ETAG_8M_PLUS_1_FILE_8M_CHUNK);
+        assert_eq!(
+            head3.checksum_xxhash64().unwrap(),
+            XXHASH64_8M_PLUS_1_FILE_8M_CHUNK
+        );
+
+        // Scope 4: S3 (bucket2) → local, verify file contents.
+        let download_file = local_dir.join("downloaded_8mb_plus1_ac_xxhash64.bin");
         let dl_stats = helper
             .cp_test_data(vec![
                 "s3util",

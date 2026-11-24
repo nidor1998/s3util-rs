@@ -560,6 +560,361 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// Same as `s3_to_stdout_sse_c_multipart_with_sha256`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_sse_c_multipart_with_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/sse_sha.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--target-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--additional-checksum-algorithm",
+                "SHA512",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--source-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(
+            stats.e_tag_verified, 0,
+            "verify_e_tag short-circuits for SSE-C even with multipart source"
+        );
+        assert_eq!(
+            stats.checksum_verified, 1,
+            "additional-checksum verification is independent of SSE-C"
+        );
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_sse_c_multipart_with_sha256`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_sse_c_multipart_with_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/sse_sha.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--target-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--additional-checksum-algorithm",
+                "MD5",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--source-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(
+            stats.e_tag_verified, 0,
+            "verify_e_tag short-circuits for SSE-C even with multipart source"
+        );
+        assert_eq!(
+            stats.checksum_verified, 1,
+            "additional-checksum verification is independent of SSE-C"
+        );
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_sse_c_multipart_with_sha256`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_sse_c_multipart_with_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/sse_sha.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--target-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--source-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(
+            stats.e_tag_verified, 0,
+            "verify_e_tag short-circuits for SSE-C even with multipart source"
+        );
+        assert_eq!(
+            stats.checksum_verified, 1,
+            "additional-checksum verification is independent of SSE-C"
+        );
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_sse_c_multipart_with_sha256`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_sse_c_multipart_with_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/sse_sha.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--target-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--source-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(
+            stats.e_tag_verified, 0,
+            "verify_e_tag short-circuits for SSE-C even with multipart source"
+        );
+        assert_eq!(
+            stats.checksum_verified, 1,
+            "additional-checksum verification is independent of SSE-C"
+        );
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_sse_c_multipart_with_sha256`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_sse_c_multipart_with_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper
+            .create_bucket_with_sse_c_encryption(&bucket, REGION)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(12 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/sse_sha.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--target-sse-c",
+                "AES256",
+                "--target-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--target-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--source-sse-c",
+                "AES256",
+                "--source-sse-c-key",
+                TEST_SSE_C_KEY_1,
+                "--source-sse-c-key-md5",
+                TEST_SSE_C_KEY_1_MD5,
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(
+            stats.e_tag_verified, 0,
+            "verify_e_tag short-circuits for SSE-C even with multipart source"
+        );
+        assert_eq!(
+            stats.checksum_verified, 1,
+            "additional-checksum verification is independent of SSE-C"
+        );
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     /// Negative path: source uploaded with KEY_1, download attempts
     /// with KEY_2. S3 rejects the GET with InvalidRequest /
     /// AccessDenied (key mismatch). Transfer must surface this as

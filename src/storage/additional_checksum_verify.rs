@@ -242,7 +242,13 @@ pub async fn generate_checksum_from_path_with_chunksize(
         buffer.resize_with(real_chunksize, Default::default);
         file.read_exact(buffer.as_mut_slice()).await?;
         checksum.update(buffer.as_slice());
-        let _ = checksum.finalize();
+        // A full object checksum covers the whole object, so the file must not
+        // be split into parts. Hash algorithms (SHA, MD5, XXHASH) ignore the
+        // full object flag and would otherwise produce a composite "xxx-N"
+        // checksum.
+        if !full_object_checksum {
+            let _ = checksum.finalize();
+        }
 
         if cancellation_token.is_cancelled() {
             debug!(
@@ -255,11 +261,15 @@ pub async fn generate_checksum_from_path_with_chunksize(
         remaining_bytes -= real_chunksize as u64;
     }
 
-    let final_checksum = Ok(checksum.finalize_all());
+    let final_checksum = if full_object_checksum {
+        Ok(checksum.finalize())
+    } else {
+        Ok(checksum.finalize_all())
+    };
     debug!(
         path = path.to_str().unwrap(),
         duration_ms = checksum_generate_start_time.elapsed().as_millis(),
-        "generate_checksum_from_path_for_check() end."
+        "generate_checksum_from_path_with_chunksize() end."
     );
 
     final_checksum
@@ -294,6 +304,70 @@ mod tests {
     const LARGE_FILE_CRC64NVME_FULL_OBJECT_BASE64_DIGEST: &str = "1q6/IYHP8XY=";
 
     const TEST_CRC32_BASE64_DIGEST: &str = "y/U6HA==";
+
+    // Digests of the whole 9MiB zero-filled file as a single part, computed
+    // independently with Python (hashlib, and a from-the-specification XXH64).
+    const LARGE_FILE_SHA256_SINGLE_PART_BASE64_DIGEST: &str =
+        "0u5HA82WmJRcp7n+FonqMJVZfqwaCv2NugDKx4lP3EM=";
+    const LARGE_FILE_SHA1_SINGLE_PART_BASE64_DIGEST: &str = "j3ZZsPo5lPzOK+Biu+oNGD6bxE4=";
+    const LARGE_FILE_SHA512_SINGLE_PART_BASE64_DIGEST: &str =
+        "CBSQPS16xHGAnhdRo54040XWfiCzG/W8BE8ZC+pES/4ccMj8TSnl1cIMZX1611g8uh2BzXcH94/xVENxEwuTgQ==";
+    const LARGE_FILE_MD5_SINGLE_PART_BASE64_DIGEST: &str = "uCtKuH5El2Akq8FKFnDawA==";
+    const LARGE_FILE_XXHASH64_SINGLE_PART_BASE64_DIGEST: &str = "gYFOKDSXcG4=";
+
+    // Composite checksums of the 9MiB zero-filled file uploaded in 8MiB + 1MiB
+    // parts, computed independently with Python: base64(H(H(part1) || H(part2))) + "-2".
+    const LARGE_FILE_MD5_BASE64_FINAL_DIGEST: &str = "0SbvCIF9BJDiB+RWywrggA==-2";
+    const LARGE_FILE_SHA512_BASE64_FINAL_DIGEST: &str = "5gHNFwrytRkOHvbjgippRxal7BgRsDFnaswFJdS63mOgmpwtzh+3aXwzelbTU2I7Pd7keP7uWtYLvNvMNZ4nqA==-2";
+    const LARGE_FILE_XXHASH64_BASE64_FINAL_DIGEST: &str = "T2YRqk6alD4=-2";
+
+    // The same, uploaded in 5MiB + 4MiB parts.
+    const LARGE_FILE_MD5_5MIB_PARTS_BASE64_FINAL_DIGEST: &str = "Dc+0kNe1KtCUfD806Eb2ow==-2";
+    const LARGE_FILE_SHA512_5MIB_PARTS_BASE64_FINAL_DIGEST: &str = "+1/omnR7hjwN2nPCb60Y1CXfneq2oJTCMJinmAiW8RzxDlE7LbGlsOC4eb+xyHcB4dWXS7tZrOT+71sZXQ2LeA==-2";
+    const LARGE_FILE_XXHASH64_5MIB_PARTS_BASE64_FINAL_DIGEST: &str = "ldoL7OJC/0M=-2";
+
+    // The XXH3 variants have no independently computed values. Their expected
+    // checksums are built here from twox-hash's one-shot API on each part, not
+    // with `AdditionalChecksum`, so s3util's part splitting and composite
+    // construction are checked against an independent construction.
+    const XXH3_ALGORITHMS: [ChecksumAlgorithm; 2] =
+        [ChecksumAlgorithm::Xxhash3, ChecksumAlgorithm::Xxhash128];
+
+    /// The raw XXH3 digest of `data`, big-endian as S3 encodes it.
+    fn xxh3_raw_digest(algorithm: &ChecksumAlgorithm, data: &[u8]) -> Vec<u8> {
+        match algorithm {
+            ChecksumAlgorithm::Xxhash3 => {
+                twox_hash::XxHash3_64::oneshot(data).to_be_bytes().to_vec()
+            }
+            ChecksumAlgorithm::Xxhash128 => {
+                twox_hash::XxHash3_128::oneshot(data).to_be_bytes().to_vec()
+            }
+            _ => unreachable!("{algorithm:?}"),
+        }
+    }
+
+    /// The base64 single-part XXH3 checksum of `data`.
+    fn xxh3_single_part(algorithm: &ChecksumAlgorithm, data: &[u8]) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        STANDARD.encode(xxh3_raw_digest(algorithm, data))
+    }
+
+    /// `base64(H(H(part1) || ... || H(partN)))-N` of `data` split into `part_sizes`.
+    fn xxh3_composite(algorithm: &ChecksumAlgorithm, data: &[u8], part_sizes: &[usize]) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        assert_eq!(part_sizes.iter().sum::<usize>(), data.len());
+        let mut offset = 0;
+        let mut concatenated = Vec::new();
+        for size in part_sizes {
+            concatenated.extend(xxh3_raw_digest(algorithm, &data[offset..offset + size]));
+            offset += size;
+        }
+        format!(
+            "{}-{}",
+            STANDARD.encode(xxh3_raw_digest(algorithm, &concatenated)),
+            part_sizes.len()
+        )
+    }
 
     #[test]
     fn is_multipart_upload_checksum_test() {
@@ -617,6 +691,327 @@ mod tests {
         .unwrap();
 
         assert_eq!(checksum, LARGE_FILE_SHA256_BASE64_FINAL_DIGEST.to_string());
+    }
+
+    // A full object (single part) checksum of a file at or above the multipart
+    // threshold: hash algorithms must digest the whole file at once instead of
+    // producing a composite "xxx-N" checksum.
+    #[tokio::test]
+    async fn generate_checksum_from_path_chunksize_single_part_hash_over_threshold_test() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
+
+        for (algorithm, expected) in [
+            (
+                ChecksumAlgorithm::Sha256,
+                LARGE_FILE_SHA256_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha1,
+                LARGE_FILE_SHA1_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                LARGE_FILE_SHA512_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Md5,
+                LARGE_FILE_MD5_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                LARGE_FILE_XXHASH64_SINGLE_PART_BASE64_DIGEST,
+            ),
+        ] {
+            let checksum = generate_checksum_from_path_with_chunksize(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                true,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(checksum, expected.to_string(), "{algorithm}");
+        }
+
+        // XXH3 variants: compare against a single digest of the whole file.
+        let data = tokio::fs::read(LARGE_FILE_PATH).await.unwrap();
+        for algorithm in XXH3_ALGORITHMS {
+            let expected = xxh3_single_part(&algorithm, &data);
+
+            let checksum = generate_checksum_from_path_with_chunksize(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                true,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+
+            assert!(!checksum.contains('-'), "{algorithm}: {checksum}");
+            assert_eq!(checksum, expected, "{algorithm}");
+        }
+    }
+
+    // CRC full object checksums must stay the same when the file is larger than the threshold.
+    #[tokio::test]
+    async fn generate_checksum_from_path_chunksize_crc_full_object_over_threshold_test() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
+
+        for (algorithm, expected) in [
+            (
+                ChecksumAlgorithm::Crc32,
+                LARGE_FILE_CRC32_FULL_OBJECT_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Crc32C,
+                LARGE_FILE_CRC32C_FULL_OBJECT_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Crc64Nvme,
+                LARGE_FILE_CRC64NVME_FULL_OBJECT_BASE64_DIGEST,
+            ),
+        ] {
+            let checksum = generate_checksum_from_path_with_chunksize(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                8 * 1024 * 1024,
+                8 * 1024 * 1024,
+                true,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(checksum, expected.to_string(), "{algorithm}");
+        }
+    }
+
+    // The composite checksum that a local-to-S3 upload compares with the one
+    // S3 calculates, for the new hash algorithms.
+    #[tokio::test]
+    async fn generate_checksum_from_path_multipart_chunksize_new_algorithms_test() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
+
+        for (algorithm, chunksize, expected) in [
+            (
+                ChecksumAlgorithm::Md5,
+                8 * 1024 * 1024,
+                LARGE_FILE_MD5_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                8 * 1024 * 1024,
+                LARGE_FILE_SHA512_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                8 * 1024 * 1024,
+                LARGE_FILE_XXHASH64_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Md5,
+                5 * 1024 * 1024,
+                LARGE_FILE_MD5_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                5 * 1024 * 1024,
+                LARGE_FILE_SHA512_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                5 * 1024 * 1024,
+                LARGE_FILE_XXHASH64_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+        ] {
+            let checksum = generate_checksum_from_path_with_chunksize(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                chunksize,
+                chunksize,
+                false,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+
+            assert_eq!(checksum, expected.to_string(), "{algorithm} {chunksize}");
+        }
+
+        let data = tokio::fs::read(LARGE_FILE_PATH).await.unwrap();
+        for algorithm in XXH3_ALGORITHMS {
+            for chunksize in [8 * 1024 * 1024, 5 * 1024 * 1024] {
+                let expected =
+                    xxh3_composite(&algorithm, &data, &[chunksize, LARGE_FILE_SIZE - chunksize]);
+
+                let checksum = generate_checksum_from_path_with_chunksize(
+                    PathBuf::from(LARGE_FILE_PATH).as_path(),
+                    algorithm.clone(),
+                    chunksize,
+                    chunksize,
+                    false,
+                    create_pipeline_cancellation_token(),
+                )
+                .await
+                .unwrap();
+
+                assert_eq!(checksum, expected, "{algorithm} {chunksize}");
+            }
+        }
+    }
+
+    // The composite checksum that an S3-to-local download recomputes from the
+    // part sizes of the source object, for the new hash algorithms.
+    #[tokio::test]
+    async fn generate_checksum_from_path_multipart_new_algorithms_test() {
+        init_dummy_tracing_subscriber();
+
+        create_large_file(LARGE_FILE_PATH, LARGE_FILE_DIR, LARGE_FILE_SIZE).await;
+
+        for (algorithm, parts, expected) in [
+            (
+                ChecksumAlgorithm::Md5,
+                vec![8 * 1024 * 1024, 1024 * 1024],
+                LARGE_FILE_MD5_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                vec![8 * 1024 * 1024, 1024 * 1024],
+                LARGE_FILE_SHA512_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                vec![8 * 1024 * 1024, 1024 * 1024],
+                LARGE_FILE_XXHASH64_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Md5,
+                vec![5 * 1024 * 1024, 4 * 1024 * 1024],
+                LARGE_FILE_MD5_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                vec![5 * 1024 * 1024, 4 * 1024 * 1024],
+                LARGE_FILE_SHA512_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                vec![5 * 1024 * 1024, 4 * 1024 * 1024],
+                LARGE_FILE_XXHASH64_5MIB_PARTS_BASE64_FINAL_DIGEST,
+            ),
+        ] {
+            let checksum = generate_checksum_from_path(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                parts.clone(),
+                5 * 1024 * 1024,
+                false,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(checksum, expected.to_string(), "{algorithm} {parts:?}");
+
+            let checksum = generate_checksum_from_path_for_check(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                true,
+                parts.clone(),
+                false,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(checksum, expected.to_string(), "{algorithm} {parts:?}");
+        }
+
+        // A single-part object (no "-N" suffix) is verified with the digest of
+        // the whole file, even though the file is larger than 8MiB.
+        for (algorithm, expected) in [
+            (
+                ChecksumAlgorithm::Md5,
+                LARGE_FILE_MD5_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                LARGE_FILE_SHA512_SINGLE_PART_BASE64_DIGEST,
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                LARGE_FILE_XXHASH64_SINGLE_PART_BASE64_DIGEST,
+            ),
+        ] {
+            let checksum = generate_checksum_from_path(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                vec![LARGE_FILE_SIZE as i64],
+                LARGE_FILE_SIZE + 1,
+                true,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(checksum, expected.to_string(), "{algorithm}");
+        }
+
+        let data = tokio::fs::read(LARGE_FILE_PATH).await.unwrap();
+        for algorithm in XXH3_ALGORITHMS {
+            for parts in [
+                vec![8 * 1024 * 1024, 1024 * 1024],
+                vec![5 * 1024 * 1024, 4 * 1024 * 1024],
+            ] {
+                let expected = xxh3_composite(&algorithm, &data, &parts);
+                let part_sizes: Vec<i64> = parts.iter().map(|size| *size as i64).collect();
+
+                let checksum = generate_checksum_from_path(
+                    PathBuf::from(LARGE_FILE_PATH).as_path(),
+                    algorithm.clone(),
+                    part_sizes.clone(),
+                    5 * 1024 * 1024,
+                    false,
+                    create_pipeline_cancellation_token(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(checksum, expected, "{algorithm} {parts:?}");
+
+                let checksum = generate_checksum_from_path_for_check(
+                    PathBuf::from(LARGE_FILE_PATH).as_path(),
+                    algorithm.clone(),
+                    true,
+                    part_sizes,
+                    false,
+                    create_pipeline_cancellation_token(),
+                )
+                .await
+                .unwrap();
+                assert_eq!(checksum, expected, "{algorithm} {parts:?}");
+            }
+
+            // The single-part counterpart, as above.
+            let checksum = generate_checksum_from_path(
+                PathBuf::from(LARGE_FILE_PATH).as_path(),
+                algorithm.clone(),
+                vec![LARGE_FILE_SIZE as i64],
+                LARGE_FILE_SIZE + 1,
+                true,
+                create_pipeline_cancellation_token(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(checksum, xxh3_single_part(&algorithm, &data), "{algorithm}");
+        }
     }
 
     #[tokio::test]

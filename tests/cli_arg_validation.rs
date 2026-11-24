@@ -181,15 +181,60 @@ fn cp_invalid_storage_class_rejected() {
 
 #[test]
 fn cp_invalid_checksum_algorithm_rejected() {
+    // SHA3 is not an S3 additional checksum algorithm. (MD5, SHA512 and the
+    // XXHASH family are valid since S3 supports them.)
     let (ok, _stdout, stderr) = run(s3util().args([
         "cp",
         "/tmp/anywhere",
         "s3://b/k",
-        "--checksum-algorithm",
-        "MD5",
+        "--additional-checksum-algorithm",
+        "SHA3",
     ]));
-    assert!(!ok, "MD5 (not in AWS additional checksum) must be rejected");
-    assert!(!stderr.is_empty());
+    assert!(!ok, "SHA3 (not an S3 additional checksum) must be rejected");
+    assert!(
+        stderr.contains("invalid checksum_algorithm"),
+        "expected the checksum algorithm validation error.\n--- stderr ---\n{stderr}"
+    );
+}
+
+#[test]
+fn cp_lowercase_checksum_algorithm_rejected() {
+    // Algorithm names are case-sensitive, as in the AWS CLI.
+    let (ok, _stdout, stderr) = run(s3util().args([
+        "cp",
+        "/tmp/anywhere",
+        "s3://b/k",
+        "--additional-checksum-algorithm",
+        "xxhash64",
+    ]));
+    assert!(!ok, "a lowercase algorithm name must be rejected");
+    assert!(
+        stderr.contains("invalid checksum_algorithm"),
+        "expected the checksum algorithm validation error.\n--- stderr ---\n{stderr}"
+    );
+}
+
+#[test]
+fn cp_full_object_checksum_with_new_hash_algorithm_rejected() {
+    // Only CRC32/CRC32C/CRC64NVME have a full object checksum type.
+    for algorithm in ["SHA512", "MD5", "XXHASH128", "XXHASH3", "XXHASH64"] {
+        let (ok, _stdout, stderr) = run(s3util().args([
+            "cp",
+            "/tmp/anywhere",
+            "s3://b/k",
+            "--additional-checksum-algorithm",
+            algorithm,
+            "--full-object-checksum",
+        ]));
+        assert!(
+            !ok,
+            "{algorithm} with --full-object-checksum must be rejected"
+        );
+        assert!(
+            stderr.contains("Only CRC32/CRC32C/CRC64NVME supports full object checksum"),
+            "{algorithm}: unexpected stderr:\n{stderr}"
+        );
+    }
 }
 
 #[test]

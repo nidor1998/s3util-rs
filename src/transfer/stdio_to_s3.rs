@@ -162,40 +162,32 @@ async fn transfer_buffered(
 
     // Populate the synthetic GetObjectOutput's checksum field so
     // S3Storage::put_object can extract it via get_additional_checksum().
-    let (checksum_sha256, checksum_sha1, checksum_crc32, checksum_crc32_c, checksum_crc64_nvme) =
-        match config.additional_checksum_algorithm.as_ref() {
-            Some(ChecksumAlgorithm::Sha256) => {
-                (source_additional_checksum.clone(), None, None, None, None)
-            }
-            Some(ChecksumAlgorithm::Sha1) => {
-                (None, source_additional_checksum.clone(), None, None, None)
-            }
-            Some(ChecksumAlgorithm::Crc32) => {
-                (None, None, source_additional_checksum.clone(), None, None)
-            }
-            Some(ChecksumAlgorithm::Crc32C) => {
-                (None, None, None, source_additional_checksum.clone(), None)
-            }
-            Some(ChecksumAlgorithm::Crc64Nvme) => {
-                (None, None, None, None, source_additional_checksum.clone())
-            }
-            _ => (None, None, None, None, None),
-        };
-
-    let byte_stream = ByteStream::from(buffer);
+    // Only the field of the configured algorithm is set.
+    let checksum_of = |algorithm: ChecksumAlgorithm| {
+        if config.additional_checksum_algorithm.as_ref() == Some(&algorithm) {
+            source_additional_checksum.clone()
+        } else {
+            None
+        }
+    };
 
     let get_object_output = GetObjectOutput::builder()
-        .set_body(Some(byte_stream))
         .set_content_length(Some(source_size as i64))
         .set_content_type(config.content_type.clone())
         .set_last_modified(Some(DateTime::from_secs(
             time::OffsetDateTime::now_utc().unix_timestamp(),
         )))
-        .set_checksum_sha256(checksum_sha256)
-        .set_checksum_sha1(checksum_sha1)
-        .set_checksum_crc32(checksum_crc32)
-        .set_checksum_crc32_c(checksum_crc32_c)
-        .set_checksum_crc64_nvme(checksum_crc64_nvme)
+        .set_checksum_sha256(checksum_of(ChecksumAlgorithm::Sha256))
+        .set_checksum_sha1(checksum_of(ChecksumAlgorithm::Sha1))
+        .set_checksum_crc32(checksum_of(ChecksumAlgorithm::Crc32))
+        .set_checksum_crc32_c(checksum_of(ChecksumAlgorithm::Crc32C))
+        .set_checksum_crc64_nvme(checksum_of(ChecksumAlgorithm::Crc64Nvme))
+        .set_checksum_sha512(checksum_of(ChecksumAlgorithm::Sha512))
+        .set_checksum_md5(checksum_of(ChecksumAlgorithm::Md5))
+        .set_checksum_xxhash128(checksum_of(ChecksumAlgorithm::Xxhash128))
+        .set_checksum_xxhash3(checksum_of(ChecksumAlgorithm::Xxhash3))
+        .set_checksum_xxhash64(checksum_of(ChecksumAlgorithm::Xxhash64))
+        .set_body(Some(ByteStream::from(buffer)))
         .build();
 
     let tagging = if config.disable_tagging {
@@ -244,9 +236,14 @@ async fn transfer_buffered(
 }
 
 /// Compute the additional checksum over an in-memory buffer using chunksize-aware
-/// semantics identical to `generate_checksum_from_path_with_chunksize`:
-/// if the total size is below `multipart_threshold`, return a single-part
-/// checksum; otherwise return the multipart composite checksum.
+/// semantics: if the total size is below `multipart_threshold`, return a
+/// single-part checksum; otherwise return the multipart composite checksum (for
+/// CRC32/CRC32C with `full_object_checksum`, the full object checksum).
+///
+/// This matches `generate_checksum_from_path_with_chunksize` for every
+/// combination config validation allows. That function additionally avoids a
+/// composite for a hash algorithm (SHA, MD5, XXHASH) with `full_object_checksum`,
+/// a combination `--full-object-checksum` rejects, so it never reaches here.
 fn compute_source_checksum(
     buffer: &[u8],
     algorithm: ChecksumAlgorithm,
@@ -336,6 +333,11 @@ mod checksum_invariant_tests {
             ChecksumAlgorithm::Crc32,
             ChecksumAlgorithm::Crc32C,
             ChecksumAlgorithm::Crc64Nvme,
+            ChecksumAlgorithm::Sha512,
+            ChecksumAlgorithm::Md5,
+            ChecksumAlgorithm::Xxhash128,
+            ChecksumAlgorithm::Xxhash3,
+            ChecksumAlgorithm::Xxhash64,
         ]
     }
 
@@ -444,9 +446,9 @@ mod checksum_invariant_tests {
             single.update(&buffer);
             let single_part = single.finalize();
             // For algorithms where the composite differs from a single-part checksum
-            // (SHA256/SHA1/CRC32/CRC32C with composite enabled), the boundary must
-            // produce the multipart form, not the single-part one. Crc64Nvme is
-            // always full-object and will match — that's expected.
+            // (every hash algorithm, and CRC32/CRC32C with composite enabled), the
+            // boundary must produce the multipart form, not the single-part one.
+            // Crc64Nvme is always full-object and will match — that's expected.
             if !matches!(algo, ChecksumAlgorithm::Crc64Nvme) {
                 assert_ne!(
                     multipart, single_part,

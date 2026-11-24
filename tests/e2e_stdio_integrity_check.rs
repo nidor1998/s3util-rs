@@ -52,6 +52,206 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Same as `stdin_to_s3_checksum_sha256_single_part`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_sha512_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_sha512().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_single_part`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_md5_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_md5().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_single_part`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash128_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash128().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_single_part`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash3_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash3().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_single_part`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash64_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash64().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     #[tokio::test]
     async fn stdin_to_s3_checksum_sha256_multipart() {
         TestHelper::init_dummy_tracing_subscriber();
@@ -87,6 +287,206 @@ mod tests {
 
         let head = helper.head_object(&bucket, "checksum.dat", None).await;
         assert!(head.checksum_sha256().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_multipart`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_sha512_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_sha512().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_multipart`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_md5_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_md5().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_multipart`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash128_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash128().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_multipart`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash3_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash3().is_some());
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_checksum_sha256_multipart`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_checksum_xxhash64_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/checksum.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "checksum.dat", None).await;
+        assert!(head.checksum_xxhash64().is_some());
 
         helper.delete_bucket_with_cascade(&bucket).await;
     }
@@ -1135,6 +1535,286 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// Same as `s3_to_stdout_checksum_sha256_single_part`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_sha512_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Upload source object with the checksum algorithm so it has a stored checksum.
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        // Now download via stdout with --enable-additional-checksum.
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_single_part`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_md5_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Upload source object with the checksum algorithm so it has a stored checksum.
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "MD5",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        // Now download via stdout with --enable-additional-checksum.
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_single_part`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash128_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Upload source object with the checksum algorithm so it has a stored checksum.
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        // Now download via stdout with --enable-additional-checksum.
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_single_part`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash3_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Upload source object with the checksum algorithm so it has a stored checksum.
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        // Now download via stdout with --enable-additional-checksum.
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_single_part`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash64_single_part() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // Upload source object with the checksum algorithm so it has a stored checksum.
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        // Now download via stdout with --enable-additional-checksum.
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     #[tokio::test]
     async fn s3_to_stdout_checksum_sha256_multipart() {
         TestHelper::init_dummy_tracing_subscriber();
@@ -1157,6 +1837,276 @@ mod tests {
                 "s3util-e2e-test",
                 "--additional-checksum-algorithm",
                 "SHA256",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_multipart`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_sha512_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_multipart`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_md5_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "MD5",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_multipart`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash128_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_multipart`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash3_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+        assert_eq!(upload_stats.sync_complete, 1);
+        assert_eq!(upload_stats.e_tag_verified, 1);
+        assert_eq!(upload_stats.checksum_verified, 1);
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_checksum_sha256_multipart`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_checksum_xxhash64_multipart() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/download.dat", bucket);
+        let upload_stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
                 upload_file.to_str().unwrap(),
                 &s3_path,
             ])
@@ -2184,6 +3134,314 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    /// Same as `s3_to_stdout_composite_sha256_mismatch_warns`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_sha512_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_composite_sha256_mismatch_warns`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_md5_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "MD5",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_composite_sha256_mismatch_warns`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_xxhash128_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_composite_sha256_mismatch_warns`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_xxhash3_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_composite_sha256_mismatch_warns`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_composite_xxhash64_mismatch_warns() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(9 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("mm.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/mm.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--disable-etag-verify",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 1);
+        // A sync_warning stat is not enough — the production binary reads the
+        // has_warning atomic to pick ExitStatus::Warning (exit 3). Without this
+        // assertion, a transfer path that emits SyncWarning but forgets to flip
+        // the atomic would exit 0 and the test wouldn't notice.
+        assert!(stats.has_warning_flag);
+        assert_eq!(stats.checksum_verified, 0);
+        assert_eq!(stats.e_tag_verified, 0);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     // ---------------------------------------------------------------
     // Tests below pin the parallel s3→stdout download path's behavior
     // around the dispatcher gate. The dispatcher in s3_to_stdio.rs
@@ -2352,6 +3610,346 @@ mod tests {
         assert_eq!(
             stats.sync_warning, 0,
             "auto-chunksize must verify the 4-part composite SHA256 cleanly"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_auto_chunksize_verifies_sha256_for_5mib_parts_source`,
+    /// with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_auto_chunksize_verifies_sha512_for_5mib_parts_source() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/source.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let head = helper.head_object(&bucket, "source.dat", None).await;
+        assert!(head.checksum_sha512().is_some());
+        assert!(
+            head.checksum_sha512().unwrap().contains("-4"),
+            "16 MiB / 5 MiB → 4-part composite SHA512 expected, got: {}",
+            head.checksum_sha512().unwrap()
+        );
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "auto-chunksize must verify the 4-part composite SHA512 cleanly"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_auto_chunksize_verifies_sha256_for_5mib_parts_source`,
+    /// with the MD5 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_auto_chunksize_verifies_md5_for_5mib_parts_source() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/source.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "MD5",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let head = helper.head_object(&bucket, "source.dat", None).await;
+        assert!(head.checksum_md5().is_some());
+        assert!(
+            head.checksum_md5().unwrap().contains("-4"),
+            "16 MiB / 5 MiB → 4-part composite MD5 expected, got: {}",
+            head.checksum_md5().unwrap()
+        );
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "auto-chunksize must verify the 4-part composite MD5 cleanly"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_auto_chunksize_verifies_sha256_for_5mib_parts_source`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_auto_chunksize_verifies_xxhash128_for_5mib_parts_source() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/source.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH128",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let head = helper.head_object(&bucket, "source.dat", None).await;
+        assert!(head.checksum_xxhash128().is_some());
+        assert!(
+            head.checksum_xxhash128().unwrap().contains("-4"),
+            "16 MiB / 5 MiB → 4-part composite XXHASH128 expected, got: {}",
+            head.checksum_xxhash128().unwrap()
+        );
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "auto-chunksize must verify the 4-part composite XXHASH128 cleanly"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_auto_chunksize_verifies_sha256_for_5mib_parts_source`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_auto_chunksize_verifies_xxhash3_for_5mib_parts_source() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/source.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH3",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let head = helper.head_object(&bucket, "source.dat", None).await;
+        assert!(head.checksum_xxhash3().is_some());
+        assert!(
+            head.checksum_xxhash3().unwrap().contains("-4"),
+            "16 MiB / 5 MiB → 4-part composite XXHASH3 expected, got: {}",
+            head.checksum_xxhash3().unwrap()
+        );
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "auto-chunksize must verify the 4-part composite XXHASH3 cleanly"
+        );
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert!(!stats.has_warning_flag);
+        assert_eq!(stdout_bytes, src_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Same as `s3_to_stdout_auto_chunksize_verifies_sha256_for_5mib_parts_source`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn s3_to_stdout_auto_chunksize_verifies_xxhash64_for_5mib_parts_source() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let src_bytes = TestHelper::generate_random_bytes(16 * 1024 * 1024).unwrap();
+        let upload_file = local_dir.join("upload.dat");
+        std::fs::write(&upload_file, &src_bytes).unwrap();
+
+        let s3_path = format!("s3://{}/source.dat", bucket);
+        helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-threshold",
+                "5MiB",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "XXHASH64",
+                upload_file.to_str().unwrap(),
+                &s3_path,
+            ])
+            .await;
+
+        let head = helper.head_object(&bucket, "source.dat", None).await;
+        assert!(head.checksum_xxhash64().is_some());
+        assert!(
+            head.checksum_xxhash64().unwrap().contains("-4"),
+            "16 MiB / 5 MiB → 4-part composite XXHASH64 expected, got: {}",
+            head.checksum_xxhash64().unwrap()
+        );
+
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                &s3_path,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(
+            stats.sync_warning, 0,
+            "auto-chunksize must verify the 4-part composite XXHASH64 cleanly"
         );
         assert_eq!(stats.e_tag_verified, 1);
         assert_eq!(stats.checksum_verified, 1);
@@ -3231,6 +4829,271 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Same as `stdin_to_s3_threshold_minus_one_with_sha256_verifies`,
+    /// with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_with_sha512_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "size = threshold - 1 ⇒ singlepart ETag, got: {}",
+            head.e_tag().unwrap()
+        );
+        let sha512 = head.checksum_sha512().unwrap();
+        assert!(
+            !sha512.contains('-'),
+            "size = threshold - 1 ⇒ singlepart SHA512 (no `-N`), got: {sha512}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_minus_one_with_sha256_verifies`,
+    /// with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_with_md5_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "size = threshold - 1 ⇒ singlepart ETag, got: {}",
+            head.e_tag().unwrap()
+        );
+        let md5 = head.checksum_md5().unwrap();
+        assert!(
+            !md5.contains('-'),
+            "size = threshold - 1 ⇒ singlepart MD5 (no `-N`), got: {md5}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_minus_one_with_sha256_verifies`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_with_xxhash128_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "size = threshold - 1 ⇒ singlepart ETag, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash128 = head.checksum_xxhash128().unwrap();
+        assert!(
+            !xxhash128.contains('-'),
+            "size = threshold - 1 ⇒ singlepart XXHASH128 (no `-N`), got: {xxhash128}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_minus_one_with_sha256_verifies`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_with_xxhash3_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "size = threshold - 1 ⇒ singlepart ETag, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash3 = head.checksum_xxhash3().unwrap();
+        assert!(
+            !xxhash3.contains('-'),
+            "size = threshold - 1 ⇒ singlepart XXHASH3 (no `-N`), got: {xxhash3}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_minus_one_with_sha256_verifies`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_minus_one_with_xxhash64_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 - 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            !head.e_tag().unwrap().contains('-'),
+            "size = threshold - 1 ⇒ singlepart ETag, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash64 = head.checksum_xxhash64().unwrap();
+        assert!(
+            !xxhash64.contains('-'),
+            "size = threshold - 1 ⇒ singlepart XXHASH64 (no `-N`), got: {xxhash64}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     /// Boundary ==: size = threshold exactly. Multipart with 1 part
     /// ⇒ ETag has `-1` suffix, SHA256 has `-1` composite suffix.
     /// Both verify.
@@ -3285,6 +5148,271 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// Same as `stdin_to_s3_threshold_equal_with_sha256_verifies`,
+    /// with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_with_sha512_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-1"),
+            "size == threshold ⇒ multipart ETag with `-1` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let sha512 = head.checksum_sha512().unwrap();
+        assert!(
+            sha512.contains("-1"),
+            "size == threshold ⇒ composite SHA512 with `-1` suffix, got: {sha512}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_equal_with_sha256_verifies`,
+    /// with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_with_md5_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-1"),
+            "size == threshold ⇒ multipart ETag with `-1` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let md5 = head.checksum_md5().unwrap();
+        assert!(
+            md5.contains("-1"),
+            "size == threshold ⇒ composite MD5 with `-1` suffix, got: {md5}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_equal_with_sha256_verifies`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_with_xxhash128_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-1"),
+            "size == threshold ⇒ multipart ETag with `-1` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash128 = head.checksum_xxhash128().unwrap();
+        assert!(
+            xxhash128.contains("-1"),
+            "size == threshold ⇒ composite XXHASH128 with `-1` suffix, got: {xxhash128}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_equal_with_sha256_verifies`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_with_xxhash3_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-1"),
+            "size == threshold ⇒ multipart ETag with `-1` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash3 = head.checksum_xxhash3().unwrap();
+        assert!(
+            xxhash3.contains("-1"),
+            "size == threshold ⇒ composite XXHASH3 with `-1` suffix, got: {xxhash3}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_equal_with_sha256_verifies`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_equal_with_xxhash64_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-1"),
+            "size == threshold ⇒ multipart ETag with `-1` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash64 = head.checksum_xxhash64().unwrap();
+        assert!(
+            xxhash64.contains("-1"),
+            "size == threshold ⇒ composite XXHASH64 with `-1` suffix, got: {xxhash64}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     /// Boundary +1: size = threshold + 1 byte. Multipart with 2 parts
     /// (chunksize MiB + 1 byte) ⇒ ETag `-2`, SHA256 composite `-2`.
     /// Smallest possible tail-chunk case for the hashing pipeline.
@@ -3334,6 +5462,271 @@ mod tests {
         assert!(
             sha256.contains("-2"),
             "size == threshold + 1 ⇒ composite SHA256 with `-2` suffix, got: {sha256}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_plus_one_with_sha256_verifies`,
+    /// with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_with_sha512_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "size == threshold + 1 ⇒ multipart ETag with `-2` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let sha512 = head.checksum_sha512().unwrap();
+        assert!(
+            sha512.contains("-2"),
+            "size == threshold + 1 ⇒ composite SHA512 with `-2` suffix, got: {sha512}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_plus_one_with_sha256_verifies`,
+    /// with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_with_md5_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "size == threshold + 1 ⇒ multipart ETag with `-2` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let md5 = head.checksum_md5().unwrap();
+        assert!(
+            md5.contains("-2"),
+            "size == threshold + 1 ⇒ composite MD5 with `-2` suffix, got: {md5}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_plus_one_with_sha256_verifies`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_with_xxhash128_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "size == threshold + 1 ⇒ multipart ETag with `-2` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash128 = head.checksum_xxhash128().unwrap();
+        assert!(
+            xxhash128.contains("-2"),
+            "size == threshold + 1 ⇒ composite XXHASH128 with `-2` suffix, got: {xxhash128}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_plus_one_with_sha256_verifies`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_with_xxhash3_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "size == threshold + 1 ⇒ multipart ETag with `-2` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash3 = head.checksum_xxhash3().unwrap();
+        assert!(
+            xxhash3.contains("-2"),
+            "size == threshold + 1 ⇒ composite XXHASH3 with `-2` suffix, got: {xxhash3}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_threshold_plus_one_with_sha256_verifies`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_threshold_plus_one_with_xxhash64_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let stdin_bytes = TestHelper::generate_random_bytes(5 * 1024 * 1024 + 1).unwrap();
+        let target = format!("s3://{}/boundary.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "boundary.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "size == threshold + 1 ⇒ multipart ETag with `-2` suffix, got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash64 = head.checksum_xxhash64().unwrap();
+        assert!(
+            xxhash64.contains("-2"),
+            "size == threshold + 1 ⇒ composite XXHASH64 with `-2` suffix, got: {xxhash64}"
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -3517,6 +5910,241 @@ mod tests {
         assert!(
             !sha256.contains('-'),
             "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on SHA256, got: {sha256}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
+        assert_eq!(downloaded, stdin_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_one_byte_with_sha256_verifies`, with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_one_byte_with_sha512_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/tiny.dat", bucket);
+        let stdin_bytes = vec![0x42u8];
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "tiny.dat", None).await;
+        assert_eq!(head.content_length(), Some(1));
+        let sha512 = head.checksum_sha512().unwrap();
+        assert!(
+            !sha512.contains('-'),
+            "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on SHA512, got: {sha512}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
+        assert_eq!(downloaded, stdin_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_one_byte_with_sha256_verifies`, with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_one_byte_with_md5_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/tiny.dat", bucket);
+        let stdin_bytes = vec![0x42u8];
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "tiny.dat", None).await;
+        assert_eq!(head.content_length(), Some(1));
+        let md5 = head.checksum_md5().unwrap();
+        assert!(
+            !md5.contains('-'),
+            "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on MD5, got: {md5}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
+        assert_eq!(downloaded, stdin_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_one_byte_with_sha256_verifies`, with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_one_byte_with_xxhash128_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/tiny.dat", bucket);
+        let stdin_bytes = vec![0x42u8];
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "tiny.dat", None).await;
+        assert_eq!(head.content_length(), Some(1));
+        let xxhash128 = head.checksum_xxhash128().unwrap();
+        assert!(
+            !xxhash128.contains('-'),
+            "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on XXHASH128, got: {xxhash128}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
+        assert_eq!(downloaded, stdin_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_one_byte_with_sha256_verifies`, with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_one_byte_with_xxhash3_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/tiny.dat", bucket);
+        let stdin_bytes = vec![0x42u8];
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "tiny.dat", None).await;
+        assert_eq!(head.content_length(), Some(1));
+        let xxhash3 = head.checksum_xxhash3().unwrap();
+        assert!(
+            !xxhash3.contains('-'),
+            "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on XXHASH3, got: {xxhash3}"
+        );
+
+        let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
+        assert_eq!(downloaded, stdin_bytes);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_one_byte_with_sha256_verifies`, with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_one_byte_with_xxhash64_verifies() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let target = format!("s3://{}/tiny.dat", bucket);
+        let stdin_bytes = vec![0x42u8];
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes.clone(),
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "tiny.dat", None).await;
+        assert_eq!(head.content_length(), Some(1));
+        let xxhash64 = head.checksum_xxhash64().unwrap();
+        assert!(
+            !xxhash64.contains('-'),
+            "1-byte input ⇒ singlepart upload ⇒ no `-N` suffix on XXHASH64, got: {xxhash64}"
         );
 
         let downloaded = helper.get_object_bytes(&bucket, "tiny.dat", None).await;
@@ -3970,6 +6598,276 @@ mod tests {
         assert!(
             sha256.contains("-2"),
             "expected 2-part composite SHA256, got: {sha256}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_size_equals_two_chunks_exact_with_sha256`,
+    /// with the SHA512 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_size_equals_two_chunks_exact_with_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 10 MiB == 2 * 5 MiB chunksize.
+        let stdin_bytes = TestHelper::generate_random_bytes(10 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/exact_chunks.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "SHA512",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "exact_chunks.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "10 MiB == 2 * 5 MiB ⇒ exactly 2 parts (no stray 3rd), got: {}",
+            head.e_tag().unwrap()
+        );
+        let sha512 = head.checksum_sha512().unwrap();
+        assert!(
+            sha512.contains("-2"),
+            "expected 2-part composite SHA512, got: {sha512}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_size_equals_two_chunks_exact_with_sha256`,
+    /// with the MD5 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_size_equals_two_chunks_exact_with_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 10 MiB == 2 * 5 MiB chunksize.
+        let stdin_bytes = TestHelper::generate_random_bytes(10 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/exact_chunks.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "MD5",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "exact_chunks.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "10 MiB == 2 * 5 MiB ⇒ exactly 2 parts (no stray 3rd), got: {}",
+            head.e_tag().unwrap()
+        );
+        let md5 = head.checksum_md5().unwrap();
+        assert!(
+            md5.contains("-2"),
+            "expected 2-part composite MD5, got: {md5}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_size_equals_two_chunks_exact_with_sha256`,
+    /// with the XXHASH128 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_size_equals_two_chunks_exact_with_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 10 MiB == 2 * 5 MiB chunksize.
+        let stdin_bytes = TestHelper::generate_random_bytes(10 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/exact_chunks.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH128",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "exact_chunks.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "10 MiB == 2 * 5 MiB ⇒ exactly 2 parts (no stray 3rd), got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash128 = head.checksum_xxhash128().unwrap();
+        assert!(
+            xxhash128.contains("-2"),
+            "expected 2-part composite XXHASH128, got: {xxhash128}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_size_equals_two_chunks_exact_with_sha256`,
+    /// with the XXHASH3 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_size_equals_two_chunks_exact_with_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 10 MiB == 2 * 5 MiB chunksize.
+        let stdin_bytes = TestHelper::generate_random_bytes(10 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/exact_chunks.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH3",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "exact_chunks.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "10 MiB == 2 * 5 MiB ⇒ exactly 2 parts (no stray 3rd), got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash3 = head.checksum_xxhash3().unwrap();
+        assert!(
+            xxhash3.contains("-2"),
+            "expected 2-part composite XXHASH3, got: {xxhash3}"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Same as `stdin_to_s3_size_equals_two_chunks_exact_with_sha256`,
+    /// with the XXHASH64 additional checksum.
+    #[tokio::test]
+    async fn stdin_to_s3_size_equals_two_chunks_exact_with_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        // 10 MiB == 2 * 5 MiB chunksize.
+        let stdin_bytes = TestHelper::generate_random_bytes(10 * 1024 * 1024).unwrap();
+        let target = format!("s3://{}/exact_chunks.dat", bucket);
+
+        let stats = helper
+            .cp_test_data_stdin_to_s3(
+                vec![
+                    "s3util",
+                    "cp",
+                    "--target-profile",
+                    "s3util-e2e-test",
+                    "--multipart-threshold",
+                    "5MiB",
+                    "--multipart-chunksize",
+                    "5MiB",
+                    "--additional-checksum-algorithm",
+                    "XXHASH64",
+                    "-",
+                    &target,
+                ],
+                stdin_bytes,
+            )
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let head = helper.head_object(&bucket, "exact_chunks.dat", None).await;
+        assert!(
+            head.e_tag().unwrap().contains("-2"),
+            "10 MiB == 2 * 5 MiB ⇒ exactly 2 parts (no stray 3rd), got: {}",
+            head.e_tag().unwrap()
+        );
+        let xxhash64 = head.checksum_xxhash64().unwrap();
+        assert!(
+            xxhash64.contains("-2"),
+            "expected 2-part composite XXHASH64, got: {xxhash64}"
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;

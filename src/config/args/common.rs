@@ -229,12 +229,13 @@ Valid choices: STANDARD | REDUCED_REDUNDANCY | STANDARD_IA | ONEZONE_IA | INTELL
                DEEP_ARCHIVE | GLACIER_IR | EXPRESS_ONEZONE"#)]
     pub storage_class: Option<String>,
 
-    /// Additional checksum algorithm for upload
-    #[arg(long, env, value_parser = checksum_algorithm::parse_checksum_algorithm, help_heading = "Verification")]
+    #[arg(long, env, value_parser = checksum_algorithm::parse_checksum_algorithm, help_heading = "Verification",
+    long_help = r#"Additional checksum algorithm for upload.
+Valid choices: CRC32 | CRC32C | CRC64NVME | SHA1 | SHA256 | SHA512 | MD5 | XXHASH128 | XXHASH3 | XXHASH64"#)]
     pub additional_checksum_algorithm: Option<String>,
 
     #[arg(long, env, default_value_t = DEFAULT_FULL_OBJECT_CHECKSUM, help_heading = "Verification", long_help=r#"Use full object checksum for verification. CRC64NVME automatically uses full object checksum.
-This option cannot be used with SHA1/SHA256 additional checksum."#)]
+This option cannot be used with SHA1/SHA256/SHA512/MD5/XXHASH128/XXHASH3/XXHASH64 additional checksum."#)]
     pub full_object_checksum: bool,
 
     /// Enable additional checksum for download
@@ -822,9 +823,15 @@ impl CommonTransferArgs {
             return Err(TARGET_LOCAL_STORAGE_SPECIFIED_WITH_FULL_OBJECT_CHECKSUM.to_string());
         }
 
+        // Only the CRC family has a full object checksum type. Hash algorithms
+        // (SHA1/SHA256/SHA512/MD5/XXHASH*) are always composite for multipart
+        // uploads. Allow-list them so that an algorithm added later is rejected
+        // instead of silently accepted.
         if let Some(additional_checksum_algorithm) = &self.additional_checksum_algorithm {
-            if additional_checksum_algorithm == "SHA1" || additional_checksum_algorithm == "SHA256"
-            {
+            if !matches!(
+                additional_checksum_algorithm.as_str(),
+                "CRC32" | "CRC32C" | "CRC64NVME"
+            ) {
                 return Err(FULL_OBJECT_CHECKSUM_NOT_SUPPORTED.to_string());
             }
         }

@@ -228,9 +228,9 @@ pub fn get_object_annotation_to_json(out: &GetObjectAnnotationOutput) -> Value {
     if let Some(v) = out.checksum_sha256() {
         map.insert("ChecksumSHA256".to_string(), Value::String(v.to_string()));
     }
-    // Algorithms s3util cannot recompute locally are still reported — the
-    // annotation may carry one, and `detect_checksum` in the get-object-annotation
-    // command relies on the same set being visible to the caller.
+    // SHA512, MD5 and the XXHASH family are reported too — the annotation may
+    // carry one, and `detect_checksum` in the get-object-annotation command
+    // verifies the same set, so it must be visible to the caller.
     if let Some(v) = out.checksum_sha512() {
         map.insert("ChecksumSHA512".to_string(), Value::String(v.to_string()));
     }
@@ -4648,11 +4648,11 @@ mod tests {
         }
     }
 
-    /// The algorithms s3util cannot recompute locally (SHA512, MD5, the XXHASH
-    /// family) are exactly the ones `detect_checksum` in the get-object-annotation
-    /// command looks for, so they must be visible in the JSON too.
+    /// SHA512, MD5 and the XXHASH family are among the algorithms
+    /// `detect_checksum` in the get-object-annotation command verifies, so they
+    /// must be visible in the JSON too.
     #[test]
-    fn get_object_annotation_to_json_emits_unverifiable_checksum_algorithms() {
+    fn get_object_annotation_to_json_emits_new_checksum_algorithms() {
         use aws_sdk_s3::operation::get_object_annotation::GetObjectAnnotationOutput;
         use aws_sdk_s3::primitives::ByteStream;
 

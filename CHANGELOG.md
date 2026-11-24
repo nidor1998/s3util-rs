@@ -5,6 +5,40 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-11-24
+
+Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional checksum algorithms.
+
+### Added
+
+- `--additional-checksum-algorithm` (`cp`, `mv`) now accepts `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64`
+  in addition to `CRC32`, `CRC32C`, `CRC64NVME`, `SHA1` and `SHA256`. The new algorithms are hash algorithms, so a
+  multipart upload gets a composite checksum (`<base64>-<number of parts>`), and, like `SHA1`/`SHA256`, they cannot be
+  combined with `--full-object-checksum`. Uploads from a local file and from stdin are verified end to end against
+  the checksum S3 returns, as for the existing algorithms. S3-to-S3 copies verify the target against the source's
+  checksum of the same algorithm when the source has one.
+- With `--enable-additional-checksum`, S3-to-local and S3-to-stdout transfers now detect and verify a `SHA512`, `MD5`,
+  `XXHASH128`, `XXHASH3` or `XXHASH64` checksum on the source object. Previously such a checksum was ignored: the
+  object was verified with the `CRC64NVME` checksum S3 may have added alongside it, or with no additional checksum at
+  all. As with `SHA256`, a mismatch in a multipart object's composite checksum is reported as a warning, because a
+  different chunk size can explain it; a mismatch in a single-part object is an error.
+
+### Security
+
+- Updated `url` to `v2.5.9` to address [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592).
+
+### Changed
+
+- `get-object-annotation` now verifies a `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` or `XXHASH64` checksum returned
+  with the annotation payload. Previously these algorithms could not be recomputed, so the command exited 1 with
+  "s3util cannot verify" instead of writing the payload.
+- For uploads, `s3util` now calculates the additional checksum of each request (single-part `PutObject` and each
+  `UploadPart`) itself and sends it in the `x-amz-checksum-*` header, for every algorithm. The AWS SDK cannot
+  calculate `SHA512` or the `XXHASH` family, and silently sends a `CRC32` checksum when `MD5` is requested. For the
+  existing algorithms the request is unchanged: the SDK already sent the checksum of an in-memory body as a header.
+- MSRV `1.99.0 -> 1.100.0`
+- Updated other dependencies
+
 ## [1.11.0] - 2026-11-22
 
 Update for the end of life (EOL) of the `chrono` crate.
