@@ -23,6 +23,30 @@ Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional check
   all. As with `SHA256`, a mismatch in a multipart object's composite checksum is reported as a warning, because a
   different chunk size can explain it; a mismatch in a single-part object is an error.
 
+### Fixed
+
+- `cp - s3://...` no longer uploads a truncated object when it is interrupted with Ctrl+C. A terminal Ctrl+C also
+  stops the process writing to stdin, so `s3util` saw an ordinary end of input and uploaded the bytes read so far,
+  then exited 130. The multipart upload is now aborted, and a small (single-part) upload is not sent.
+- `cp` and `mv` now fail when the source S3 object is overwritten during the transfer, instead of copying a mix of
+  the old and new objects. On a versioned bucket every read was already pinned to one version; on an unversioned
+  bucket it was not, and the ETag comparison that could notice the mix is only a warning and is skipped for
+  SSE-KMS, SSE-C and Express One Zone. Every ranged `GetObject` must now return the ETag of the first `HeadObject`
+  (S3 to S3, S3 to local, S3 to stdout), and `--server-side-copy` sends `x-amz-copy-source-if-match` on
+  `CopyObject` and `UploadPartCopy`. For `mv`, the source is not deleted.
+- `--rate-limit-bandwidth` now applies to the whole of a multipart upload. Only the first part was limited, and an
+  upload from stdin at or above `--multipart-threshold` was not limited at all.
+- An S3-to-S3 copy no longer fails with "additional checksum mismatch. file in the target storage may be corrupted"
+  when the source is a single-part object with an additional checksum and the copy is uploaded as multipart (the
+  object is at or above `--multipart-threshold`). The source then has a plain checksum and the target a composite
+  one (`<base64>-<number of parts>`), which can never be equal. This is now the same chunk-size warning (exit 3) as
+  for a multipart source. Two plain checksums that differ are still an error.
+- With `--server-side-copy`, a source overwritten during the transfer is now reported as such instead of as a bare
+  `PreconditionFailed` service error. With `--if-none-match`, where the same status can also mean that the target
+  exists, the message names both causes.
+- Checksumming or ETag-hashing a local file smaller than `--multipart-threshold` no longer reserves a buffer the
+  size of the threshold. With a large threshold (for example `5GiB`) that allocation could fail for a small file.
+
 ### Security
 
 - Updated `url` to `v2.5.9` to address [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592).

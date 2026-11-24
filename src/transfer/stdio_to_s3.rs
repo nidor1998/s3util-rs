@@ -10,7 +10,7 @@ use crate::Config;
 use crate::storage::Storage;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::transfer::TransferOutcome;
-use crate::types::token::PipelineCancellationToken;
+use crate::types::token::{PipelineCancellationToken, is_cancelled_within_grace};
 use crate::types::{ObjectChecksum, SyncStatistics};
 
 /// Read up to `limit` bytes from `reader` into a fresh `Vec<u8>`.
@@ -136,9 +136,19 @@ async fn transfer_buffered(
     target: Storage,
     target_key: &str,
     buffer: Vec<u8>,
-    _cancellation_token: PipelineCancellationToken,
+    cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<TransferOutcome> {
+    // A terminal Ctrl+C also kills the process feeding stdin, so the probe
+    // sees an ordinary EOF and hands over whatever arrived before the signal.
+    // Uploading it would commit a truncated stream as the object.
+    //
+    // The EOF can be seen before the SIGINT handler task has cancelled the
+    // token, so wait a short grace period for it before committing.
+    if is_cancelled_within_grace(&cancellation_token).await {
+        return Ok(TransferOutcome::default());
+    }
+
     let target_clone = dyn_clone::clone_box(&*target);
 
     let source_size = buffer.len() as u64;
@@ -849,6 +859,55 @@ mod if_none_match_tests {
 
         let streaming = run(config_with(false, 1024), vec![0x42; 4096]).await;
         assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
+    }
+
+    /// Reader that cancels the token when it reports EOF — what a terminal
+    /// Ctrl+C looks like from here: the signal kills the process feeding
+    /// stdin, so the read side sees an ordinary end of data.
+    struct CancelAtEof {
+        inner: std::io::Cursor<Vec<u8>>,
+        token: crate::types::token::PipelineCancellationToken,
+    }
+
+    impl tokio::io::AsyncRead for CancelAtEof {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let before = buf.filled().len();
+            let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+            if buf.filled().len() == before {
+                self.token.cancel();
+            }
+            result
+        }
+    }
+
+    /// Ctrl+C on `producer | s3util cp - s3://…` ends stdin early. The bytes
+    /// read so far must not be uploaded as if they were the whole stream.
+    #[tokio::test]
+    async fn buffered_stdin_cut_short_by_cancellation_is_not_uploaded() {
+        let config = config_with(false, 8 * 1024 * 1024);
+        let target = RecordingTarget::new();
+        let handle = target.clone();
+        let storage: Storage = Box::new(target);
+        let (tx, _rx) = async_channel::unbounded::<SyncStatistics>();
+        let token = create_pipeline_cancellation_token();
+        let reader = CancelAtEof {
+            inner: std::io::Cursor::new(vec![0x41; 1024]),
+            token: token.clone(),
+        };
+
+        transfer(&config, storage, "k", reader, token, tx)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.recorded().put_object_if_none_match,
+            None,
+            "a stream truncated by cancellation must not be uploaded"
+        );
     }
 
     #[tokio::test]

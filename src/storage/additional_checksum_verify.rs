@@ -217,8 +217,7 @@ pub async fn generate_checksum_from_path_with_chunksize(
     let mut checksum = AdditionalChecksum::new(checksum_algorithm, full_object_checksum);
 
     if remaining_bytes < multipart_threshold as u64 {
-        let mut buffer = Vec::<u8>::with_capacity(multipart_threshold);
-        buffer.resize_with(remaining_bytes as usize, Default::default);
+        let mut buffer = vec![0u8; remaining_bytes as usize];
         file.read_exact(buffer.as_mut_slice()).await?;
         checksum.update(buffer.as_slice());
 

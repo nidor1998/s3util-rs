@@ -210,6 +210,36 @@ pub trait StorageTrait: DynClone {
     fn set_warning(&self);
 }
 
+/// Fail when a later read of the source returns a different ETag than the
+/// one the transfer started from.
+///
+/// On a versioned bucket every read is pinned to the version the first HEAD
+/// saw. An unversioned bucket has no version to pin, so each ranged GET reads
+/// "latest": an overwrite landing mid-transfer would otherwise interleave the
+/// bytes of two different objects (or truncate the new one to the old length).
+/// The ETag changes whenever the object is rewritten — under SSE-KMS and SSE-C
+/// too, where it is not an MD5 but is still unique per write — so comparing it
+/// on every response catches the overwrite before the copy is committed.
+///
+/// Either side being absent skips the check: a local/stdin source has no
+/// ETag, and a store that omits it on a response cannot be judged.
+pub fn check_source_e_tag_unchanged(
+    key: &str,
+    expected_e_tag: Option<&str>,
+    actual_e_tag: Option<&str>,
+) -> Result<()> {
+    if let (Some(expected), Some(actual)) = (expected_e_tag, actual_e_tag)
+        && expected != actual
+    {
+        return Err(anyhow!(
+            "source object was modified during the transfer: key={key}, \
+             expected e_tag={expected}, actual e_tag={actual}. \
+             the transfer was stopped so the two contents are not mixed; retry it."
+        ));
+    }
+    Ok(())
+}
+
 #[rustfmt::skip] // For coverage tool incorrectness
 pub fn convert_to_buf_byte_stream_with_callback<R>(
     byte_stream: R,
@@ -658,6 +688,19 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use tracing_subscriber::EnvFilter;
+
+    #[test]
+    fn check_source_e_tag_unchanged_test() {
+        // Same object.
+        assert!(check_source_e_tag_unchanged("k", Some("\"a\""), Some("\"a\"")).is_ok());
+        // Overwritten between two reads.
+        let err = check_source_e_tag_unchanged("k", Some("\"a\""), Some("\"b\"")).unwrap_err();
+        assert!(err.to_string().contains("modified during the transfer"));
+        // A local/stdin source has no ETag; a store may omit it on a response.
+        assert!(check_source_e_tag_unchanged("k", None, Some("\"b\"")).is_ok());
+        assert!(check_source_e_tag_unchanged("k", Some("\"a\""), None).is_ok());
+        assert!(check_source_e_tag_unchanged("k", None, None).is_ok());
+    }
 
     #[test]
     fn get_range_from_content_range_test() {

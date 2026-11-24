@@ -87,8 +87,7 @@ pub async fn generate_e_tag_hash_from_path(
     let mut remaining_bytes = file.metadata().await?.len();
 
     if remaining_bytes < multipart_threshold as u64 {
-        let mut buffer = Vec::<u8>::with_capacity(multipart_threshold);
-        buffer.resize_with(remaining_bytes as usize, Default::default);
+        let mut buffer = vec![0u8; remaining_bytes as usize];
         file.read_exact(buffer.as_mut_slice()).await?;
 
         let final_etag = Ok(generate_e_tag_hash(md5::compute(&buffer).as_slice(), 0));

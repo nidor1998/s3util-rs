@@ -43,7 +43,8 @@ use crate::storage::e_tag_verify::{
     is_multipart_upload_e_tag, verify_e_tag,
 };
 use crate::storage::{
-    Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
+    Storage, StorageFactory, StorageTrait, check_source_e_tag_unchanged,
+    convert_to_buf_byte_stream_with_callback,
 };
 use crate::types::SyncStatistics::{
     ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
@@ -621,6 +622,7 @@ impl LocalStorage {
             let cloned_source = dyn_clone::clone_box(&*(source));
             let source_key = source_key.to_string();
             let source_version_id = source_version_id.clone();
+            let source_e_tag = source_e_tag.clone();
             let source_sse_c = self.config.source_sse_c.clone();
             let source_sse_c_key = self.config.source_sse_c_key.clone();
             let source_sse_c_key_md5 = self.config.source_sse_c_key_md5.clone();
@@ -689,6 +691,13 @@ impl LocalStorage {
                     // whole process under the `release-min-size` profile, which
                     // sets panic = "abort".
                     let get_object_output = get_object_output.context("get_object() failed.")?;
+                    // An unversioned source cannot be pinned, so make sure this
+                    // chunk still belongs to the object the first chunk came from.
+                    check_source_e_tag_unchanged(
+                        &source_key,
+                        source_e_tag.as_deref(),
+                        get_object_output.e_tag(),
+                    )?;
                     let chunk_content_length =
                         get_object_output.content_length().ok_or_else(|| {
                             anyhow!(

@@ -530,6 +530,7 @@ async fn ranged_get_into_buffer(
     size: u64,
     config: &Config,
     version_id: Option<String>,
+    expected_e_tag: Option<&str>,
     cancellation_token: PipelineCancellationToken,
 ) -> Result<Vec<u8>> {
     // Race the GET issue itself against cancellation — the SDK's send()
@@ -550,6 +551,15 @@ async fn ranged_get_into_buffer(
     };
 
     first_chunk::validate_content_range(&get_object_output, range)?;
+
+    // An unversioned source cannot be pinned to a version, so make sure this
+    // chunk still belongs to the object the HEAD described before any of its
+    // bytes can reach stdout.
+    crate::storage::check_source_e_tag_unchanged(
+        source_key,
+        expected_e_tag,
+        get_object_output.e_tag(),
+    )?;
 
     // Read the raw body directly (no AsyncReadWithCallback wrapper).
     //
@@ -862,6 +872,7 @@ async fn transfer_parallel(
         let stats_sender = stats_sender.clone();
         let config = config.clone();
         let version_id = effective_version_id.clone();
+        let expected_e_tag = source_e_tag.clone();
         let source_key = source_key.to_string();
 
         workers.push(parallel_worker(
@@ -874,6 +885,7 @@ async fn transfer_parallel(
             source_key,
             config,
             version_id,
+            expected_e_tag,
             cancellation_token,
             stats_sender,
         ));
@@ -926,6 +938,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
     source_key: String,
     config: Config,
     version_id: Option<String>,
+    expected_e_tag: Option<String>,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -974,6 +987,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
             size,
             &config,
             version_id.clone(),
+            expected_e_tag.as_deref(),
             cancellation_token.clone(),
         )
         .await;
@@ -3654,6 +3668,7 @@ mod tests {
             5,
             &config,
             None,
+            None,
             create_pipeline_cancellation_token(),
         )
         .await
@@ -3662,6 +3677,50 @@ mod tests {
             err.to_string().contains("short read"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// On an unversioned bucket a chunk GET reads "latest". If the object was
+    /// overwritten after the HEAD, the chunk carries a different ETag and must
+    /// be rejected before its bytes can be written to stdout.
+    #[tokio::test]
+    async fn ranged_get_rejects_chunk_from_an_overwritten_source() {
+        let mock = MockSource::new(vec![0x42; 100]).with_e_tag("\"new-object\"");
+        let config = test_config(2, 4, 4);
+        let err = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-99",
+            100,
+            &config,
+            None,
+            Some("\"old-object\""),
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("modified during the transfer"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ranged_get_accepts_chunk_with_the_expected_e_tag() {
+        let mock = MockSource::new(vec![0x42; 100]).with_e_tag("\"same\"");
+        let config = test_config(2, 4, 4);
+        let buf = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-99",
+            100,
+            &config,
+            None,
+            Some("\"same\""),
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(buf, vec![0x42; 100]);
     }
 
     #[tokio::test]
@@ -3677,6 +3736,7 @@ mod tests {
             "bytes=0-99",
             100,
             &config,
+            None,
             None,
             create_pipeline_cancellation_token(),
         )

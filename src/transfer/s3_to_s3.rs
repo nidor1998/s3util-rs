@@ -8,7 +8,10 @@ use tracing::{debug, info, warn};
 
 use crate::Config;
 use crate::storage::e_tag_verify::is_multipart_upload_e_tag;
-use crate::storage::{Storage, convert_head_to_get_object_output, parse_range_header_string};
+use crate::storage::{
+    Storage, check_source_e_tag_unchanged, convert_head_to_get_object_output,
+    parse_range_header_string,
+};
 use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, generate_annotation_differences, get_additional_checksum};
@@ -80,6 +83,9 @@ pub async fn transfer(
         .or_else(|| source_version_id.clone());
 
     let source_size = head_object_output.content_length().unwrap_or(0);
+    // On an unversioned bucket there is no version to pin, so the ETag is what
+    // ties every later read back to the object this HEAD described.
+    let head_e_tag = head_object_output.e_tag().map(|e_tag| e_tag.to_string());
     let source_tag_count = head_object_output.tag_count();
 
     // Get the first chunk range if multipart upload is required.
@@ -133,6 +139,11 @@ pub async fn transfer(
     if cancellation_token.is_cancelled() {
         return Ok(TransferOutcome::default());
     }
+
+    // The GET above read "latest" on an unversioned bucket. If the object was
+    // overwritten since the HEAD, the size and chunk plan no longer describe
+    // these bytes: fail instead of copying a truncated or mixed object.
+    check_source_e_tag_unchanged(source_key, head_e_tag.as_deref(), get_object_output.e_tag())?;
 
     // Validate content range if range was used
     if range.is_some() {
