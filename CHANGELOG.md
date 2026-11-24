@@ -28,6 +28,10 @@ Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional check
 - `cp - s3://...` no longer uploads a truncated object when it is interrupted with Ctrl+C. A terminal Ctrl+C also
   stops the process writing to stdin, so `s3util` saw an ordinary end of input and uploaded the bytes read so far,
   then exited 130. The multipart upload is now aborted, and a small (single-part) upload is not sent.
+- `cp - s3://...` now stops on Ctrl+C while it is waiting for input. When the process writing to stdin stayed alive
+  and kept the pipe open (for example `kill -INT` on `s3util` alone, a producer that ignores `SIGINT`, or input typed
+  at a terminal), the signal had no effect until more input arrived or stdin was closed. `s3util` now aborts the
+  multipart upload, if one was started, and exits 130 without waiting for stdin.
 - `cp` and `mv` now fail when the source S3 object is overwritten during the transfer, instead of copying a mix of
   the old and new objects. On a versioned bucket every read was already pinned to one version; on an unversioned
   bucket it was not, and the ETag comparison that could notice the mix is only a warning and is skipped for
