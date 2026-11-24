@@ -49,7 +49,14 @@ pub async fn transfer(
     }
 
     let threshold = config.transfer_config.multipart_threshold as usize;
-    let initial = probe_up_to(&mut reader, threshold).await?;
+    // A pending stdin read does not observe cancellation on its own: a
+    // producer that keeps the pipe open (or an interactive terminal) would
+    // hold the probe, and with it Ctrl+C, until input arrives or stdin closes.
+    let initial = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => return Ok(TransferOutcome::default()),
+        result = probe_up_to(&mut reader, threshold) => result?,
+    };
 
     if initial.len() < threshold {
         // Reader hit EOF before the threshold — stays in the in-memory path.

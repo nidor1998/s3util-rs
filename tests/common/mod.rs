@@ -740,6 +740,11 @@ impl TestHelper {
     /// Uploads `body` to `s3://bucket/key` with an `algorithm` additional
     /// checksum (through s3util's own cp path, as the SDK cannot calculate
     /// SHA512/MD5/XXHASH*), and asserts that S3 stored it.
+    ///
+    /// Single-part only: `body` must be smaller than the default 8 MiB
+    /// multipart threshold, as the assertion expects a plain (not composite)
+    /// checksum. Use `put_versioned_object_with_additional_checksum` for a
+    /// multipart layout.
     pub async fn put_object_with_additional_checksum(
         &self,
         bucket: &str,
@@ -747,6 +752,10 @@ impl TestHelper {
         body: &[u8],
         algorithm: &str,
     ) {
+        assert!(
+            body.len() < 8 * 1024 * 1024,
+            "put_object_with_additional_checksum is single-part only"
+        );
         let local_dir = Self::create_temp_dir();
         let seed_file = Self::create_test_file(&local_dir, "seed.bin", body);
         let target = format!("s3://{bucket}/{key}");
@@ -781,9 +790,9 @@ impl TestHelper {
     /// versioning enabled.
     ///
     /// `part_size_mib` = `Some(n)` sets both `--multipart-threshold` and
-    /// `--multipart-chunksize` to `n` MiB; `None` keeps the 8 MiB defaults. A
-    /// body of at least the part size is uploaded as multipart and gets a
-    /// composite checksum. Versioning tests upload two versions with
+    /// `--multipart-chunksize` to `n` MiB; `None` uses 8 MiB. A body of at
+    /// least the part size is uploaded as multipart and gets a composite
+    /// checksum (CRC64NVME is always a full-object checksum). Versioning tests upload two versions with
     /// different part sizes, so reading the wrong version's part layout makes
     /// verification fail.
     pub async fn put_versioned_object_with_additional_checksum(
@@ -797,26 +806,25 @@ impl TestHelper {
         let local_dir = Self::create_temp_dir();
         let seed_file = Self::create_test_file(&local_dir, "seed.bin", body);
         let target = format!("s3://{bucket}/{key}");
-        let part_size_arg = part_size_mib.map(|mib| format!("{mib}MiB"));
-        let mut args = vec![
-            "s3util",
-            "cp",
-            "--target-profile",
-            "s3util-e2e-test",
-            "--additional-checksum-algorithm",
-            algorithm,
-        ];
-        if let Some(part_size_arg) = part_size_arg.as_deref() {
-            args.extend_from_slice(&[
+        // Always passed, so the layout the assertion below expects does not
+        // depend on MULTIPART_THRESHOLD/MULTIPART_CHUNKSIZE in the environment.
+        let part_size_arg = format!("{}MiB", part_size_mib.unwrap_or(8));
+        let stats = self
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--additional-checksum-algorithm",
+                algorithm,
                 "--multipart-threshold",
-                part_size_arg,
+                &part_size_arg,
                 "--multipart-chunksize",
-                part_size_arg,
-            ]);
-        }
-        args.push(seed_file.to_str().unwrap());
-        args.push(&target);
-        let stats = self.cp_test_data(args).await;
+                &part_size_arg,
+                seed_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
         let _ = std::fs::remove_dir_all(&local_dir);
         assert_eq!(stats.sync_complete, 1);
         assert_eq!(stats.checksum_verified, 1);
@@ -825,7 +833,9 @@ impl TestHelper {
         // uploaded.
         let head = self.head_object(bucket, key, None).await;
         let part_size = part_size_mib.unwrap_or(8) * 1024 * 1024;
-        let expected_checksum = if body.len() >= part_size {
+        // s3util always uses a full-object checksum for CRC64NVME, even for
+        // a multipart upload.
+        let expected_checksum = if algorithm != "CRC64NVME" && body.len() >= part_size {
             Self::compute_composite_additional_checksum(algorithm, body, part_size)
         } else {
             Self::compute_additional_checksum(algorithm, body)

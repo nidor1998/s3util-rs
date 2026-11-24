@@ -23,6 +23,7 @@ use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -169,10 +170,20 @@ struct StubOptions {
     wrong_final_checksum: Option<String>,
 }
 
-#[derive(Clone)]
 struct Stub {
     addr: String,
     requests: Arc<Mutex<Vec<RecordedRequest>>>,
+    shutdown: Arc<AtomicBool>,
+}
+
+/// Stops the accept loop, on a normal return as well as on a panic, so the
+/// listener and the recorded request bodies do not outlive the test case.
+impl Drop for Stub {
+    fn drop(&mut self) {
+        self.shutdown.store(true, Ordering::SeqCst);
+        // Wake the blocking accept so that the loop sees the flag.
+        let _ = TcpStream::connect(&self.addr);
+    }
 }
 
 impl Stub {
@@ -347,9 +358,15 @@ fn spawn_stub(algorithm: &'static str, options: StubOptions) -> Stub {
     let addr = listener.local_addr().expect("stub local addr").to_string();
     let requests = Arc::new(Mutex::new(Vec::<RecordedRequest>::new()));
 
+    let shutdown = Arc::new(AtomicBool::new(false));
+
     let shared = Arc::clone(&requests);
+    let stop = Arc::clone(&shutdown);
     thread::spawn(move || {
         for stream in listener.incoming() {
+            if stop.load(Ordering::SeqCst) {
+                break;
+            }
             let Ok(stream) = stream else { continue };
             let requests = Arc::clone(&shared);
             let options = options.clone();
@@ -367,7 +384,11 @@ fn spawn_stub(algorithm: &'static str, options: StubOptions) -> Stub {
         }
     });
 
-    Stub { addr, requests }
+    Stub {
+        addr,
+        requests,
+        shutdown,
+    }
 }
 
 /// Run `s3util cp <source> s3://bucket/key` against the stub. `stdin` is
@@ -483,7 +504,11 @@ fn assert_multipart_upload(stub: &Stub, algorithm: &str, expected_parts: &[&[u8]
     let mut parts: Vec<&RecordedRequest> = requests.iter().filter(|r| r.is_upload_part()).collect();
     parts.sort_by_key(|r| r.part_number());
     assert_eq!(parts.len(), expected_parts.len(), "{algorithm}");
-    for (part, expected) in parts.iter().zip(expected_parts) {
+    for (i, (part, expected)) in parts.iter().zip(expected_parts).enumerate() {
+        // The completion below lists parts 1..=N, so the uploaded parts must
+        // carry exactly those numbers (S3 rejects a completion that names a
+        // part that was never uploaded).
+        assert_eq!(part.part_number(), i as i32 + 1, "{algorithm}");
         assert_eq!(part.body.as_slice(), *expected, "{algorithm}");
         assert_request_checksum(part, algorithm);
     }

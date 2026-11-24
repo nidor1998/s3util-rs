@@ -549,9 +549,13 @@ mod tests {
             !helper.is_object_exist(&bucket, key, Some(v1_id)).await,
             "v1 must be deleted"
         );
-        assert!(
-            helper.is_object_exist(&bucket, key, Some(v2_id)).await,
-            "v2 must remain present"
+        // A successful HEAD of the explicit version: `is_object_exist` also
+        // returns true for any error other than NotFound.
+        helper.head_object(&bucket, key, Some(v2_id.clone())).await;
+        assert_eq!(
+            helper.get_object_bytes(&bucket, key, Some(v2_id)).await,
+            v2_content,
+            "v2 must remain present and untouched"
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -1185,14 +1189,12 @@ mod tests {
             "the ETag check is disabled, so only the checksum may fail; stderr={}",
             String::from_utf8_lossy(&output.stderr),
         );
-        assert!(
-            helper.is_object_exist(&bucket1, key, None).await,
-            "source must be preserved on an additional checksum mismatch"
-        );
-        assert!(
-            helper.is_object_exist(&bucket2, key, None).await,
-            "the copy itself completes; only the delete is skipped"
-        );
+        // A successful HEAD each (`head_object` unwraps): `is_object_exist`
+        // also returns true for any error other than NotFound.
+        // The source must be preserved on an additional checksum mismatch.
+        helper.head_object(&bucket1, key, None).await;
+        // The copy itself completes; only the delete is skipped.
+        helper.head_object(&bucket2, key, None).await;
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;

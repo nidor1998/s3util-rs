@@ -165,8 +165,9 @@ pub struct UploadManager {
 /// With a rate limiter, the bytes are read in slices of at most
 /// `THROTTLED_READ_SLICE` and the limiter is awaited between reads.
 ///
-/// A throttled read can take minutes, so cancellation is observed between
-/// slices and while waiting on the limiter: the read then fails with
+/// A read can take arbitrarily long (a throttled part, or stdin waiting on
+/// its producer), so cancellation is observed while a read is pending,
+/// between slices and while waiting on the limiter: the read then fails with
 /// `cancelled_read_error()`. Callers tell it apart from a real I/O error by
 /// checking the token.
 async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
@@ -184,7 +185,14 @@ async fn read_exact_or_eof<R: tokio::io::AsyncRead + Unpin + ?Sized>(
             Some(_) => buf.len().min(total + THROTTLED_READ_SLICE),
             None => buf.len(),
         };
-        let n = reader.read(&mut buf[total..end]).await?;
+        // A pending read (stdin whose producer keeps the pipe open) does not
+        // observe cancellation on its own. `read` is cancel-safe, and the
+        // buffer is discarded on cancellation anyway.
+        let n = tokio::select! {
+            biased;
+            _ = cancellation_token.cancelled() => return Err(cancelled_read_error()),
+            result = reader.read(&mut buf[total..end]) => result?,
+        };
         if n == 0 {
             break;
         }

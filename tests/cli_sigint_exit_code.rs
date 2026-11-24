@@ -170,6 +170,21 @@ fn serve_connection(
             }
             let _ = write_response_head(&mut stream, "200 OK", 0, FAKE_MD5);
         }
+        "POST" => {
+            // CreateMultipartUpload (`cp -` once stdin passes the threshold).
+            let body = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+                <InitiateMultipartUploadResult>\
+                <Bucket>bucket</Bucket><Key>key</Key><UploadId>upload-1</UploadId>\
+                </InitiateMultipartUploadResult>";
+            let _ = stream.write_all(
+                format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/xml\r\n\
+                     content-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                )
+                .as_bytes(),
+            );
+        }
         "DELETE" => {
             delete_requests_served.fetch_add(1, Ordering::SeqCst);
             let _ = stream.write_all(
@@ -524,6 +539,91 @@ fn sigint_during_mv_exits_130_and_source_survives() {
         !stderr.contains("Source delete completed."),
         "[mv] an interrupted mv must not report a source delete\nstderr: {stderr}"
     );
+}
+
+/// Spawn `s3util cp - s3://…` with a piped stdin, write `prefix` to it and
+/// return the child together with the still-open pipe: holding the pipe is
+/// what a producer that survives the Ctrl+C looks like (`kill -INT` on
+/// s3util alone, a producer that ignores SIGINT, an interactive terminal).
+#[cfg(target_family = "unix")]
+fn spawn_stdin_upload(
+    fake: &FakeS3,
+    extra_args: &[&str],
+    prefix: &[u8],
+) -> (Child, std::process::ChildStdin) {
+    let mut args = vec![
+        "cp".to_string(),
+        "-".to_string(),
+        "s3://sigint-test-bucket/stdin.bin".to_string(),
+    ];
+    args.extend(extra_args.iter().map(|arg| arg.to_string()));
+    args.extend(side_flags("target", &fake.endpoint));
+    let mut child = Command::new(env!("CARGO_BIN_EXE_s3util"))
+        .args(&args)
+        .args(["--aws-max-attempts", "1"])
+        .env("AWS_EC2_METADATA_DISABLED", "true")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("failed to spawn s3util");
+    let mut stdin = child.stdin.take().expect("stdin must be piped");
+    stdin.write_all(prefix).expect("failed to write to stdin");
+    stdin.flush().expect("failed to flush stdin");
+    (child, stdin)
+}
+
+/// Ctrl+C while `cp - s3://…` waits on a stdin that stays open and silent.
+/// The pending read cannot observe the cancellation token by itself, and
+/// the blocking stdin read cannot be cancelled at all; the process must
+/// still exit 130 promptly instead of waiting for the producer.
+#[test]
+#[cfg(target_family = "unix")]
+fn sigint_during_pending_stdin_read_exits_130() {
+    let fake = spawn_fake_s3(GetBodyPlan::Complete);
+    let (mut child, stdin) = spawn_stdin_upload(&fake, &[], b"partial input");
+
+    // Let the child install its Ctrl+C handler and block on stdin.
+    std::thread::sleep(Duration::from_secs(1));
+    send_sigint(&child);
+
+    let status = wait_with_deadline(&mut child, Duration::from_secs(10));
+    let stderr = read_stderr(&mut child);
+    assert_graceful_130(status, &stderr, "stdin-probe");
+    drop(stdin);
+}
+
+/// Same as above, but stdin stalls after the multipart threshold: the
+/// upload is already created and the first part is in flight. Ctrl+C must
+/// abort the multipart upload and exit 130 without waiting for stdin.
+#[test]
+#[cfg(target_family = "unix")]
+fn sigint_during_pending_stdin_read_aborts_multipart_upload() {
+    let fake = spawn_fake_s3(GetBodyPlan::Complete);
+    let (mut child, stdin) = spawn_stdin_upload(
+        &fake,
+        &[
+            "--multipart-threshold",
+            "5MiB",
+            "--multipart-chunksize",
+            "5MiB",
+        ],
+        &vec![b'x'; 5 * 1024 * 1024 + 1],
+    );
+
+    // Let the child create the upload and block on the second part's read.
+    std::thread::sleep(Duration::from_secs(1));
+    send_sigint(&child);
+
+    let status = wait_with_deadline(&mut child, Duration::from_secs(15));
+    let stderr = read_stderr(&mut child);
+    assert_graceful_130(status, &stderr, "stdin-multipart");
+    assert_eq!(
+        fake.delete_requests_served.load(Ordering::SeqCst),
+        1,
+        "[stdin-multipart] the multipart upload must be aborted\nstderr: {stderr}"
+    );
+    drop(stdin);
 }
 
 /// Control: the same harness without SIGINT completes the transfer and

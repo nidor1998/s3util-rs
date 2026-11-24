@@ -4,7 +4,7 @@ mod common;
 
 #[cfg(test)]
 mod tests {
-    use aws_sdk_s3::types::ChecksumType;
+    use aws_sdk_s3::types::{ChecksumType, ServerSideEncryption};
     use common::*;
 
     use super::*;
@@ -2246,7 +2246,10 @@ mod tests {
 
         let head = helper.head_object(&bucket, "sha256_kms.dat", None).await;
         assert!(head.checksum_sha256().is_some());
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "sha256_kms.dat", b"sha256 kms integrity")
@@ -2295,7 +2298,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("SHA512", b"sha512 kms integrity");
         assert_eq!(head.checksum_sha512(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "sha512_kms.dat", b"sha512 kms integrity")
@@ -2344,7 +2350,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("MD5", b"md5 kms integrity");
         assert_eq!(head.checksum_md5(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "md5_kms.dat", b"md5 kms integrity")
@@ -2396,7 +2405,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH128", b"xxhash128 kms integrity");
         assert_eq!(head.checksum_xxhash128(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "xxhash128_kms.dat", b"xxhash128 kms integrity")
@@ -2445,7 +2457,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH3", b"xxhash3 kms integrity");
         assert_eq!(head.checksum_xxhash3(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "xxhash3_kms.dat", b"xxhash3 kms integrity")
@@ -2494,7 +2509,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH64", b"xxhash64 kms integrity");
         assert_eq!(head.checksum_xxhash64(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "xxhash64_kms.dat", b"xxhash64 kms integrity")
@@ -2539,7 +2557,10 @@ mod tests {
         assert_eq!(stats.sync_warning, 0);
 
         let head = helper.head_object(&bucket, "crc32_kms.dat", None).await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "crc32_kms.dat", b"crc32 kms integrity")
@@ -2584,7 +2605,10 @@ mod tests {
         assert_eq!(stats.sync_warning, 0);
 
         let head = helper.head_object(&bucket, "crc64_kms.dat", None).await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
 
         helper
             .verify_object_content_md5(&bucket, "crc64_kms.dat", b"crc64nvme kms integrity")
@@ -2633,7 +2657,10 @@ mod tests {
 
         let head = helper.head_object(&bucket, "sha256_dsse.dat", None).await;
         assert!(head.checksum_sha256().is_some());
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(&bucket, "sha256_dsse.dat", b"sha256 dsse kms integrity")
@@ -2685,7 +2712,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("SHA512", b"sha512 dsse kms integrity");
         assert_eq!(head.checksum_sha512(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(&bucket, "sha512_dsse.dat", b"sha512 dsse kms integrity")
@@ -2734,7 +2764,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("MD5", b"md5 dsse kms integrity");
         assert_eq!(head.checksum_md5(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(&bucket, "md5_dsse.dat", b"md5 dsse kms integrity")
@@ -2788,7 +2821,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH128", b"xxhash128 dsse kms integrity");
         assert_eq!(head.checksum_xxhash128(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(
@@ -2844,7 +2880,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH3", b"xxhash3 dsse kms integrity");
         assert_eq!(head.checksum_xxhash3(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(&bucket, "xxhash3_dsse.dat", b"xxhash3 dsse kms integrity")
@@ -2896,7 +2935,10 @@ mod tests {
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH64", b"xxhash64 dsse kms integrity");
         assert_eq!(head.checksum_xxhash64(), Some(expected_checksum.as_str()));
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKmsDsse
+        );
 
         helper
             .verify_object_content_md5(&bucket, "xxhash64_dsse.dat", b"xxhash64 dsse kms integrity")
@@ -3349,7 +3391,10 @@ mod tests {
         let head = helper
             .head_object(&bucket2, "sha256_kms_s2s.dat", None)
             .await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         assert!(head.checksum_sha256().is_some());
 
         helper
@@ -3420,7 +3465,10 @@ mod tests {
         let head = helper
             .head_object(&bucket2, "sha512_kms_s2s.dat", None)
             .await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         // Single PutObject: whole-object checksum (no -N suffix).
         let expected_checksum =
             TestHelper::compute_additional_checksum("SHA512", b"s3 to s3 sha512 kms");
@@ -3491,7 +3539,10 @@ mod tests {
         assert_eq!(stats.sync_warning, 0);
 
         let head = helper.head_object(&bucket2, "md5_kms_s2s.dat", None).await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         // Single PutObject: whole-object checksum (no -N suffix).
         let expected_checksum = TestHelper::compute_additional_checksum("MD5", b"s3 to s3 md5 kms");
         assert_eq!(head.checksum_md5(), Some(expected_checksum.as_str()));
@@ -3564,7 +3615,10 @@ mod tests {
         let head = helper
             .head_object(&bucket2, "xxhash128_kms_s2s.dat", None)
             .await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         // Single PutObject: whole-object checksum (no -N suffix).
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH128", b"s3 to s3 xxhash128 kms");
@@ -3638,7 +3692,10 @@ mod tests {
         let head = helper
             .head_object(&bucket2, "xxhash3_kms_s2s.dat", None)
             .await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         // Single PutObject: whole-object checksum (no -N suffix).
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH3", b"s3 to s3 xxhash3 kms");
@@ -3712,7 +3769,10 @@ mod tests {
         let head = helper
             .head_object(&bucket2, "xxhash64_kms_s2s.dat", None)
             .await;
-        assert!(head.server_side_encryption().is_some());
+        assert_eq!(
+            head.server_side_encryption().unwrap(),
+            &ServerSideEncryption::AwsKms
+        );
         // Single PutObject: whole-object checksum (no -N suffix).
         let expected_checksum =
             TestHelper::compute_additional_checksum("XXHASH64", b"s3 to s3 xxhash64 kms");
