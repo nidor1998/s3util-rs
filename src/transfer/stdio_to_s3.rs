@@ -10,7 +10,7 @@ use crate::Config;
 use crate::storage::Storage;
 use crate::storage::checksum::AdditionalChecksum;
 use crate::transfer::TransferOutcome;
-use crate::types::token::PipelineCancellationToken;
+use crate::types::token::{PipelineCancellationToken, is_cancelled_within_grace};
 use crate::types::{ObjectChecksum, SyncStatistics};
 
 /// Read up to `limit` bytes from `reader` into a fresh `Vec<u8>`.
@@ -49,7 +49,14 @@ pub async fn transfer(
     }
 
     let threshold = config.transfer_config.multipart_threshold as usize;
-    let initial = probe_up_to(&mut reader, threshold).await?;
+    // A pending stdin read does not observe cancellation on its own: a
+    // producer that keeps the pipe open (or an interactive terminal) would
+    // hold the probe, and with it Ctrl+C, until input arrives or stdin closes.
+    let initial = tokio::select! {
+        biased;
+        _ = cancellation_token.cancelled() => return Ok(TransferOutcome::default()),
+        result = probe_up_to(&mut reader, threshold) => result?,
+    };
 
     if initial.len() < threshold {
         // Reader hit EOF before the threshold — stays in the in-memory path.
@@ -136,9 +143,19 @@ async fn transfer_buffered(
     target: Storage,
     target_key: &str,
     buffer: Vec<u8>,
-    _cancellation_token: PipelineCancellationToken,
+    cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<TransferOutcome> {
+    // A terminal Ctrl+C also kills the process feeding stdin, so the probe
+    // sees an ordinary EOF and hands over whatever arrived before the signal.
+    // Uploading it would commit a truncated stream as the object.
+    //
+    // The EOF can be seen before the SIGINT handler task has cancelled the
+    // token, so wait a short grace period for it before committing.
+    if is_cancelled_within_grace(&cancellation_token).await {
+        return Ok(TransferOutcome::default());
+    }
+
     let target_clone = dyn_clone::clone_box(&*target);
 
     let source_size = buffer.len() as u64;
@@ -162,40 +179,32 @@ async fn transfer_buffered(
 
     // Populate the synthetic GetObjectOutput's checksum field so
     // S3Storage::put_object can extract it via get_additional_checksum().
-    let (checksum_sha256, checksum_sha1, checksum_crc32, checksum_crc32_c, checksum_crc64_nvme) =
-        match config.additional_checksum_algorithm.as_ref() {
-            Some(ChecksumAlgorithm::Sha256) => {
-                (source_additional_checksum.clone(), None, None, None, None)
-            }
-            Some(ChecksumAlgorithm::Sha1) => {
-                (None, source_additional_checksum.clone(), None, None, None)
-            }
-            Some(ChecksumAlgorithm::Crc32) => {
-                (None, None, source_additional_checksum.clone(), None, None)
-            }
-            Some(ChecksumAlgorithm::Crc32C) => {
-                (None, None, None, source_additional_checksum.clone(), None)
-            }
-            Some(ChecksumAlgorithm::Crc64Nvme) => {
-                (None, None, None, None, source_additional_checksum.clone())
-            }
-            _ => (None, None, None, None, None),
-        };
-
-    let byte_stream = ByteStream::from(buffer);
+    // Only the field of the configured algorithm is set.
+    let checksum_of = |algorithm: ChecksumAlgorithm| {
+        if config.additional_checksum_algorithm.as_ref() == Some(&algorithm) {
+            source_additional_checksum.clone()
+        } else {
+            None
+        }
+    };
 
     let get_object_output = GetObjectOutput::builder()
-        .set_body(Some(byte_stream))
         .set_content_length(Some(source_size as i64))
         .set_content_type(config.content_type.clone())
         .set_last_modified(Some(DateTime::from_secs(
             time::OffsetDateTime::now_utc().unix_timestamp(),
         )))
-        .set_checksum_sha256(checksum_sha256)
-        .set_checksum_sha1(checksum_sha1)
-        .set_checksum_crc32(checksum_crc32)
-        .set_checksum_crc32_c(checksum_crc32_c)
-        .set_checksum_crc64_nvme(checksum_crc64_nvme)
+        .set_checksum_sha256(checksum_of(ChecksumAlgorithm::Sha256))
+        .set_checksum_sha1(checksum_of(ChecksumAlgorithm::Sha1))
+        .set_checksum_crc32(checksum_of(ChecksumAlgorithm::Crc32))
+        .set_checksum_crc32_c(checksum_of(ChecksumAlgorithm::Crc32C))
+        .set_checksum_crc64_nvme(checksum_of(ChecksumAlgorithm::Crc64Nvme))
+        .set_checksum_sha512(checksum_of(ChecksumAlgorithm::Sha512))
+        .set_checksum_md5(checksum_of(ChecksumAlgorithm::Md5))
+        .set_checksum_xxhash128(checksum_of(ChecksumAlgorithm::Xxhash128))
+        .set_checksum_xxhash3(checksum_of(ChecksumAlgorithm::Xxhash3))
+        .set_checksum_xxhash64(checksum_of(ChecksumAlgorithm::Xxhash64))
+        .set_body(Some(ByteStream::from(buffer)))
         .build();
 
     let tagging = if config.disable_tagging {
@@ -244,9 +253,14 @@ async fn transfer_buffered(
 }
 
 /// Compute the additional checksum over an in-memory buffer using chunksize-aware
-/// semantics identical to `generate_checksum_from_path_with_chunksize`:
-/// if the total size is below `multipart_threshold`, return a single-part
-/// checksum; otherwise return the multipart composite checksum.
+/// semantics: if the total size is below `multipart_threshold`, return a
+/// single-part checksum; otherwise return the multipart composite checksum (for
+/// CRC32/CRC32C with `full_object_checksum`, the full object checksum).
+///
+/// This matches `generate_checksum_from_path_with_chunksize` for every
+/// combination config validation allows. That function additionally avoids a
+/// composite for a hash algorithm (SHA, MD5, XXHASH) with `full_object_checksum`,
+/// a combination `--full-object-checksum` rejects, so it never reaches here.
 fn compute_source_checksum(
     buffer: &[u8],
     algorithm: ChecksumAlgorithm,
@@ -336,6 +350,11 @@ mod checksum_invariant_tests {
             ChecksumAlgorithm::Crc32,
             ChecksumAlgorithm::Crc32C,
             ChecksumAlgorithm::Crc64Nvme,
+            ChecksumAlgorithm::Sha512,
+            ChecksumAlgorithm::Md5,
+            ChecksumAlgorithm::Xxhash128,
+            ChecksumAlgorithm::Xxhash3,
+            ChecksumAlgorithm::Xxhash64,
         ]
     }
 
@@ -444,9 +463,9 @@ mod checksum_invariant_tests {
             single.update(&buffer);
             let single_part = single.finalize();
             // For algorithms where the composite differs from a single-part checksum
-            // (SHA256/SHA1/CRC32/CRC32C with composite enabled), the boundary must
-            // produce the multipart form, not the single-part one. Crc64Nvme is
-            // always full-object and will match — that's expected.
+            // (every hash algorithm, and CRC32/CRC32C with composite enabled), the
+            // boundary must produce the multipart form, not the single-part one.
+            // Crc64Nvme is always full-object and will match — that's expected.
             if !matches!(algo, ChecksumAlgorithm::Crc64Nvme) {
                 assert_ne!(
                     multipart, single_part,
@@ -847,6 +866,55 @@ mod if_none_match_tests {
 
         let streaming = run(config_with(false, 1024), vec![0x42; 4096]).await;
         assert_eq!(streaming.put_object_stream_if_none_match, Some(None));
+    }
+
+    /// Reader that cancels the token when it reports EOF — what a terminal
+    /// Ctrl+C looks like from here: the signal kills the process feeding
+    /// stdin, so the read side sees an ordinary end of data.
+    struct CancelAtEof {
+        inner: std::io::Cursor<Vec<u8>>,
+        token: crate::types::token::PipelineCancellationToken,
+    }
+
+    impl tokio::io::AsyncRead for CancelAtEof {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let before = buf.filled().len();
+            let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+            if buf.filled().len() == before {
+                self.token.cancel();
+            }
+            result
+        }
+    }
+
+    /// Ctrl+C on `producer | s3util cp - s3://…` ends stdin early. The bytes
+    /// read so far must not be uploaded as if they were the whole stream.
+    #[tokio::test]
+    async fn buffered_stdin_cut_short_by_cancellation_is_not_uploaded() {
+        let config = config_with(false, 8 * 1024 * 1024);
+        let target = RecordingTarget::new();
+        let handle = target.clone();
+        let storage: Storage = Box::new(target);
+        let (tx, _rx) = async_channel::unbounded::<SyncStatistics>();
+        let token = create_pipeline_cancellation_token();
+        let reader = CancelAtEof {
+            inner: std::io::Cursor::new(vec![0x41; 1024]),
+            token: token.clone(),
+        };
+
+        transfer(&config, storage, "k", reader, token, tx)
+            .await
+            .unwrap();
+
+        assert_eq!(
+            handle.recorded().put_object_if_none_match,
+            None,
+            "a stream truncated by cancellation must not be uploaded"
+        );
     }
 
     #[tokio::test]

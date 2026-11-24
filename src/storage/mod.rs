@@ -210,6 +210,36 @@ pub trait StorageTrait: DynClone {
     fn set_warning(&self);
 }
 
+/// Fail when a later read of the source returns a different ETag than the
+/// one the transfer started from.
+///
+/// On a versioned bucket every read is pinned to the version the first HEAD
+/// saw. An unversioned bucket has no version to pin, so each ranged GET reads
+/// "latest": an overwrite landing mid-transfer would otherwise interleave the
+/// bytes of two different objects (or truncate the new one to the old length).
+/// The ETag changes whenever the object is rewritten — under SSE-KMS and SSE-C
+/// too, where it is not an MD5 but is still unique per write — so comparing it
+/// on every response catches the overwrite before the copy is committed.
+///
+/// Either side being absent skips the check: a local/stdin source has no
+/// ETag, and a store that omits it on a response cannot be judged.
+pub fn check_source_e_tag_unchanged(
+    key: &str,
+    expected_e_tag: Option<&str>,
+    actual_e_tag: Option<&str>,
+) -> Result<()> {
+    if let (Some(expected), Some(actual)) = (expected_e_tag, actual_e_tag)
+        && expected != actual
+    {
+        return Err(anyhow!(
+            "source object was modified during the transfer: key={key}, \
+             expected e_tag={expected}, actual e_tag={actual}. \
+             the transfer was stopped so the two contents are not mixed; retry it."
+        ));
+    }
+    Ok(())
+}
+
 #[rustfmt::skip] // For coverage tool incorrectness
 pub fn convert_to_buf_byte_stream_with_callback<R>(
     byte_stream: R,
@@ -291,6 +321,19 @@ pub fn convert_head_to_get_object_output(
         )
         .set_checksum_sha1(head_object_output.checksum_sha1().map(|s| s.to_string()))
         .set_checksum_sha256(head_object_output.checksum_sha256().map(|s| s.to_string()))
+        .set_checksum_sha512(head_object_output.checksum_sha512().map(|s| s.to_string()))
+        .set_checksum_md5(head_object_output.checksum_md5().map(|s| s.to_string()))
+        .set_checksum_xxhash128(
+            head_object_output
+                .checksum_xxhash128()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash3(head_object_output.checksum_xxhash3().map(|s| s.to_string()))
+        .set_checksum_xxhash64(
+            head_object_output
+                .checksum_xxhash64()
+                .map(|s| s.to_string()),
+        )
         .set_checksum_type(head_object_output.checksum_type().cloned())
         .set_content_disposition(
             head_object_output
@@ -384,6 +427,41 @@ pub fn convert_copy_to_put_object_output(
                 .checksum_sha256()
                 .map(|s| s.to_string()),
         )
+        .set_checksum_sha512(
+            copy_object_output
+                .copy_object_result()
+                .unwrap()
+                .checksum_sha512()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_md5(
+            copy_object_output
+                .copy_object_result()
+                .unwrap()
+                .checksum_md5()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash128(
+            copy_object_output
+                .copy_object_result()
+                .unwrap()
+                .checksum_xxhash128()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash3(
+            copy_object_output
+                .copy_object_result()
+                .unwrap()
+                .checksum_xxhash3()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash64(
+            copy_object_output
+                .copy_object_result()
+                .unwrap()
+                .checksum_xxhash64()
+                .map(|s| s.to_string()),
+        )
         .set_checksum_type(
             copy_object_output
                 .copy_object_result()
@@ -472,6 +550,41 @@ pub fn convert_copy_to_upload_part_output(
                 .copy_part_result()
                 .unwrap()
                 .checksum_sha256()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_sha512(
+            upload_part_copy_output
+                .copy_part_result()
+                .unwrap()
+                .checksum_sha512()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_md5(
+            upload_part_copy_output
+                .copy_part_result()
+                .unwrap()
+                .checksum_md5()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash128(
+            upload_part_copy_output
+                .copy_part_result()
+                .unwrap()
+                .checksum_xxhash128()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash3(
+            upload_part_copy_output
+                .copy_part_result()
+                .unwrap()
+                .checksum_xxhash3()
+                .map(|s| s.to_string()),
+        )
+        .set_checksum_xxhash64(
+            upload_part_copy_output
+                .copy_part_result()
+                .unwrap()
+                .checksum_xxhash64()
                 .map(|s| s.to_string()),
         )
         .set_sse_customer_algorithm(
@@ -575,6 +688,19 @@ pub(crate) mod test_support {
 mod tests {
     use super::*;
     use tracing_subscriber::EnvFilter;
+
+    #[test]
+    fn check_source_e_tag_unchanged_test() {
+        // Same object.
+        assert!(check_source_e_tag_unchanged("k", Some("\"a\""), Some("\"a\"")).is_ok());
+        // Overwritten between two reads.
+        let err = check_source_e_tag_unchanged("k", Some("\"a\""), Some("\"b\"")).unwrap_err();
+        assert!(err.to_string().contains("modified during the transfer"));
+        // A local/stdin source has no ETag; a store may omit it on a response.
+        assert!(check_source_e_tag_unchanged("k", None, Some("\"b\"")).is_ok());
+        assert!(check_source_e_tag_unchanged("k", Some("\"a\""), None).is_ok());
+        assert!(check_source_e_tag_unchanged("k", None, None).is_ok());
+    }
 
     #[test]
     fn get_range_from_content_range_test() {
@@ -741,6 +867,127 @@ mod tests {
         assert_eq!(got.content_length(), Some(100));
         assert_eq!(got.content_range(), Some("bytes 100-199/1000"));
         assert_eq!(got.e_tag(), Some("\"abc\""));
+    }
+
+    // Every checksum field has a distinct value, so copying from a wrong field is detected.
+    #[test]
+    fn convert_head_to_get_object_output_copies_every_checksum() {
+        let head_object_output = HeadObjectOutput::builder()
+            .checksum_crc32("crc32")
+            .checksum_crc32_c("crc32c")
+            .checksum_crc64_nvme("crc64nvme")
+            .checksum_sha1("sha1")
+            .checksum_sha256("sha256")
+            .checksum_sha512("sha512")
+            .checksum_md5("md5")
+            .checksum_xxhash128("xxhash128")
+            .checksum_xxhash3("xxhash3")
+            .checksum_xxhash64("xxhash64")
+            .checksum_type(aws_sdk_s3::types::ChecksumType::Composite)
+            .build();
+
+        let output = convert_head_to_get_object_output(head_object_output, None);
+
+        assert_eq!(output.checksum_crc32(), Some("crc32"));
+        assert_eq!(output.checksum_crc32_c(), Some("crc32c"));
+        assert_eq!(output.checksum_crc64_nvme(), Some("crc64nvme"));
+        assert_eq!(output.checksum_sha1(), Some("sha1"));
+        assert_eq!(output.checksum_sha256(), Some("sha256"));
+        assert_eq!(output.checksum_sha512(), Some("sha512"));
+        assert_eq!(output.checksum_md5(), Some("md5"));
+        assert_eq!(output.checksum_xxhash128(), Some("xxhash128"));
+        assert_eq!(output.checksum_xxhash3(), Some("xxhash3"));
+        assert_eq!(output.checksum_xxhash64(), Some("xxhash64"));
+        assert_eq!(
+            output.checksum_type(),
+            Some(&aws_sdk_s3::types::ChecksumType::Composite)
+        );
+
+        // Absent checksums stay absent.
+        let output = convert_head_to_get_object_output(HeadObjectOutput::builder().build(), None);
+        assert!(output.checksum_sha512().is_none());
+        assert!(output.checksum_md5().is_none());
+        assert!(output.checksum_xxhash128().is_none());
+        assert!(output.checksum_xxhash3().is_none());
+        assert!(output.checksum_xxhash64().is_none());
+    }
+
+    #[test]
+    fn convert_copy_to_put_object_output_copies_every_checksum() {
+        let copy_object_output = CopyObjectOutput::builder()
+            .copy_object_result(
+                aws_sdk_s3::types::CopyObjectResult::builder()
+                    .e_tag("etag")
+                    .checksum_crc32("crc32")
+                    .checksum_crc32_c("crc32c")
+                    .checksum_crc64_nvme("crc64nvme")
+                    .checksum_sha1("sha1")
+                    .checksum_sha256("sha256")
+                    .checksum_sha512("sha512")
+                    .checksum_md5("md5")
+                    .checksum_xxhash128("xxhash128")
+                    .checksum_xxhash3("xxhash3")
+                    .checksum_xxhash64("xxhash64")
+                    .checksum_type(aws_sdk_s3::types::ChecksumType::Composite)
+                    .build(),
+            )
+            .version_id("version1")
+            .build();
+
+        let output = convert_copy_to_put_object_output(copy_object_output, 1234);
+
+        assert_eq!(output.e_tag(), Some("etag"));
+        assert_eq!(output.size(), Some(1234));
+        assert_eq!(output.version_id(), Some("version1"));
+        assert_eq!(output.checksum_crc32(), Some("crc32"));
+        assert_eq!(output.checksum_crc32_c(), Some("crc32c"));
+        assert_eq!(output.checksum_crc64_nvme(), Some("crc64nvme"));
+        assert_eq!(output.checksum_sha1(), Some("sha1"));
+        assert_eq!(output.checksum_sha256(), Some("sha256"));
+        assert_eq!(output.checksum_sha512(), Some("sha512"));
+        assert_eq!(output.checksum_md5(), Some("md5"));
+        assert_eq!(output.checksum_xxhash128(), Some("xxhash128"));
+        assert_eq!(output.checksum_xxhash3(), Some("xxhash3"));
+        assert_eq!(output.checksum_xxhash64(), Some("xxhash64"));
+        assert_eq!(
+            output.checksum_type(),
+            Some(&aws_sdk_s3::types::ChecksumType::Composite)
+        );
+    }
+
+    #[test]
+    fn convert_copy_to_upload_part_output_copies_every_checksum() {
+        let upload_part_copy_output = UploadPartCopyOutput::builder()
+            .copy_part_result(
+                aws_sdk_s3::types::CopyPartResult::builder()
+                    .e_tag("etag")
+                    .checksum_crc32("crc32")
+                    .checksum_crc32_c("crc32c")
+                    .checksum_crc64_nvme("crc64nvme")
+                    .checksum_sha1("sha1")
+                    .checksum_sha256("sha256")
+                    .checksum_sha512("sha512")
+                    .checksum_md5("md5")
+                    .checksum_xxhash128("xxhash128")
+                    .checksum_xxhash3("xxhash3")
+                    .checksum_xxhash64("xxhash64")
+                    .build(),
+            )
+            .build();
+
+        let output = convert_copy_to_upload_part_output(upload_part_copy_output);
+
+        assert_eq!(output.e_tag(), Some("etag"));
+        assert_eq!(output.checksum_crc32(), Some("crc32"));
+        assert_eq!(output.checksum_crc32_c(), Some("crc32c"));
+        assert_eq!(output.checksum_crc64_nvme(), Some("crc64nvme"));
+        assert_eq!(output.checksum_sha1(), Some("sha1"));
+        assert_eq!(output.checksum_sha256(), Some("sha256"));
+        assert_eq!(output.checksum_sha512(), Some("sha512"));
+        assert_eq!(output.checksum_md5(), Some("md5"));
+        assert_eq!(output.checksum_xxhash128(), Some("xxhash128"));
+        assert_eq!(output.checksum_xxhash3(), Some("xxhash3"));
+        assert_eq!(output.checksum_xxhash64(), Some("xxhash64"));
     }
 
     #[test]

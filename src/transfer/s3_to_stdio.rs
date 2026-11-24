@@ -530,6 +530,7 @@ async fn ranged_get_into_buffer(
     size: u64,
     config: &Config,
     version_id: Option<String>,
+    expected_e_tag: Option<&str>,
     cancellation_token: PipelineCancellationToken,
 ) -> Result<Vec<u8>> {
     // Race the GET issue itself against cancellation — the SDK's send()
@@ -550,6 +551,15 @@ async fn ranged_get_into_buffer(
     };
 
     first_chunk::validate_content_range(&get_object_output, range)?;
+
+    // An unversioned source cannot be pinned to a version, so make sure this
+    // chunk still belongs to the object the HEAD described before any of its
+    // bytes can reach stdout.
+    crate::storage::check_source_e_tag_unchanged(
+        source_key,
+        expected_e_tag,
+        get_object_output.e_tag(),
+    )?;
 
     // Read the raw body directly (no AsyncReadWithCallback wrapper).
     //
@@ -862,6 +872,7 @@ async fn transfer_parallel(
         let stats_sender = stats_sender.clone();
         let config = config.clone();
         let version_id = effective_version_id.clone();
+        let expected_e_tag = source_e_tag.clone();
         let source_key = source_key.to_string();
 
         workers.push(parallel_worker(
@@ -874,6 +885,7 @@ async fn transfer_parallel(
             source_key,
             config,
             version_id,
+            expected_e_tag,
             cancellation_token,
             stats_sender,
         ));
@@ -926,6 +938,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
     source_key: String,
     config: Config,
     version_id: Option<String>,
+    expected_e_tag: Option<String>,
     cancellation_token: PipelineCancellationToken,
     stats_sender: Sender<SyncStatistics>,
 ) -> Result<()> {
@@ -974,6 +987,7 @@ async fn parallel_worker<W: AsyncWrite + Unpin + Send>(
             size,
             &config,
             version_id.clone(),
+            expected_e_tag.as_deref(),
             cancellation_token.clone(),
         )
         .await;
@@ -1297,7 +1311,9 @@ mod tests {
     use aws_sdk_s3::operation::put_object::PutObjectOutput;
     use aws_sdk_s3::operation::put_object_tagging::PutObjectTaggingOutput;
     use aws_sdk_s3::primitives::{ByteStream, DateTime};
-    use aws_sdk_s3::types::{ChecksumMode, ObjectPart, ServerSideEncryption, Tagging};
+    use aws_sdk_s3::types::{
+        ChecksumAlgorithm, ChecksumMode, ObjectPart, ServerSideEncryption, Tagging,
+    };
     use leaky_bucket::RateLimiter;
     use std::collections::HashMap;
     use std::io;
@@ -1357,6 +1373,8 @@ mod tests {
         e_tag: Option<String>,
         sse: Option<ServerSideEncryption>,
         checksum_sha256: Option<String>,
+        // A checksum of any other algorithm, returned in its own field.
+        checksum_other: Option<(ChecksumAlgorithm, String)>,
         is_express_onezone: bool,
         head_should_fail: bool,
         head_first_part_size: Option<i64>,
@@ -1409,6 +1427,7 @@ mod tests {
                     e_tag: None,
                     sse: None,
                     checksum_sha256: None,
+                    checksum_other: None,
                     is_express_onezone: false,
                     head_should_fail: false,
                     head_first_part_size: None,
@@ -1436,6 +1455,11 @@ mod tests {
         }
         fn with_sha256(mut self, sha: &str) -> Self {
             Arc::get_mut(&mut self.inner).unwrap().checksum_sha256 = Some(sha.to_string());
+            self
+        }
+        fn with_checksum(mut self, algorithm: ChecksumAlgorithm, value: &str) -> Self {
+            Arc::get_mut(&mut self.inner).unwrap().checksum_other =
+                Some((algorithm, value.to_string()));
             self
         }
         fn fail_head(mut self) -> Self {
@@ -1623,6 +1647,21 @@ mod tests {
             if let Some(ref s) = self.inner.checksum_sha256 {
                 builder = builder.checksum_sha256(s.clone());
             }
+            if let Some((ref algorithm, ref value)) = self.inner.checksum_other {
+                let value = value.clone();
+                builder = match algorithm {
+                    ChecksumAlgorithm::Crc32 => builder.checksum_crc32(value),
+                    ChecksumAlgorithm::Crc32C => builder.checksum_crc32_c(value),
+                    ChecksumAlgorithm::Crc64Nvme => builder.checksum_crc64_nvme(value),
+                    ChecksumAlgorithm::Sha1 => builder.checksum_sha1(value),
+                    ChecksumAlgorithm::Sha512 => builder.checksum_sha512(value),
+                    ChecksumAlgorithm::Md5 => builder.checksum_md5(value),
+                    ChecksumAlgorithm::Xxhash128 => builder.checksum_xxhash128(value),
+                    ChecksumAlgorithm::Xxhash3 => builder.checksum_xxhash3(value),
+                    ChecksumAlgorithm::Xxhash64 => builder.checksum_xxhash64(value),
+                    _ => unreachable!("unsupported mock checksum {algorithm:?}"),
+                };
+            }
             if let Some(ref sse) = self.inner.sse {
                 builder = builder.server_side_encryption(sse.clone());
             }
@@ -1661,6 +1700,21 @@ mod tests {
             }
             if let Some(ref s) = self.inner.checksum_sha256 {
                 builder = builder.checksum_sha256(s.clone());
+            }
+            if let Some((ref algorithm, ref value)) = self.inner.checksum_other {
+                let value = value.clone();
+                builder = match algorithm {
+                    ChecksumAlgorithm::Crc32 => builder.checksum_crc32(value),
+                    ChecksumAlgorithm::Crc32C => builder.checksum_crc32_c(value),
+                    ChecksumAlgorithm::Crc64Nvme => builder.checksum_crc64_nvme(value),
+                    ChecksumAlgorithm::Sha1 => builder.checksum_sha1(value),
+                    ChecksumAlgorithm::Sha512 => builder.checksum_sha512(value),
+                    ChecksumAlgorithm::Md5 => builder.checksum_md5(value),
+                    ChecksumAlgorithm::Xxhash128 => builder.checksum_xxhash128(value),
+                    ChecksumAlgorithm::Xxhash3 => builder.checksum_xxhash3(value),
+                    ChecksumAlgorithm::Xxhash64 => builder.checksum_xxhash64(value),
+                    _ => unreachable!("unsupported mock checksum {algorithm:?}"),
+                };
             }
             Ok(builder.build())
         }
@@ -2531,6 +2585,226 @@ mod tests {
         STANDARD.encode(h.finalize())
     }
 
+    const NEW_CHECKSUM_ALGORITHMS: [ChecksumAlgorithm; 5] = [
+        ChecksumAlgorithm::Sha512,
+        ChecksumAlgorithm::Md5,
+        ChecksumAlgorithm::Xxhash128,
+        ChecksumAlgorithm::Xxhash3,
+        ChecksumAlgorithm::Xxhash64,
+    ];
+
+    /// The raw digest of `data`, calculated with the hash crates directly (not
+    /// with `AdditionalChecksum`). XXHash values are big-endian, as S3 encodes them.
+    fn raw_digest(algorithm: &ChecksumAlgorithm, data: &[u8]) -> Vec<u8> {
+        use sha2::Digest;
+        match algorithm {
+            ChecksumAlgorithm::Sha512 => sha2::Sha512::digest(data).to_vec(),
+            ChecksumAlgorithm::Md5 => md5::compute(data).0.to_vec(),
+            ChecksumAlgorithm::Xxhash128 => {
+                twox_hash::XxHash3_128::oneshot(data).to_be_bytes().to_vec()
+            }
+            ChecksumAlgorithm::Xxhash3 => {
+                twox_hash::XxHash3_64::oneshot(data).to_be_bytes().to_vec()
+            }
+            ChecksumAlgorithm::Xxhash64 => {
+                twox_hash::XxHash64::oneshot(0, data).to_be_bytes().to_vec()
+            }
+            _ => unreachable!("{algorithm:?}"),
+        }
+    }
+
+    /// `{base64(H(H(part1) || ... || H(partN)))}-{N}`, the S3 composite checksum.
+    fn compute_composite(algorithm: &ChecksumAlgorithm, parts: &[&[u8]]) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        let concat: Vec<u8> = parts
+            .iter()
+            .flat_map(|part| raw_digest(algorithm, part))
+            .collect();
+        format!(
+            "{}-{}",
+            STANDARD.encode(raw_digest(algorithm, &concat)),
+            parts.len()
+        )
+    }
+
+    fn compute_full(algorithm: &ChecksumAlgorithm, body: &[u8]) -> String {
+        use base64::{Engine as _, engine::general_purpose::STANDARD};
+        STANDARD.encode(raw_digest(algorithm, body))
+    }
+
+    // `--enable-additional-checksum` detects the new algorithms on the source
+    // and verifies the downloaded bytes against them (multipart composite).
+    #[tokio::test]
+    async fn emits_checksum_verified_for_new_algorithms_multipart_composite() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 5 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..2 * chunksize + 12_345)
+            .map(|i| (i % 193) as u8)
+            .collect();
+        let parts: Vec<&[u8]> = body.chunks(chunksize).collect();
+
+        // Both the parallel and the serial read paths.
+        for max_parallel in [4, 1] {
+            for algorithm in NEW_CHECKSUM_ALGORITHMS {
+                let composite = compute_composite(&algorithm, &parts);
+                let mock =
+                    MockSource::new(body.clone()).with_checksum(algorithm.clone(), &composite);
+                let mut config = test_config(max_parallel, 5 * 1024 * 1024, chunksize as u64);
+                config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+                let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+                assert!(result.is_ok(), "{algorithm:?}/{max_parallel}: {result:?}");
+                assert_eq!(captured, body);
+                assert!(
+                    events.iter().any(
+                        |e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")
+                    ),
+                    "{algorithm:?}/{max_parallel}: expected ChecksumVerified, got {events:?}"
+                );
+                assert!(!mock.warning_set(), "{algorithm:?}/{max_parallel}");
+            }
+        }
+    }
+
+    /// The number of GETs `transfer` issues for a body: one ranged GET per
+    /// chunk on the parallel path, a single non-ranged GET on the serial path.
+    /// Asserting it proves which read path a test really took (the parallel
+    /// path falls back to serial for a body under the multipart threshold).
+    fn expected_get_calls(max_parallel: usize, body_len: usize, chunksize: usize) -> u32 {
+        if max_parallel > 1 {
+            body_len.div_ceil(chunksize) as u32
+        } else {
+            1
+        }
+    }
+
+    // A single-part source (no "-N" suffix) is verified with the digest of the
+    // whole body, on both read paths. On the parallel path the body spans
+    // several ranged GETs, which must still be hashed as one part.
+    #[tokio::test]
+    async fn emits_checksum_verified_for_new_algorithms_single_part() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..350_000).map(|i| (i % 191) as u8).collect();
+
+        for max_parallel in [4, 1] {
+            // The parallel path needs the body at or above the threshold. The
+            // serial run keeps the threshold above the body, so a body larger
+            // than one chunk but under the threshold is covered there.
+            let threshold = if max_parallel > 1 {
+                chunksize as u64
+            } else {
+                8 * 1024 * 1024
+            };
+
+            for algorithm in NEW_CHECKSUM_ALGORITHMS {
+                let full = compute_full(&algorithm, &body);
+                let mock = MockSource::new(body.clone()).with_checksum(algorithm.clone(), &full);
+                let mut config = test_config(max_parallel, threshold, chunksize as u64);
+                config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+                let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+                assert!(result.is_ok(), "{algorithm:?}/{max_parallel}: {result:?}");
+                assert_eq!(captured, body);
+                assert_eq!(
+                    mock.get_calls(),
+                    expected_get_calls(max_parallel, body.len(), chunksize),
+                    "{algorithm:?}/{max_parallel}: unexpected read path"
+                );
+                assert!(
+                    events.iter().any(
+                        |e| matches!(e, SyncStatistics::ChecksumVerified { key } if key == "k")
+                    ),
+                    "{algorithm:?}/{max_parallel}: expected ChecksumVerified, got {events:?}"
+                );
+                assert!(!mock.warning_set(), "{algorithm:?}/{max_parallel}");
+            }
+        }
+    }
+
+    // A wrong composite checksum of a new algorithm is reported as a mismatch
+    // (a soft warning, since it could be a chunksize difference), on both read
+    // paths.
+    #[tokio::test]
+    async fn warns_on_new_algorithm_multipart_checksum_mismatch() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 5 * 1024 * 1024usize;
+        let body: Vec<u8> = (0..2 * chunksize).map(|i| (i % 97) as u8).collect();
+        let parts: Vec<&[u8]> = body.chunks(chunksize).collect();
+
+        // The composite of different data: well-formed but wrong.
+        let other: Vec<u8> = body.iter().map(|b| b.wrapping_add(1)).collect();
+        let other_parts: Vec<&[u8]> = other.chunks(chunksize).collect();
+
+        for max_parallel in [4, 1] {
+            for algorithm in NEW_CHECKSUM_ALGORITHMS {
+                let wrong = compute_composite(&algorithm, &other_parts);
+                assert_ne!(wrong, compute_composite(&algorithm, &parts));
+
+                let mock = MockSource::new(body.clone()).with_checksum(algorithm.clone(), &wrong);
+                let mut config = test_config(max_parallel, 5 * 1024 * 1024, chunksize as u64);
+                config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+                let (result, captured, events) = run_transfer(config, mock.clone()).await;
+
+                assert!(result.is_ok(), "{algorithm:?}/{max_parallel}: {result:?}");
+                assert_eq!(captured, body);
+                assert_eq!(
+                    mock.get_calls(),
+                    expected_get_calls(max_parallel, body.len(), chunksize),
+                    "{algorithm:?}/{max_parallel}: unexpected read path"
+                );
+                assert!(
+                    events.iter().any(
+                        |e| matches!(e, SyncStatistics::ChecksumMismatch { key } if key == "k")
+                    ),
+                    "{algorithm:?}/{max_parallel}: expected ChecksumMismatch, got {events:?}"
+                );
+                assert!(mock.warning_set(), "{algorithm:?}/{max_parallel}");
+            }
+        }
+    }
+
+    // A wrong single-part checksum of a new algorithm cannot be a chunksize
+    // artifact, so it is a hard error, on both read paths.
+    #[tokio::test]
+    async fn returns_err_on_new_algorithm_single_part_checksum_mismatch() {
+        use aws_sdk_s3::types::ChecksumMode;
+        let chunksize = 100_000usize;
+        let body: Vec<u8> = (0..250_000).map(|i| (i % 191) as u8).collect();
+
+        for max_parallel in [4, 1] {
+            // As in `emits_checksum_verified_for_new_algorithms_single_part`.
+            let threshold = if max_parallel > 1 {
+                chunksize as u64
+            } else {
+                8 * 1024 * 1024
+            };
+
+            for algorithm in NEW_CHECKSUM_ALGORITHMS {
+                let wrong = compute_full(&algorithm, b"different data");
+                let mock = MockSource::new(body.clone()).with_checksum(algorithm.clone(), &wrong);
+                let mut config = test_config(max_parallel, threshold, chunksize as u64);
+                config.additional_checksum_mode = Some(ChecksumMode::Enabled);
+
+                let (result, _captured, _events) = run_transfer(config, mock.clone()).await;
+
+                let err = result.unwrap_err();
+                assert!(
+                    err.to_string().contains("additional checksum mismatch"),
+                    "{algorithm:?}/{max_parallel}: expected hard error, got: {err:?}"
+                );
+                assert_eq!(
+                    mock.get_calls(),
+                    expected_get_calls(max_parallel, body.len(), chunksize),
+                    "{algorithm:?}/{max_parallel}: unexpected read path"
+                );
+            }
+        }
+    }
+
     #[tokio::test]
     async fn parallel_emits_checksum_verified_for_multipart_composite() {
         use aws_sdk_s3::types::ChecksumMode;
@@ -3394,6 +3668,7 @@ mod tests {
             5,
             &config,
             None,
+            None,
             create_pipeline_cancellation_token(),
         )
         .await
@@ -3402,6 +3677,50 @@ mod tests {
             err.to_string().contains("short read"),
             "unexpected error: {err:#}"
         );
+    }
+
+    /// On an unversioned bucket a chunk GET reads "latest". If the object was
+    /// overwritten after the HEAD, the chunk carries a different ETag and must
+    /// be rejected before its bytes can be written to stdout.
+    #[tokio::test]
+    async fn ranged_get_rejects_chunk_from_an_overwritten_source() {
+        let mock = MockSource::new(vec![0x42; 100]).with_e_tag("\"new-object\"");
+        let config = test_config(2, 4, 4);
+        let err = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-99",
+            100,
+            &config,
+            None,
+            Some("\"old-object\""),
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            err.to_string().contains("modified during the transfer"),
+            "unexpected error: {err:#}"
+        );
+    }
+
+    #[tokio::test]
+    async fn ranged_get_accepts_chunk_with_the_expected_e_tag() {
+        let mock = MockSource::new(vec![0x42; 100]).with_e_tag("\"same\"");
+        let config = test_config(2, 4, 4);
+        let buf = ranged_get_into_buffer(
+            &mock,
+            "k",
+            "bytes=0-99",
+            100,
+            &config,
+            None,
+            Some("\"same\""),
+            create_pipeline_cancellation_token(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(buf, vec![0x42; 100]);
     }
 
     #[tokio::test]
@@ -3417,6 +3736,7 @@ mod tests {
             "bytes=0-99",
             100,
             &config,
+            None,
             None,
             create_pipeline_cancellation_token(),
         )

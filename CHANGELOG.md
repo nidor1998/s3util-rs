@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.12.0] - 2026-11-24
+
+Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional checksum algorithms.
+
+### Added
+
+- `--additional-checksum-algorithm` (`cp`, `mv`) now accepts `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64`
+  in addition to `CRC32`, `CRC32C`, `CRC64NVME`, `SHA1` and `SHA256`. The new algorithms are hash algorithms, so a
+  multipart upload gets a composite checksum (`<base64>-<number of parts>`), and, like `SHA1`/`SHA256`, they cannot be
+  combined with `--full-object-checksum`. Uploads from a local file and from stdin are verified end to end against
+  the checksum S3 returns, as for the existing algorithms. S3-to-S3 copies verify the target against the source's
+  checksum of the same algorithm when the source has one.
+- With `--enable-additional-checksum`, S3-to-local and S3-to-stdout transfers now detect and verify a `SHA512`, `MD5`,
+  `XXHASH128`, `XXHASH3` or `XXHASH64` checksum on the source object. Previously such a checksum was ignored: the
+  object was verified with the `CRC64NVME` checksum S3 may have added alongside it, or with no additional checksum at
+  all. As with `SHA256`, a mismatch in a multipart object's composite checksum is reported as a warning, because a
+  different chunk size can explain it; a mismatch in a single-part object is an error.
+
+### Fixed
+
+- `cp - s3://...` no longer uploads a truncated object when it is interrupted with Ctrl+C. A terminal Ctrl+C also
+  stops the process writing to stdin, so `s3util` saw an ordinary end of input and uploaded the bytes read so far,
+  then exited 130. The multipart upload is now aborted, and a small (single-part) upload is not sent.
+- `cp - s3://...` now stops on Ctrl+C while it is waiting for input. When the process writing to stdin stayed alive
+  and kept the pipe open (for example `kill -INT` on `s3util` alone, a producer that ignores `SIGINT`, or input typed
+  at a terminal), the signal had no effect until more input arrived or stdin was closed. `s3util` now aborts the
+  multipart upload, if one was started, and exits 130 without waiting for stdin.
+- `cp` and `mv` now fail when the source S3 object is overwritten during the transfer, instead of copying a mix of
+  the old and new objects. On a versioned bucket every read was already pinned to one version; on an unversioned
+  bucket it was not, and the ETag comparison that could notice the mix is only a warning and is skipped for
+  SSE-KMS, SSE-C and Express One Zone. Every ranged `GetObject` must now return the ETag of the first `HeadObject`
+  (S3 to S3, S3 to local, S3 to stdout), and `--server-side-copy` sends `x-amz-copy-source-if-match` on
+  `CopyObject` and `UploadPartCopy`. For `mv`, the source is not deleted.
+- `--rate-limit-bandwidth` now applies to the whole of a multipart upload. Only the first part was limited, and an
+  upload from stdin at or above `--multipart-threshold` was not limited at all.
+- An S3-to-S3 copy no longer fails with "additional checksum mismatch. file in the target storage may be corrupted"
+  when the source is a single-part object with an additional checksum and the copy is uploaded as multipart (the
+  object is at or above `--multipart-threshold`). The source then has a plain checksum and the target a composite
+  one (`<base64>-<number of parts>`), which can never be equal. This is now the same chunk-size warning (exit 3) as
+  for a multipart source. Two plain checksums that differ are still an error.
+- With `--server-side-copy`, a source overwritten during the transfer is now reported as such instead of as a bare
+  `PreconditionFailed` service error. With `--if-none-match`, where the same status can also mean that the target
+  exists, the message names both causes.
+- Checksumming or ETag-hashing a local file smaller than `--multipart-threshold` no longer reserves a buffer the
+  size of the threshold. With a large threshold (for example `5GiB`) that allocation could fail for a small file.
+
+### Security
+
+- Updated `url` to `v2.5.9` to address [RUSTSEC-2026-0592](https://rustsec.org/advisories/RUSTSEC-2026-0592).
+
+### Changed
+
+- `get-object-annotation` now verifies a `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` or `XXHASH64` checksum returned
+  with the annotation payload. Previously these algorithms could not be recomputed, so the command exited 1 with
+  "s3util cannot verify" instead of writing the payload.
+- For uploads, `s3util` now calculates the additional checksum of each request (single-part `PutObject` and each
+  `UploadPart`) itself and sends it in the `x-amz-checksum-*` header, for every algorithm. The AWS SDK cannot
+  calculate `SHA512` or the `XXHASH` family, and silently sends a `CRC32` checksum when `MD5` is requested. For the
+  existing algorithms the request is unchanged: the SDK already sent the checksum of an in-memory body as a header.
+- MSRV `1.99.0 -> 1.100.0`
+- Updated other dependencies
+
 ## [1.11.0] - 2026-11-22
 
 Update for the end of life (EOL) of the `chrono` crate.

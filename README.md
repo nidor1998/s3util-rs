@@ -97,7 +97,7 @@
 
 `s3util`'s `cp` and `mv` subcommands follow the same design principles as `s3sync` for transfer, verification, and multipart handling — but each subcommand has a deliberately narrow surface, and the binary is a single file with no recursive/directory mode.
 
-For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
+For object transfers in particular, `s3util` emphasizes high reliability, high performance, and advanced functionality: end-to-end checksum verification (ETag plus SHA256/SHA1/CRC32/CRC32C/CRC64NVME/SHA512/MD5/XXHASH128/XXHASH3/XXHASH64, composite or full-object), parallel multipart uploads and downloads, server-side copy, SSE-KMS and SSE-C (including SSE-C re-keying across copies), stdin/stdout streaming, tag and metadata preservation, rate-limited bandwidth control, and Express One Zone support. See [Features](#features) for the full list.
 
 
 ### API call volume
@@ -182,7 +182,7 @@ machinery.
 | `restore-object`                         | Restores an archived object; takes `--days` and `--tier` (Standard / Bulk / Expedited); exits 4 on `NoSuchBucket` / `NoSuchKey` / `NoSuchVersion` |
 | `presign`                                | Generates a pre-signed `GetObject` URL (GET only) and prints it to stdout; signed locally with no S3 API call, so bucket/object existence is not verified; `--expires-in <SECONDS>` sets validity (default 3600, max 604800 = 7 days) |
 | `put-object-annotation`                  | Attaches a named annotation payload (file or `-` stdin, 1 byte–1 MiB, UTF-8) to an S3 object via `PutObjectAnnotation`; sends `Content-MD5` for transit integrity and an explicit CRC64NVME checksum; verifies the CRC64NVME returned by S3; prints response as JSON; supports `--annotation-name`, `--annotation-payload`, `--target-version-id`, `--target-request-payer`, `--dry-run`; exits 4 on not-found, 1 on verification mismatch or other error |
-| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum it can recompute — an unsupported algorithm such as SHA512 is treated as an error; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename), then re-reads the saved file and recomputes its ETag/additional checksum from disk (like `cp`) — a post-write mismatch leaves the file in place and exits 1; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
+| `get-object-annotation`                  | Retrieves a named annotation payload from an S3 object via `GetObjectAnnotation` and writes it to a file or stdout; when writing to a file, verifies payload integrity (ETag/MD5 for AES256-encrypted objects, plus any additional checksum — every algorithm S3 supports, including SHA512, MD5 and XXHASH*, is verified; a checksum of an algorithm the bundled AWS SDK does not model is not seen and so not verified; content-length mismatch is an error; if neither verification applies, logs warning but exits 0); writes file atomically (temp file + rename), then re-reads the saved file and recomputes its ETag/additional checksum from disk (like `cp`) — a post-write mismatch leaves the file in place and exits 1; supports `--annotation-name`, `--target-version-id`, `--target-request-payer`; exits 4 on not-found, 1 on verification mismatch or other error |
 | `list-object-annotations`                | Lists annotations on an S3 object via `ListObjectAnnotations`; makes a single request (up to 1000 results, pagination is not followed); supports `--annotation-prefix`, `--target-version-id`; outputs AWS-CLI-shape JSON on stdout; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 | `delete-object-annotation`               | Removes a named annotation from an S3 object via `DeleteObjectAnnotation`; supports `--annotation-name` (required), `--target-version-id`, `--target-request-payer`, `--dry-run`; produces no output on success; exits 4 on not-found (`NoSuchBucket` / `NoSuchKey` / `NoSuchVersion`), 1 on other error |
 
@@ -198,7 +198,7 @@ For S3→S3 transfers, ETag and composite additional-checksum mismatches are dow
 
 Supported algorithms:
 - **ETag** (MD5 for single-part, multipart-composite hash for multipart uploads)
-- **SHA256**, **SHA1**, **CRC32**, **CRC32C**, **CRC64NVME** via `--additional-checksum-algorithm`
+- **SHA256**, **SHA1**, **CRC32**, **CRC32C**, **CRC64NVME**, **SHA512**, **MD5**, **XXHASH128**, **XXHASH3**, **XXHASH64** via `--additional-checksum-algorithm`
 - Full-object and composite variants via `--full-object-checksum`
 
 Verification can be selectively disabled with `--disable-etag-verify`, `--disable-multipart-verify`, or `--disable-additional-checksum-verify` when working with S3-compatible stores that behave differently.
@@ -316,7 +316,7 @@ To make the message visible at the default `WarnLevel`, `--dry-run` automaticall
 - Windows 11 (x86_64, aarch64)
 - macOS 11.0 or later (aarch64, x86_64)
 
-`s3util` is written in Rust and requires Rust **1.99.0 or later** to build from source.
+`s3util` is written in Rust and requires Rust **1.100.0 or later** to build from source.
 
 AWS credentials are required. `s3util` supports all standard AWS credential mechanisms:
 - Environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`)
@@ -592,8 +592,8 @@ Options:
 **Verification:** `checksum-mode` is always `ENABLED`. The payload is integrity-checked as follows:
 - If `content-length` is present and differs from the received byte count → error (exit 1).
 - If the object is encrypted with `AES256`, the ETag (MD5) is verified against the payload.
-- If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload.
-- If S3 returns a checksum whose algorithm `s3util` cannot recompute (e.g. `SHA512`, `MD5`, `XXHASH*`), it is treated as an integrity error (exit 1) rather than being skipped.
+- If S3 returns an additional checksum (e.g., `ChecksumCRC64NVME`), it is verified against the payload. Every algorithm S3 supports (`CRC32`, `CRC32C`, `CRC64NVME`, `SHA1`, `SHA256`, `SHA512`, `MD5`, `XXHASH128`, `XXHASH3`, `XXHASH64`) is verified.
+- A checksum of an algorithm the bundled AWS SDK does not model (one S3 adds after this version was built) is not exposed to `s3util`, so it is not verified; the checks above and the fallback below still apply.
 - If neither ETag nor additional checksum verification is applicable → a warning is logged but exit code remains 0.
 
 **Output:** Prints the `GetObjectAnnotation` response as JSON on success (file mode only). Fields present in the response are included; absent fields are omitted. Example fields: `LastModified`, `ContentLength`, `ETag`, `ChecksumCRC64NVME`, `ChecksumType`, `ServerSideEncryption`, `ObjectVersionId`, `RequestCharged`.
@@ -756,9 +756,9 @@ For single-part objects, the S3-reported ETag is the MD5 of the object. `s3util`
 
 ### Additional checksum verification
 
-When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's checksum alongside the object. Supported: `SHA256`, `SHA1`, `CRC32`, `CRC32C`, `CRC64NVME`.
+When `--additional-checksum-algorithm` is set, S3 stores the chosen algorithm's checksum alongside the object. Supported: `SHA256`, `SHA1`, `CRC32`, `CRC32C`, `CRC64NVME`, `SHA512`, `MD5`, `XXHASH128`, `XXHASH3`, `XXHASH64`.
 
-- `--full-object-checksum` forces the full-object variant (required for CRC64NVME; incompatible with SHA1/SHA256).
+- `--full-object-checksum` forces the full-object variant (required for CRC64NVME; only CRC32/CRC32C/CRC64NVME support it, so it is incompatible with SHA1/SHA256/SHA512/MD5/XXHASH128/XXHASH3/XXHASH64).
 - `--enable-additional-checksum` on download tells S3 to return the additional checksum so `s3util` can verify it.
 - `--disable-additional-checksum-verify` uploads the additional checksum but skips local verification.
 
@@ -870,11 +870,11 @@ Match source/target chunk layout automatically (extra `HeadObject` per part). Re
 
 ### --additional-checksum-algorithm
 
-Additional checksum algorithm for upload: `SHA256`, `SHA1`, `CRC32`, `CRC32C`, `CRC64NVME`. Also used to select the algorithm to verify on download (combined with `--enable-additional-checksum`).
+Additional checksum algorithm for upload: `SHA256`, `SHA1`, `CRC32`, `CRC32C`, `CRC64NVME`, `SHA512`, `MD5`, `XXHASH128`, `XXHASH3`, `XXHASH64`. The checksum is calculated by `s3util` and sent with each request (the AWS SDK itself cannot calculate `SHA512`/`MD5`/`XXHASH*`). Also used to select the algorithm to verify on download (combined with `--enable-additional-checksum`).
 
 ### --full-object-checksum
 
-Use the full-object variant of the additional checksum instead of the composite variant. Required and forced for CRC64NVME; incompatible with SHA1/SHA256.
+Use the full-object variant of the additional checksum instead of the composite variant. Required and forced for CRC64NVME; incompatible with SHA1/SHA256/SHA512/MD5/XXHASH128/XXHASH3/XXHASH64.
 
 ### --disable-multipart-verify / --disable-etag-verify
 

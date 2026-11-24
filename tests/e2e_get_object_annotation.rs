@@ -543,4 +543,263 @@ mod tests {
             "the payload must be written to the bare-filename outfile"
         );
     }
+
+    /// An annotation that carries an `algorithm` additional checksum (SHA512,
+    /// MD5, XXHASH128, XXHASH3 or XXHASH64) must be verified and written, both
+    /// to a file and to stdout. Before s3util could calculate these
+    /// algorithms, such an annotation was an integrity error (exit 1).
+    ///
+    /// The annotation is put through the SDK with an explicit checksum,
+    /// because `put-object-annotation` always sends CRC64NVME.
+    ///
+    /// Exit 0 alone does not prove the checksum was checked: annotations are
+    /// AES256-encrypted, so the ETag (MD5) check always passes too. Because
+    /// the command exits 1 if a returned checksum is unsupported or does not
+    /// match, the test also asserts that S3 returned this checksum, that it
+    /// was the only one, and that it is not COMPOSITE (a composite checksum is
+    /// skipped).
+    async fn get_object_annotation_with_checksum(algorithm: &str) {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = "annotation-checksum-target.txt";
+        helper
+            .put_object(&bucket, key, b"object body".to_vec())
+            .await;
+
+        let annotation_name = "checksum-note";
+        let payload = format!("annotation payload with a {algorithm} checksum");
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket,
+                key,
+                None,
+                annotation_name,
+                &payload,
+                algorithm,
+            )
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let out_file = tmp_dir.join("got-annotation.bin");
+        let out_path = out_file.to_str().unwrap();
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        let file_out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            annotation_name,
+            &object_arg,
+            out_path,
+        ]);
+        let stdout_out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            annotation_name,
+            &object_arg,
+            "-",
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let written = std::fs::read(out_path).ok();
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        // File output.
+        assert_eq!(
+            file_out.status.code(),
+            Some(0),
+            "get-object-annotation with a {algorithm} checksum must exit 0; stderr: {}",
+            String::from_utf8_lossy(&file_out.stderr)
+        );
+        assert_eq!(
+            written.as_deref(),
+            Some(payload.as_bytes()),
+            "the outfile must contain the annotation payload"
+        );
+
+        let json: serde_json::Value =
+            serde_json::from_slice(&file_out.stdout).expect("stdout must be valid JSON");
+        let checksum_key = format!("Checksum{algorithm}");
+        assert_eq!(
+            json[checksum_key.as_str()].as_str(),
+            Some(TestHelper::compute_additional_checksum(algorithm, payload.as_bytes()).as_str()),
+            "JSON must contain the {algorithm} checksum of the payload; got: {json}"
+        );
+        // get-object-annotation verifies only the first checksum it finds (the
+        // CRC family first), so this checksum is the verified one only when it
+        // is the sole checksum S3 returned.
+        let other_checksums: Vec<&String> = json
+            .as_object()
+            .expect("JSON must be an object")
+            .keys()
+            .filter(|k| k.starts_with("Checksum") && *k != "ChecksumType" && **k != checksum_key)
+            .collect();
+        assert!(
+            other_checksums.is_empty(),
+            "{checksum_key} must be the only checksum; got: {json}"
+        );
+        assert_ne!(
+            json.get("ChecksumType").and_then(|v| v.as_str()),
+            Some("COMPOSITE"),
+            "a COMPOSITE checksum is not verified; got: {json}"
+        );
+
+        // Stdout output: verified against the in-transit payload before it is
+        // written.
+        assert_eq!(
+            stdout_out.status.code(),
+            Some(0),
+            "get-object-annotation to stdout with a {algorithm} checksum must exit 0; stderr: {}",
+            String::from_utf8_lossy(&stdout_out.stderr)
+        );
+        assert_eq!(
+            stdout_out.stdout.as_slice(),
+            payload.as_bytes(),
+            "stdout must be the annotation payload"
+        );
+    }
+
+    #[tokio::test]
+    async fn get_object_annotation_with_checksum_sha512_exits_0() {
+        get_object_annotation_with_checksum("SHA512").await;
+    }
+
+    #[tokio::test]
+    async fn get_object_annotation_with_checksum_md5_exits_0() {
+        get_object_annotation_with_checksum("MD5").await;
+    }
+
+    #[tokio::test]
+    async fn get_object_annotation_with_checksum_xxhash128_exits_0() {
+        get_object_annotation_with_checksum("XXHASH128").await;
+    }
+
+    #[tokio::test]
+    async fn get_object_annotation_with_checksum_xxhash3_exits_0() {
+        get_object_annotation_with_checksum("XXHASH3").await;
+    }
+
+    #[tokio::test]
+    async fn get_object_annotation_with_checksum_xxhash64_exits_0() {
+        get_object_annotation_with_checksum("XXHASH64").await;
+    }
+
+    /// `--target-version-id` with an XXHASH3 annotation checksum. v1
+    /// (non-current) and v2 (current) each carry an annotation of the same
+    /// name with an XXHASH3 checksum of a different payload, so the command
+    /// must fetch, verify and write v1's annotation: reading v2's writes v2's
+    /// payload and reports v2's checksum.
+    ///
+    /// As in `get_object_annotation_with_checksum`, the checksum must be the
+    /// only one S3 returned and not COMPOSITE, so exit 0 proves it was
+    /// verified.
+    #[tokio::test]
+    async fn get_object_annotation_with_target_version_id_and_checksum_xxhash3_exits_0() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "versioned-annotation-checksum.txt";
+        let v1 = helper
+            .put_object_with_version(&bucket, key, b"version one body".to_vec())
+            .await;
+        let v2 = helper
+            .put_object_with_version(&bucket, key, b"version two body".to_vec())
+            .await;
+
+        let annotation_name = "versioned-checksum-note";
+        let v1_payload = "v1 annotation payload with an XXHASH3 checksum";
+        let v2_payload = "v2 annotation payload, also with an XXHASH3 checksum";
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket,
+                key,
+                Some(v1.clone()),
+                annotation_name,
+                v1_payload,
+                "XXHASH3",
+            )
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket,
+                key,
+                Some(v2),
+                annotation_name,
+                v2_payload,
+                "XXHASH3",
+            )
+            .await;
+
+        let tmp_dir = TestHelper::create_temp_dir();
+        let out_file = tmp_dir.join("v1-checksum-got.bin");
+        let out_path = out_file.to_str().unwrap();
+        let object_arg = format!("s3://{bucket}/{key}");
+
+        let out = run_s3util(&[
+            "get-object-annotation",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--annotation-name",
+            annotation_name,
+            "--target-version-id",
+            &v1,
+            &object_arg,
+            out_path,
+        ]);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let written = std::fs::read(out_path).ok();
+        let _ = std::fs::remove_dir_all(&tmp_dir);
+
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "get-object-annotation --target-version-id with an XXHASH3 checksum must exit 0; \
+             stderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_eq!(
+            written.as_deref(),
+            Some(v1_payload.as_bytes()),
+            "the outfile must contain v1's annotation payload"
+        );
+
+        let json: serde_json::Value =
+            serde_json::from_slice(&out.stdout).expect("stdout must be valid JSON");
+        assert_eq!(
+            json["ChecksumXXHASH3"].as_str(),
+            Some(
+                TestHelper::compute_additional_checksum("XXHASH3", v1_payload.as_bytes()).as_str()
+            ),
+            "JSON must contain the XXHASH3 checksum of v1's payload; got: {json}"
+        );
+        let other_checksums: Vec<&String> = json
+            .as_object()
+            .expect("JSON must be an object")
+            .keys()
+            .filter(|k| {
+                k.starts_with("Checksum") && *k != "ChecksumType" && *k != "ChecksumXXHASH3"
+            })
+            .collect();
+        assert!(
+            other_checksums.is_empty(),
+            "ChecksumXXHASH3 must be the only checksum; got: {json}"
+        );
+        assert_ne!(
+            json.get("ChecksumType").and_then(|v| v.as_str()),
+            Some("COMPOSITE"),
+            "a COMPOSITE checksum is not verified; got: {json}"
+        );
+    }
 }

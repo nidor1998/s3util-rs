@@ -196,6 +196,135 @@ mod tests {
         helper.delete_bucket_with_cascade(&bucket).await;
     }
 
+    /// `--source-version-id` with an XXHASH128 additional checksum on a
+    /// non-current version (small object → serial GET path). Both versions
+    /// carry an XXHASH128 checksum of a different body, so the checksum s3util
+    /// verifies against and the bytes it streams must both come from v1.
+    #[tokio::test]
+    async fn s3_to_stdout_with_source_version_id_and_checksum_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "ver_xxhash128.txt";
+        let v1_content = b"v1 content with an XXHASH128 checksum";
+        let v2_content = b"v2 content, also with an XXHASH128 checksum";
+        let v1_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket,
+                key,
+                v1_content,
+                "XXHASH128",
+                None,
+            )
+            .await;
+        let v2_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket,
+                key,
+                v2_content,
+                "XXHASH128",
+                None,
+            )
+            .await;
+        assert_ne!(v1_id, v2_id);
+
+        let source = format!("s3://{bucket}/{key}");
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--enable-additional-checksum",
+                "--source-version-id",
+                &v1_id,
+                &source,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(stdout_bytes, v1_content);
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
+    /// Multipart `--source-version-id` with an MD5 composite checksum
+    /// (parallel ranged-GET path). v1 (requested, non-current) is 9 MiB in
+    /// 5 MiB parts; v2 (latest) is a different 9 MiB body in 8 MiB parts.
+    /// `--auto-chunksize` reads the part layout from the source, so the HEAD,
+    /// the part lookups and every ranged GET must target v1, or the composite
+    /// checksum, the ETag or the streamed bytes no longer match.
+    #[tokio::test]
+    async fn s3_to_stdout_multipart_with_source_version_id_and_checksum_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "ver_mp_md5.bin";
+        let v1_content = vec![0x01_u8; 9 * 1024 * 1024];
+        let v2_content = vec![0x02_u8; 9 * 1024 * 1024];
+        let v1_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket,
+                key,
+                &v1_content,
+                "MD5",
+                Some(5),
+            )
+            .await;
+        let v2_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket,
+                key,
+                &v2_content,
+                "MD5",
+                Some(8),
+            )
+            .await;
+        assert_ne!(v1_id, v2_id);
+
+        let source = format!("s3://{bucket}/{key}");
+        let (stats, stdout_bytes) = helper
+            .cp_test_data_s3_to_stdout(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--auto-chunksize",
+                "--enable-additional-checksum",
+                "--source-version-id",
+                &v1_id,
+                &source,
+                "-",
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(stats.e_tag_verified, 1);
+        assert_eq!(stats.checksum_verified, 1);
+        assert_eq!(
+            TestHelper::get_sha256_from_bytes(&stdout_bytes),
+            TestHelper::get_sha256_from_bytes(&v1_content),
+            "stdout must be v1"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+    }
+
     /// Streaming stdin upload (above the multipart threshold) with
     /// --disable-etag-verify: the streamed multipart completes and the
     /// post-complete verification is skipped.

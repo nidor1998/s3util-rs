@@ -55,6 +55,39 @@ mod tests {
         helper.cp_test_data(args).await
     }
 
+    /// Asserts that the `TEST_ANNOTATION_NAME` annotation on
+    /// `s3://bucket/test_object` carries the `algorithm` checksum of
+    /// `TEST_ANNOTATION_VALUE`. `role` ("source" or "target") names the bucket
+    /// in the failure message.
+    ///
+    /// On the target this checks that cp copied the checksum: the SDK enables
+    /// checksum mode on GetObjectAnnotation by default, so the source
+    /// annotation's checksum is returned, and `copy_object_annotation`
+    /// forwards it with the PutObjectAnnotation.
+    async fn assert_annotation_checksum(
+        helper: &TestHelper,
+        bucket: &str,
+        algorithm: &str,
+        role: &str,
+    ) {
+        assert_eq!(
+            helper
+                .get_object_annotation_additional_checksum(
+                    bucket,
+                    "test_object",
+                    None,
+                    TEST_ANNOTATION_NAME,
+                    algorithm,
+                )
+                .await,
+            Some(TestHelper::compute_additional_checksum(
+                algorithm,
+                TEST_ANNOTATION_VALUE.as_bytes()
+            )),
+            "the {role} annotation must carry the {algorithm} checksum of its payload"
+        );
+    }
+
     /// s3sync equivalent: s3_to_s3_sync_annotation_without_prefix.
     /// Two objects (one cp invocation each), three annotations, values
     /// verified on the target.
@@ -415,6 +448,229 @@ mod tests {
                 .await,
             TEST_ANNOTATION_VALUE
         );
+        assert_annotation_checksum(&helper, &bucket1, "SHA256", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "SHA256", "target").await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// Same as `cp_sync_annotations_sha256`, with a SHA512 additional checksum on the annotation.
+    #[tokio::test]
+    async fn cp_sync_annotations_sha512() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "test_object", b"test_object_content".to_vec())
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                "SHA512",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &[]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, TEST_ANNOTATION_NAME)
+                .await,
+            TEST_ANNOTATION_VALUE
+        );
+        assert_annotation_checksum(&helper, &bucket1, "SHA512", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "SHA512", "target").await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// Same as `cp_sync_annotations_sha256`, with an MD5 additional checksum on the annotation.
+    #[tokio::test]
+    async fn cp_sync_annotations_md5() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "test_object", b"test_object_content".to_vec())
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                "MD5",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &[]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, TEST_ANNOTATION_NAME)
+                .await,
+            TEST_ANNOTATION_VALUE
+        );
+        assert_annotation_checksum(&helper, &bucket1, "MD5", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "MD5", "target").await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// Same as `cp_sync_annotations_sha256`,
+    /// with an XXHASH128 additional checksum on the annotation.
+    #[tokio::test]
+    async fn cp_sync_annotations_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "test_object", b"test_object_content".to_vec())
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                "XXHASH128",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &[]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, TEST_ANNOTATION_NAME)
+                .await,
+            TEST_ANNOTATION_VALUE
+        );
+        assert_annotation_checksum(&helper, &bucket1, "XXHASH128", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "XXHASH128", "target").await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// Same as `cp_sync_annotations_sha256`, with an XXHASH3 additional checksum on the annotation.
+    #[tokio::test]
+    async fn cp_sync_annotations_xxhash3() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "test_object", b"test_object_content".to_vec())
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                "XXHASH3",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &[]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, TEST_ANNOTATION_NAME)
+                .await,
+            TEST_ANNOTATION_VALUE
+        );
+        assert_annotation_checksum(&helper, &bucket1, "XXHASH3", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "XXHASH3", "target").await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// Same as `cp_sync_annotations_sha256`, with an XXHASH64 additional checksum on the annotation.
+    #[tokio::test]
+    async fn cp_sync_annotations_xxhash64() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        helper
+            .put_object(&bucket1, "test_object", b"test_object_content".to_vec())
+            .await;
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                None,
+                TEST_ANNOTATION_NAME,
+                TEST_ANNOTATION_VALUE,
+                "XXHASH64",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &[]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, TEST_ANNOTATION_NAME)
+                .await,
+            TEST_ANNOTATION_VALUE
+        );
+        assert_annotation_checksum(&helper, &bucket1, "XXHASH64", "source").await;
+        assert_annotation_checksum(&helper, &bucket2, "XXHASH64", "target").await;
 
         helper.delete_bucket_with_cascade(&bucket1).await;
         helper.delete_bucket_with_cascade(&bucket2).await;
@@ -658,6 +914,84 @@ mod tests {
                 .get_object_annotation(&bucket2, "test_object", None, "test_annotation_name1")
                 .await,
             "value_for_v1"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    /// `cp_sync_annotations_source_version_id` with an XXHASH128 checksum on
+    /// each version's annotation (same name, different payloads). The target
+    /// must get v1's payload together with v1's checksum, not v2's.
+    #[tokio::test]
+    async fn cp_sync_annotations_source_version_id_with_checksum_xxhash128() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.enable_bucket_versioning(&bucket1).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let v1 = helper
+            .put_object_with_version_id(&bucket1, "test_object", b"version1".to_vec())
+            .await
+            .expect("versioned bucket must return a version id");
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                Some(v1.clone()),
+                "test_annotation_name1",
+                "value_for_v1",
+                "XXHASH128",
+            )
+            .await;
+
+        let v2 = helper
+            .put_object_with_version_id(&bucket1, "test_object", b"version2".to_vec())
+            .await
+            .expect("versioned bucket must return a version id");
+        helper
+            .put_object_annotation_with_checksum(
+                &bucket1,
+                "test_object",
+                Some(v2),
+                "test_annotation_name1",
+                "value_for_v2",
+                "XXHASH128",
+            )
+            .await;
+
+        let source = format!("s3://{}/test_object", bucket1);
+        let target = format!("s3://{}/test_object", bucket2);
+        let stats = cp_with_annotations(&source, &target, &["--source-version-id", &v1]).await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        assert_eq!(
+            helper
+                .get_object_annotation(&bucket2, "test_object", None, "test_annotation_name1")
+                .await,
+            "value_for_v1"
+        );
+        assert_eq!(
+            helper
+                .get_object_annotation_additional_checksum(
+                    &bucket2,
+                    "test_object",
+                    None,
+                    "test_annotation_name1",
+                    "XXHASH128",
+                )
+                .await,
+            Some(TestHelper::compute_additional_checksum(
+                "XXHASH128",
+                b"value_for_v1"
+            )),
+            "the target annotation must carry the XXHASH128 checksum of v1's payload"
         );
 
         helper.delete_bucket_with_cascade(&bucket1).await;

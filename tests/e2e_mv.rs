@@ -16,14 +16,17 @@
 //! - Direction × delete-correctness for the four mv-supported directions.
 //! - Verification gate: warning blocks delete; `--no-fail-on-verify-error`
 //!   bypasses the gate.
-//! - Versioning: default (latest) capture, explicit `--source-version-id`,
-//!   and unversioned bucket.
+//! - Versioning: default (latest) capture, explicit `--source-version-id`
+//!   (also with an XXHASH64 additional checksum), and unversioned bucket.
 //! - Failure modes: source 404 keeps source absent and exits 1; delete-
 //!   permission failure (marked `#[ignore]`) leaves target present and
 //!   source intact.
 //! - Cancellation: SIGINT mid-transfer exits 130, source intact.
 //! - Argument rejection: stdio source/target rejected at clap with exit 2,
 //!   no AWS contact.
+//! - Additional checksums: each of SHA512 / MD5 / XXHASH128 / XXHASH3 /
+//!   XXHASH64 verified in all four directions before the source is deleted;
+//!   an additional checksum mismatch on its own keeps the source.
 
 #![cfg(e2e_test)]
 #[cfg(test)]
@@ -363,7 +366,7 @@ mod tests {
     }
 
     // ---------------------------------------------------------------
-    // Versioning (3 tests)
+    // Versioning (4 tests)
     //
     // Versioned-bucket capture path: cp seeds `TransferOutcome.source_version_id`
     // with the version it actually downloaded (the bucket's "latest"); mv
@@ -487,6 +490,72 @@ mod tests {
         assert!(
             helper.is_object_exist(&bucket, key, Some(v2_id)).await,
             "v2 must remain present"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// Explicit `--source-version-id` with an XXHASH64 additional checksum.
+    /// Both versions carry an XXHASH64 checksum of a different body. mv must
+    /// verify the download against v1's checksum (not the latest's), and only
+    /// then delete exactly v1.
+    #[tokio::test]
+    async fn mv_versioned_bucket_with_source_version_id_and_checksum_xxhash64_deletes_that_version()
+    {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+        helper.enable_bucket_versioning(&bucket).await;
+
+        let key = "mv_ver_xxhash64.txt";
+        let v1_content = b"v1 mv body with an XXHASH64 checksum";
+        let v2_content = b"v2 mv body, also with an XXHASH64 checksum";
+        let v1_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket, key, v1_content, "XXHASH64", None,
+            )
+            .await;
+        let v2_id = helper
+            .put_versioned_object_with_additional_checksum(
+                &bucket, key, v2_content, "XXHASH64", None,
+            )
+            .await;
+        assert_ne!(v1_id, v2_id);
+
+        let local_dir = TestHelper::create_temp_dir();
+        let dst = local_dir.join(key);
+        let source = format!("s3://{bucket}/{key}");
+
+        let output = run_s3util(&[
+            "mv",
+            "--show-progress",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--enable-additional-checksum",
+            "--source-version-id",
+            &v1_id,
+            &source,
+            dst.to_str().unwrap(),
+        ]);
+
+        assert_exit_code(&output, EXIT_CODE_SUCCESS);
+        assert_additional_checksum_verify(&output, "ok");
+        assert_eq!(std::fs::read(&dst).unwrap(), v1_content);
+
+        assert!(
+            !helper.is_object_exist(&bucket, key, Some(v1_id)).await,
+            "v1 must be deleted"
+        );
+        // A successful HEAD of the explicit version: `is_object_exist` also
+        // returns true for any error other than NotFound.
+        helper.head_object(&bucket, key, Some(v2_id.clone())).await;
+        assert_eq!(
+            helper.get_object_bytes(&bucket, key, Some(v2_id)).await,
+            v2_content,
+            "v2 must remain present and untouched"
         );
 
         helper.delete_bucket_with_cascade(&bucket).await;
@@ -765,5 +834,370 @@ mod tests {
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr),
         );
+    }
+
+    // ---------------------------------------------------------------
+    // Additional checksums: SHA512 / MD5 / XXHASH128 / XXHASH3 / XXHASH64
+    // (4 directions × 5 algorithms + 1 mismatch test)
+    //
+    // mv runs the same copy phase as cp, so these tests check that mv
+    // verifies each new algorithm in every direction and deletes the
+    // source only after that. `--show-progress` makes mv print the
+    // `etag verify: …, additional checksum verify: ok|failed|skipped`
+    // result line on stderr. A process-level test has no stats channel,
+    // so that line is how it sees that the checksum was verified.
+    // ---------------------------------------------------------------
+
+    fn assert_exit_code(output: &Output, expected: i32) {
+        assert_eq!(
+            output.status.code(),
+            Some(expected),
+            "mv must exit {expected}; stdout={}, stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
+    /// `status` is `ok`, `failed` or `skipped`, as printed by `--show-progress`.
+    fn assert_additional_checksum_verify(output: &Output, status: &str) {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains(&format!("additional checksum verify: {status}")),
+            "stderr must report `additional checksum verify: {status}`; stdout={}, stderr={stderr}",
+            String::from_utf8_lossy(&output.stdout),
+        );
+    }
+
+    /// Asserts that S3 stores the `algorithm` checksum of `body` for the object.
+    async fn assert_stored_checksum(
+        helper: &TestHelper,
+        bucket: &str,
+        key: &str,
+        algorithm: &str,
+        body: &[u8],
+    ) {
+        let head = helper.head_object(bucket, key, None).await;
+        assert_eq!(
+            TestHelper::head_additional_checksum(&head, algorithm),
+            Some(TestHelper::compute_additional_checksum(algorithm, body)),
+            "s3://{bucket}/{key} must carry the {algorithm} checksum of its body"
+        );
+    }
+
+    /// LocalToS3: mv calculates the `algorithm` checksum, S3 stores it, mv
+    /// verifies it, then unlinks the local source.
+    async fn mv_local_to_s3_with_checksum(algorithm: &str) {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let key = format!("mv_local_{}.txt", algorithm.to_lowercase());
+        let body = format!("local mv body with a {algorithm} checksum");
+        let test_file = TestHelper::create_test_file(&local_dir, &key, body.as_bytes());
+        let target = format!("s3://{bucket}/{key}");
+
+        let output = run_s3util(&[
+            "mv",
+            "--show-progress",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--additional-checksum-algorithm",
+            algorithm,
+            test_file.to_str().unwrap(),
+            &target,
+        ]);
+
+        assert_exit_code(&output, EXIT_CODE_SUCCESS);
+        assert_additional_checksum_verify(&output, "ok");
+        assert!(
+            !TestHelper::is_file_exist(test_file.to_str().unwrap()),
+            "mv must unlink local source"
+        );
+        assert_stored_checksum(&helper, &bucket, &key, algorithm, body.as_bytes()).await;
+        helper
+            .verify_object_content_md5(&bucket, &key, body.as_bytes())
+            .await;
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// S3ToLocal: the source carries an `algorithm` checksum; mv verifies the
+    /// download against it (`--enable-additional-checksum`), then deletes the
+    /// S3 source.
+    async fn mv_s3_to_local_with_checksum(algorithm: &str) {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let key = format!("mv_s3l_{}.txt", algorithm.to_lowercase());
+        let body = format!("s3-to-local mv body with a {algorithm} checksum");
+        helper
+            .put_object_with_additional_checksum(&bucket, &key, body.as_bytes(), algorithm)
+            .await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let dst = local_dir.join(&key);
+        let source = format!("s3://{bucket}/{key}");
+
+        let output = run_s3util(&[
+            "mv",
+            "--show-progress",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--enable-additional-checksum",
+            &source,
+            dst.to_str().unwrap(),
+        ]);
+
+        assert_exit_code(&output, EXIT_CODE_SUCCESS);
+        assert_additional_checksum_verify(&output, "ok");
+        assert_eq!(std::fs::read(&dst).unwrap(), body.as_bytes());
+        assert!(
+            !helper.is_object_exist(&bucket, &key, None).await,
+            "mv must DeleteObject the S3 source"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
+    /// S3ToS3, by download+upload or by `--server-side-copy`: the target gets
+    /// the `algorithm` checksum, mv verifies it against the source's, then
+    /// deletes the source.
+    async fn mv_s3_to_s3_with_checksum(algorithm: &str, server_side_copy: bool) {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let key = format!(
+            "mv_{}_{}.txt",
+            if server_side_copy { "ssc" } else { "s3s" },
+            algorithm.to_lowercase()
+        );
+        let body = format!("s3-to-s3 mv body with a {algorithm} checksum");
+        helper
+            .put_object_with_additional_checksum(&bucket1, &key, body.as_bytes(), algorithm)
+            .await;
+
+        let source = format!("s3://{bucket1}/{key}");
+        let target = format!("s3://{bucket2}/{key}");
+
+        let mut args = vec![
+            "mv",
+            "--show-progress",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--enable-additional-checksum",
+            "--additional-checksum-algorithm",
+            algorithm,
+        ];
+        if server_side_copy {
+            args.push("--server-side-copy");
+        }
+        args.push(source.as_str());
+        args.push(target.as_str());
+        let output = run_s3util(&args);
+
+        assert_exit_code(&output, EXIT_CODE_SUCCESS);
+        assert_additional_checksum_verify(&output, "ok");
+        assert_stored_checksum(&helper, &bucket2, &key, algorithm, body.as_bytes()).await;
+        helper
+            .verify_object_content_md5(&bucket2, &key, body.as_bytes())
+            .await;
+        assert!(
+            !helper.is_object_exist(&bucket1, &key, None).await,
+            "mv must DeleteObject the S3 source"
+        );
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+    }
+
+    #[tokio::test]
+    async fn mv_local_to_s3_with_checksum_sha512() {
+        mv_local_to_s3_with_checksum("SHA512").await;
+    }
+
+    #[tokio::test]
+    async fn mv_local_to_s3_with_checksum_md5() {
+        mv_local_to_s3_with_checksum("MD5").await;
+    }
+
+    #[tokio::test]
+    async fn mv_local_to_s3_with_checksum_xxhash128() {
+        mv_local_to_s3_with_checksum("XXHASH128").await;
+    }
+
+    #[tokio::test]
+    async fn mv_local_to_s3_with_checksum_xxhash3() {
+        mv_local_to_s3_with_checksum("XXHASH3").await;
+    }
+
+    #[tokio::test]
+    async fn mv_local_to_s3_with_checksum_xxhash64() {
+        mv_local_to_s3_with_checksum("XXHASH64").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_local_with_checksum_sha512() {
+        mv_s3_to_local_with_checksum("SHA512").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_local_with_checksum_md5() {
+        mv_s3_to_local_with_checksum("MD5").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_local_with_checksum_xxhash128() {
+        mv_s3_to_local_with_checksum("XXHASH128").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_local_with_checksum_xxhash3() {
+        mv_s3_to_local_with_checksum("XXHASH3").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_local_with_checksum_xxhash64() {
+        mv_s3_to_local_with_checksum("XXHASH64").await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_with_checksum_sha512() {
+        mv_s3_to_s3_with_checksum("SHA512", false).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_with_checksum_md5() {
+        mv_s3_to_s3_with_checksum("MD5", false).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_with_checksum_xxhash128() {
+        mv_s3_to_s3_with_checksum("XXHASH128", false).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_with_checksum_xxhash3() {
+        mv_s3_to_s3_with_checksum("XXHASH3", false).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_with_checksum_xxhash64() {
+        mv_s3_to_s3_with_checksum("XXHASH64", false).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_server_side_copy_with_checksum_sha512() {
+        mv_s3_to_s3_with_checksum("SHA512", true).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_server_side_copy_with_checksum_md5() {
+        mv_s3_to_s3_with_checksum("MD5", true).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_server_side_copy_with_checksum_xxhash128() {
+        mv_s3_to_s3_with_checksum("XXHASH128", true).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_server_side_copy_with_checksum_xxhash3() {
+        mv_s3_to_s3_with_checksum("XXHASH3", true).await;
+    }
+
+    #[tokio::test]
+    async fn mv_s3_to_s3_server_side_copy_with_checksum_xxhash64() {
+        mv_s3_to_s3_with_checksum("XXHASH64", true).await;
+    }
+
+    /// An additional checksum mismatch on its own must keep the source and
+    /// exit 1. The source is a 9 MiB object uploaded in 5 MiB parts with a
+    /// composite SHA512; mv re-uploads it in 8 MiB parts, so the target's
+    /// composite SHA512 differs (cf. `e2e_s3_to_s3.rs`'s
+    /// `s3_to_s3_multipart_with_checksum_sha512_chunksize_mismatch_warns`).
+    /// `--disable-etag-verify` turns off the ETag check, which would mismatch
+    /// for the same reason, so the checksum mismatch is the only warning
+    /// that reaches mv's verification gate.
+    #[tokio::test]
+    async fn mv_s3_to_s3_additional_checksum_mismatch_keeps_source_exits_1() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let key = "mv_checksum_mismatch.bin";
+        let local_dir = TestHelper::create_temp_dir();
+        let seed_file = TestHelper::create_sized_file(&local_dir, key, 9 * 1024 * 1024);
+        let source = format!("s3://{bucket1}/{key}");
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--multipart-chunksize",
+                "5MiB",
+                "--additional-checksum-algorithm",
+                "SHA512",
+                seed_file.to_str().unwrap(),
+                &source,
+            ])
+            .await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.checksum_verified, 1);
+
+        let target = format!("s3://{bucket2}/{key}");
+        let output = run_s3util(&[
+            "mv",
+            "--show-progress",
+            "--source-profile",
+            "s3util-e2e-test",
+            "--target-profile",
+            "s3util-e2e-test",
+            "--multipart-chunksize",
+            "8MiB",
+            "--enable-additional-checksum",
+            "--additional-checksum-algorithm",
+            "SHA512",
+            "--disable-etag-verify",
+            &source,
+            &target,
+        ]);
+
+        assert_exit_code(&output, EXIT_CODE_ERROR);
+        assert_additional_checksum_verify(&output, "failed");
+        assert!(
+            !String::from_utf8_lossy(&output.stderr).contains("etag verify: failed"),
+            "the ETag check is disabled, so only the checksum may fail; stderr={}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+        // A successful HEAD each (`head_object` unwraps): `is_object_exist`
+        // also returns true for any error other than NotFound.
+        // The source must be preserved on an additional checksum mismatch.
+        helper.head_object(&bucket1, key, None).await;
+        // The copy itself completes; only the delete is skipped.
+        helper.head_object(&bucket2, key, None).await;
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
     }
 }

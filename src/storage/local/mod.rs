@@ -43,7 +43,8 @@ use crate::storage::e_tag_verify::{
     is_multipart_upload_e_tag, verify_e_tag,
 };
 use crate::storage::{
-    Storage, StorageFactory, StorageTrait, convert_to_buf_byte_stream_with_callback,
+    Storage, StorageFactory, StorageTrait, check_source_e_tag_unchanged,
+    convert_to_buf_byte_stream_with_callback,
 };
 use crate::types::SyncStatistics::{
     ChecksumMismatch, ChecksumVerified, ETagMismatch, ETagVerified, SyncWarning,
@@ -621,6 +622,7 @@ impl LocalStorage {
             let cloned_source = dyn_clone::clone_box(&*(source));
             let source_key = source_key.to_string();
             let source_version_id = source_version_id.clone();
+            let source_e_tag = source_e_tag.clone();
             let source_sse_c = self.config.source_sse_c.clone();
             let source_sse_c_key = self.config.source_sse_c_key.clone();
             let source_sse_c_key_md5 = self.config.source_sse_c_key_md5.clone();
@@ -689,6 +691,13 @@ impl LocalStorage {
                     // whole process under the `release-min-size` profile, which
                     // sets panic = "abort".
                     let get_object_output = get_object_output.context("get_object() failed.")?;
+                    // An unversioned source cannot be pinned, so make sure this
+                    // chunk still belongs to the object the first chunk came from.
+                    check_source_e_tag_unchanged(
+                        &source_key,
+                        source_e_tag.as_deref(),
+                        get_object_output.e_tag(),
+                    )?;
                     let chunk_content_length =
                         get_object_output.content_length().ok_or_else(|| {
                             anyhow!(
@@ -970,59 +979,14 @@ impl StorageTrait for LocalStorage {
             None
         };
 
-        let checksum_sha256 = if self.config.additional_checksum_algorithm.is_some()
-            && need_checksum
-            && matches!(
-                self.config.additional_checksum_algorithm.as_ref().unwrap(),
-                ChecksumAlgorithm::Sha256
-            ) {
-            checksum.clone()
-        } else {
-            None
-        };
-
-        let checksum_sha1 = if self.config.additional_checksum_algorithm.is_some()
-            && need_checksum
-            && matches!(
-                self.config.additional_checksum_algorithm.as_ref().unwrap(),
-                ChecksumAlgorithm::Sha1
-            ) {
-            checksum.clone()
-        } else {
-            None
-        };
-
-        let checksum_crc32 = if self.config.additional_checksum_algorithm.is_some()
-            && need_checksum
-            && matches!(
-                self.config.additional_checksum_algorithm.as_ref().unwrap(),
-                ChecksumAlgorithm::Crc32
-            ) {
-            checksum.clone()
-        } else {
-            None
-        };
-
-        let checksum_crc32_c = if self.config.additional_checksum_algorithm.is_some()
-            && need_checksum
-            && matches!(
-                self.config.additional_checksum_algorithm.as_ref().unwrap(),
-                ChecksumAlgorithm::Crc32C
-            ) {
-            checksum.clone()
-        } else {
-            None
-        };
-
-        let checksum_crc64_nvme = if self.config.additional_checksum_algorithm.is_some()
-            && need_checksum
-            && matches!(
-                self.config.additional_checksum_algorithm.as_ref().unwrap(),
-                ChecksumAlgorithm::Crc64Nvme
-            ) {
-            checksum.clone()
-        } else {
-            None
+        // `checksum` is only calculated for the configured algorithm, so only
+        // that algorithm's field is set.
+        let checksum_of = |algorithm: ChecksumAlgorithm| {
+            if self.config.additional_checksum_algorithm.as_ref() == Some(&algorithm) {
+                checksum.clone()
+            } else {
+                None
+            }
         };
 
         Ok(GetObjectOutputBuilder::default()
@@ -1031,11 +995,16 @@ impl StorageTrait for LocalStorage {
             .set_content_range(content_range)
             .last_modified(fs_util::get_last_modified(&path).await?)
             .set_body(body)
-            .set_checksum_sha256(checksum_sha256)
-            .set_checksum_sha1(checksum_sha1)
-            .set_checksum_crc32(checksum_crc32)
-            .set_checksum_crc32_c(checksum_crc32_c)
-            .set_checksum_crc64_nvme(checksum_crc64_nvme)
+            .set_checksum_sha256(checksum_of(ChecksumAlgorithm::Sha256))
+            .set_checksum_sha1(checksum_of(ChecksumAlgorithm::Sha1))
+            .set_checksum_crc32(checksum_of(ChecksumAlgorithm::Crc32))
+            .set_checksum_crc32_c(checksum_of(ChecksumAlgorithm::Crc32C))
+            .set_checksum_crc64_nvme(checksum_of(ChecksumAlgorithm::Crc64Nvme))
+            .set_checksum_sha512(checksum_of(ChecksumAlgorithm::Sha512))
+            .set_checksum_md5(checksum_of(ChecksumAlgorithm::Md5))
+            .set_checksum_xxhash128(checksum_of(ChecksumAlgorithm::Xxhash128))
+            .set_checksum_xxhash3(checksum_of(ChecksumAlgorithm::Xxhash3))
+            .set_checksum_xxhash64(checksum_of(ChecksumAlgorithm::Xxhash64))
             .build())
     }
 
@@ -1374,6 +1343,7 @@ mod tests {
     // --------------------------------------------------------------------
 
     use crate::config::TransferConfig;
+    use crate::storage::checksum::AdditionalChecksum;
     use crate::types::token::create_pipeline_cancellation_token;
     use crate::types::{SseKmsKeyId, StoragePath};
 
@@ -1583,6 +1553,180 @@ mod tests {
             .unwrap();
         assert_eq!(got.content_length(), Some(3));
         assert_eq!(got.content_range(), Some("bytes 0-2/5"));
+    }
+
+    const ALL_CHECKSUM_ALGORITHMS: [ChecksumAlgorithm; 10] = [
+        ChecksumAlgorithm::Crc32,
+        ChecksumAlgorithm::Crc32C,
+        ChecksumAlgorithm::Crc64Nvme,
+        ChecksumAlgorithm::Sha1,
+        ChecksumAlgorithm::Sha256,
+        ChecksumAlgorithm::Sha512,
+        ChecksumAlgorithm::Md5,
+        ChecksumAlgorithm::Xxhash128,
+        ChecksumAlgorithm::Xxhash3,
+        ChecksumAlgorithm::Xxhash64,
+    ];
+
+    /// Every checksum field of `get_object_output`, keyed by its algorithm.
+    fn all_checksum_fields(
+        get_object_output: &GetObjectOutput,
+    ) -> Vec<(ChecksumAlgorithm, Option<&str>)> {
+        vec![
+            (ChecksumAlgorithm::Crc32, get_object_output.checksum_crc32()),
+            (
+                ChecksumAlgorithm::Crc32C,
+                get_object_output.checksum_crc32_c(),
+            ),
+            (
+                ChecksumAlgorithm::Crc64Nvme,
+                get_object_output.checksum_crc64_nvme(),
+            ),
+            (ChecksumAlgorithm::Sha1, get_object_output.checksum_sha1()),
+            (
+                ChecksumAlgorithm::Sha256,
+                get_object_output.checksum_sha256(),
+            ),
+            (
+                ChecksumAlgorithm::Sha512,
+                get_object_output.checksum_sha512(),
+            ),
+            (ChecksumAlgorithm::Md5, get_object_output.checksum_md5()),
+            (
+                ChecksumAlgorithm::Xxhash128,
+                get_object_output.checksum_xxhash128(),
+            ),
+            (
+                ChecksumAlgorithm::Xxhash3,
+                get_object_output.checksum_xxhash3(),
+            ),
+            (
+                ChecksumAlgorithm::Xxhash64,
+                get_object_output.checksum_xxhash64(),
+            ),
+        ]
+    }
+
+    // Only the field of the configured algorithm is set, and it holds the
+    // single-part checksum of the whole file.
+    #[tokio::test]
+    async fn local_storage_get_object_sets_only_the_configured_checksum() {
+        let data = tokio::fs::read("test_data/5byte.dat").await.unwrap();
+
+        for algorithm in ALL_CHECKSUM_ALGORITHMS {
+            let mut storage = local_storage_for_test();
+            storage.config.additional_checksum_algorithm = Some(algorithm.clone());
+            storage.config.full_object_checksum = algorithm == ChecksumAlgorithm::Crc64Nvme;
+
+            let got = storage
+                .get_object(
+                    "test_data/5byte.dat",
+                    None,
+                    None,
+                    None,
+                    None,
+                    SseCustomerKey { key: None },
+                    None,
+                )
+                .await
+                .unwrap();
+
+            let mut hasher = AdditionalChecksum::new(algorithm.clone(), false);
+            hasher.update(data.as_slice());
+            let expected = hasher.finalize();
+
+            for (field_algorithm, value) in all_checksum_fields(&got) {
+                if field_algorithm == algorithm {
+                    assert_eq!(value, Some(expected.as_str()), "{algorithm}");
+                } else {
+                    assert!(
+                        value.is_none(),
+                        "{algorithm}: {field_algorithm} must be None"
+                    );
+                }
+            }
+        }
+    }
+
+    // A file at or above the multipart threshold gets the composite checksum
+    // ("<base64>-<parts>") for hash algorithms, computed per multipart chunk.
+    #[tokio::test]
+    async fn local_storage_get_object_sets_composite_checksum_for_multipart_size() {
+        let data = tokio::fs::read("test_data/5byte.dat").await.unwrap();
+
+        for algorithm in [
+            ChecksumAlgorithm::Sha1,
+            ChecksumAlgorithm::Sha256,
+            ChecksumAlgorithm::Sha512,
+            ChecksumAlgorithm::Md5,
+            ChecksumAlgorithm::Xxhash128,
+            ChecksumAlgorithm::Xxhash3,
+            ChecksumAlgorithm::Xxhash64,
+        ] {
+            let mut storage = local_storage_for_test();
+            storage.config.additional_checksum_algorithm = Some(algorithm.clone());
+            storage.config.transfer_config.multipart_threshold = 2;
+            storage.config.transfer_config.multipart_chunksize = 2;
+
+            let got = storage
+                .get_object(
+                    "test_data/5byte.dat",
+                    None,
+                    None,
+                    None,
+                    None,
+                    SseCustomerKey { key: None },
+                    None,
+                )
+                .await
+                .unwrap();
+
+            // 5 bytes in 2-byte chunks: [2, 2, 1].
+            let mut hasher = AdditionalChecksum::new(algorithm.clone(), false);
+            for chunk in data.chunks(2) {
+                hasher.update(chunk);
+                let _ = hasher.finalize();
+            }
+            let expected = hasher.finalize_all();
+            assert!(expected.ends_with("-3"), "{algorithm}: {expected}");
+
+            let value = all_checksum_fields(&got)
+                .into_iter()
+                .find(|(field_algorithm, _)| *field_algorithm == algorithm)
+                .unwrap()
+                .1;
+            assert_eq!(value, Some(expected.as_str()), "{algorithm}");
+        }
+    }
+
+    // A ranged read that does not start at offset 0 must not calculate (or
+    // report) a checksum, whatever the algorithm.
+    #[tokio::test]
+    async fn local_storage_get_object_skips_checksum_for_non_zero_offset_range() {
+        for algorithm in ALL_CHECKSUM_ALGORITHMS {
+            let mut storage = local_storage_for_test();
+            storage.config.additional_checksum_algorithm = Some(algorithm.clone());
+
+            let got = storage
+                .get_object(
+                    "test_data/5byte.dat",
+                    None,
+                    None,
+                    Some("bytes=1-2".to_string()),
+                    None,
+                    SseCustomerKey { key: None },
+                    None,
+                )
+                .await
+                .unwrap();
+
+            for (field_algorithm, value) in all_checksum_fields(&got) {
+                assert!(
+                    value.is_none(),
+                    "{algorithm}: {field_algorithm} must be None"
+                );
+            }
+        }
     }
 
     #[tokio::test]
