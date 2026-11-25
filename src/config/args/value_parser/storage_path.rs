@@ -58,12 +58,16 @@ pub fn check_storage_path(path: &str) -> Result<String, String> {
 ///
 /// `Url::parse` accepts any `<letters>:<rest>` as a URL, so a local file such
 /// as `report:2024.txt` would be read as scheme `report` and rejected. Only an
-/// `s3:` prefix (any case) or an explicit `://` marks a URL; everything else
-/// is a local path, like the AWS CLI.
+/// explicit `://`, or a prefix the user plausibly meant as a remote location
+/// (`s3:`, `arn:`, `http:`, `https:`, any case), marks a URL; everything else
+/// is a local path, like the AWS CLI. An ARN typed without `s3://` is thus
+/// still rejected instead of being written to a local directory named `arn:...`.
 fn looks_like_url(path: &str) -> bool {
-    path.get(..3)
-        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("s3:"))
-        || path.contains("://")
+    const URL_PREFIXES: [&str; 4] = ["s3:", "arn:", "http:", "https:"];
+    URL_PREFIXES.iter().any(|prefix| {
+        path.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    }) || path.contains("://")
 }
 
 fn is_multi_region_arn(path: &str) -> bool {
@@ -309,6 +313,18 @@ mod tests {
                 StoragePath::Local(p) => assert_eq!(p, PathBuf::from(path)),
                 _ => panic!("expected local path for {path}"),
             }
+        }
+    }
+
+    #[test]
+    fn arn_or_web_scheme_without_s3_prefix_is_rejected() {
+        for path in [
+            "arn:aws:s3:us-east-1:123456789012:accesspoint/ap/key",
+            "ARN:aws:s3:::bucket/key",
+            "http:example.com/key",
+            "https:example.com/key",
+        ] {
+            assert!(check_storage_path(path).is_err(), "{path}");
         }
     }
 

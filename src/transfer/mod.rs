@@ -51,9 +51,9 @@ pub(crate) enum TaggingUnavailable {
     /// object may still have tags, so copying without them can lose data.
     Denied(String),
     /// The store or bucket type has no object-tagging API (NotImplemented /
-    /// 501, MethodNotAllowed / 405, or an unsupported-operation 400 such as an
-    /// S3 Express directory bucket returns). Such an object cannot have tags,
-    /// so nothing is lost by copying without them.
+    /// 501, as S3 Express directory buckets and their access points return,
+    /// or MethodNotAllowed / 405 and similar codes from S3-compatible stores).
+    /// Such an object cannot have tags, so nothing is lost without them.
     Unsupported(String),
 }
 
@@ -78,9 +78,6 @@ pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<TaggingUna
             ),
             _,
         ) => Some(TaggingUnavailable::Unsupported(code.to_string())),
-        (Some(code @ "InvalidRequest"), 400) => {
-            Some(TaggingUnavailable::Unsupported(code.to_string()))
-        }
         (None, 403) => Some(TaggingUnavailable::Denied("HTTP 403".to_string())),
         (None, 405 | 501) => Some(TaggingUnavailable::Unsupported(format!("HTTP {status}"))),
         _ => None,
@@ -106,10 +103,6 @@ pub struct TransferOutcome {
     /// The source object's version-id observed at copy time.
     /// `None` for Local/stdio sources or non-versioned buckets.
     pub source_version_id: Option<String>,
-    /// `true` when the source tags could not be read for lack of permission
-    /// and the object was copied without them. `mv` must then keep the
-    /// source, since deleting it would lose any tags for good.
-    pub source_tags_unreadable: bool,
 }
 
 /// The `s3://` scheme is case-insensitive, matching the path parser.
@@ -365,7 +358,6 @@ pub(crate) mod tests {
                 (Some("NotSupported"), 400),
                 (Some("UnsupportedOperation"), 400),
                 (Some("XNotImplemented"), 501),
-                (Some("InvalidRequest"), 400),
                 (None, 405),
                 (None, 501),
             ] {
@@ -385,7 +377,7 @@ pub(crate) mod tests {
                 (Some("NoSuchKey"), 404),
                 (Some("InternalError"), 500),
                 (Some("SlowDown"), 503),
-                (Some("InvalidRequest"), 500),
+                (Some("InvalidRequest"), 400),
                 (None, 400),
                 (None, 500),
             ] {

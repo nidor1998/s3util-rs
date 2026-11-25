@@ -20,16 +20,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - S3-to-S3 `cp` and `mv` no longer silently drop the source object's tags when the caller cannot read them. S3
   omits the tag count from `HeadObject` both for an untagged object and when the caller lacks permission to read
   tags, and `s3util` treated both as "no tags". It now calls `GetObjectTagging` when the count is missing (except
-  on Express One Zone buckets and their `--xa-s3` access points, which have no tags). If the store does not
-  support tagging (`NotImplemented`, `MethodNotAllowed` and similar), the object is copied without tags. If the
-  call is denied (`AccessDenied`), the object is copied without tags and a warning is logged, and `mv` keeps the
-  source instead of deleting it, so the tags are not lost. Any other failure fails the copy. Use
-  `--disable-tagging` to skip reading tags, or `--tagging` to set them explicitly.
-- An `S3://` (uppercase) path is now treated as S3 when choosing the transfer direction. It passed validation but
-  was treated as a local path, so `cp ./f S3://bucket/key` failed with "both source and target cannot be local paths".
+  on Express One Zone buckets, which have no tags), at the cost of one extra request per untagged object. If the
+  store does not support tagging (`NotImplemented`, `MethodNotAllowed` and similar), the object is copied without
+  tags. If the call is denied (`AccessDenied`), `cp` copies without tags and logs a warning. **`mv` now fails
+  before copying anything**, since it would delete the source and lose the tags for good; pass
+  `--disable-tagging` to move without the source tags, or `--tagging` to set them explicitly. Any other failure
+  fails the copy.
 - A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).
 - A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown
-  scheme. Only `s3:` or a `://` marks a URL; any other path is local.
+  scheme. Only `s3:`, `arn:`, `http:`, `https:` or a `://` marks a URL (and is validated as one); any other path
+  is local.
 
 ## [1.12.0] - 2026-11-24
 

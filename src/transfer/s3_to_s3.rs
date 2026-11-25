@@ -161,7 +161,6 @@ pub async fn transfer(
     );
 
     // Get tagging
-    let mut source_tags_unreadable = false;
     let tagging = if config.disable_tagging {
         None
     } else if config.tagging.is_some() {
@@ -176,7 +175,10 @@ pub async fn transfer(
     } else {
         // A missing tag_count is ambiguous: S3 omits x-amz-tagging-count both
         // for an untagged object and when the caller lacks permission to read
-        // its tags. Ask explicitly rather than silently dropping tags.
+        // its tags. Ask explicitly rather than silently dropping tags. This
+        // costs one extra GetObjectTagging request per untagged object; it is
+        // the only way to tell the two cases apart, and --disable-tagging or
+        // --tagging skips it.
         match source_clone
             .get_object_tagging(source_key, effective_version_id.clone())
             .await
@@ -208,8 +210,19 @@ pub async fn transfer(
                     );
                     None
                 }
-                // The object may have tags we cannot see. Copy without them,
-                // warn, and tell `mv` not to delete the source.
+                // The object may have tags we cannot see. `mv` would delete
+                // the source after the copy and lose them for good, so it
+                // stops here, before anything is written. `cp` leaves the
+                // source in place, so it copies without tags and warns.
+                Some(TaggingUnavailable::Denied(reason))
+                    if config.fail_on_unreadable_source_tags =>
+                {
+                    return Err(e.context(format!(
+                        "no permission to read source object tags ({reason}): {source_key}. \
+                         Nothing was copied or deleted. Use --disable-tagging to move without \
+                         the source tags, or --tagging to set them explicitly."
+                    )));
+                }
                 Some(TaggingUnavailable::Denied(reason)) => {
                     warn!(
                         key = source_key,
@@ -217,7 +230,6 @@ pub async fn transfer(
                         "no permission to read source object tags; copying without tags. \
                          Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
                     );
-                    source_tags_unreadable = true;
                     None
                 }
                 None => {
@@ -334,10 +346,7 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(TransferOutcome {
-        source_version_id,
-        source_tags_unreadable,
-    })
+    Ok(TransferOutcome { source_version_id })
 }
 
 /// Annotation names fetched per ListObjectAnnotations page. s3sync passes its
@@ -949,6 +958,7 @@ mod tests {
             is_stdio_source: false,
             is_stdio_target: false,
             no_fail_on_verify_error: false,
+            fail_on_unreadable_source_tags: false,
             skip_existing: false,
             dry_run: false,
             enable_sync_object_annotations: false,
@@ -1048,7 +1058,13 @@ mod tests {
     }
 
     async fn run_tag_transfer(source: MockSource) -> (Result<TransferOutcome>, MockTarget) {
-        let config = minimal_config(false);
+        run_tag_transfer_with(minimal_config(false), source).await
+    }
+
+    async fn run_tag_transfer_with(
+        config: Config,
+        source: MockSource,
+    ) -> (Result<TransferOutcome>, MockTarget) {
         let target = MockTarget::default();
         let recorder = target.clone();
         let token = create_pipeline_cancellation_token();
@@ -1085,24 +1101,51 @@ mod tests {
     /// No s3:GetObjectTagging permission, or a store without the tagging API:
     /// S3 omits the tag count for every untagged object, so failing here would
     /// break nearly every copy. Copy without tags instead. Only a permission
-    /// failure may hide real tags, so only it marks the outcome for `mv`.
+    /// failure may hide real tags; see the `mv` test below.
     #[tokio::test]
     async fn tagging_access_denied_or_unsupported_copies_without_tags() {
-        for (err, unreadable) in [
-            (("AccessDenied", 403), true),
-            (("NotImplemented", 501), false),
-            (("MethodNotAllowed", 405), false),
+        for err in [
+            ("AccessDenied", 403),
+            ("NotImplemented", 501),
+            ("MethodNotAllowed", 405),
         ] {
             let mut source = MockSource::new(None);
             source.tags = None;
             source.tagging_error = Some(err);
             let calls = source.clone();
             let (result, target) = run_tag_transfer(source).await;
-            let outcome = result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
-            assert_eq!(outcome.source_tags_unreadable, unreadable, "{err:?}");
+            result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
             assert_eq!(calls.get_object_tagging_call_count(), 1);
             assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
         }
+    }
+
+    /// `mv` deletes the source after the copy, so tags it cannot read would be
+    /// lost for good: it fails before writing anything. Unsupported tagging
+    /// still copies, since such an object has no tags.
+    #[tokio::test]
+    async fn mv_fails_before_writing_when_tags_are_denied() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("AccessDenied", 403));
+        let (result, target) = run_tag_transfer_with(config.clone(), source).await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("Nothing was copied or deleted"),
+            "error: {err}"
+        );
+        assert!(err.contains("--disable-tagging"), "error: {err}");
+        assert!(target.put_taggings.lock().unwrap().is_empty());
+
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("NotImplemented", 501));
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
     }
 
     /// Any other tagging failure (network, throttling, 5xx) may hide real tags,

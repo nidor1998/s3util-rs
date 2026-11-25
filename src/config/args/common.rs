@@ -1194,6 +1194,7 @@ pub(crate) fn build_config_from_common(
         is_stdio_source,
         is_stdio_target,
         no_fail_on_verify_error: false,
+        fail_on_unreadable_source_tags: false,
         skip_existing: false,
         dry_run: common.dry_run,
         enable_sync_object_annotations: common.enable_sync_object_annotations,

@@ -41,8 +41,6 @@ use crate::types::{
 };
 
 const EXPRESS_ONEZONE_STORAGE_SUFFIX: &str = "--x-s3";
-/// Access points for directory buckets end in `--xa-s3`.
-const EXPRESS_ONEZONE_ACCESS_POINT_SUFFIX: &str = "--xa-s3";
 
 pub mod api;
 mod client_builder;
@@ -830,7 +828,6 @@ pub fn remove_s3_prefix(key: &str, prefix: &str) -> String {
 
 fn is_express_onezone_storage(bucket: &str) -> bool {
     bucket.ends_with(EXPRESS_ONEZONE_STORAGE_SUFFIX)
-        || bucket.ends_with(EXPRESS_ONEZONE_ACCESS_POINT_SUFFIX)
 }
 
 fn get_annotation_checksum_algorithm(
@@ -884,7 +881,6 @@ mod tests {
         init_dummy_tracing_subscriber();
 
         assert!(is_express_onezone_storage("bucket--x-s3"));
-        assert!(is_express_onezone_storage("myap--usw2-az1--xa-s3"));
 
         assert!(!is_express_onezone_storage("bucket-x-s3"));
         assert!(!is_express_onezone_storage("bucket--x-s3s"));
@@ -1060,6 +1056,7 @@ mod tests {
             is_stdio_source: false,
             is_stdio_target: false,
             no_fail_on_verify_error: false,
+            fail_on_unreadable_source_tags: false,
             skip_existing: false,
             dry_run: false,
             enable_sync_object_annotations: false,

@@ -66,6 +66,10 @@ pub struct Config {
     pub is_stdio_source: bool,
     pub is_stdio_target: bool,
     pub no_fail_on_verify_error: bool,
+    /// Fail an S3-to-S3 transfer, before writing the target, when the source
+    /// tags cannot be read for lack of permission. Set by `mv`, which deletes
+    /// the source afterwards and would otherwise lose the tags for good.
+    pub fail_on_unreadable_source_tags: bool,
     pub skip_existing: bool,
     pub dry_run: bool,
     pub enable_sync_object_annotations: bool,
