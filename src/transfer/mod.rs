@@ -44,42 +44,64 @@ pub(crate) fn translate_source_head_object_error(e: anyhow::Error, key: &str) ->
     e
 }
 
-/// Why a source `get_object_tagging` call could not read the tags at all.
+/// How a failed source `get_object_tagging` call should be treated.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum TaggingUnavailable {
-    /// The caller lacks `s3:GetObjectTagging` (AccessDenied / HTTP 403). The
+    /// The store reports that the object has no tag set (NoSuchTagSet).
+    NoTags,
+    /// The tags exist or may exist but cannot be read: AccessDenied / 403, or
+    /// another client error that is neither "not found" nor transient. The
     /// object may still have tags, so copying without them can lose data.
-    Denied(String),
-    /// The store or bucket type has no object-tagging API (NotImplemented /
-    /// 501, as S3 Express directory buckets and their access points return,
-    /// or MethodNotAllowed / 405 and similar codes from S3-compatible stores).
-    /// Such an object cannot have tags, so nothing is lost without them.
+    Unreadable(String),
+    /// The store has no object-tagging API (NotImplemented / 501, as S3
+    /// Express directory buckets return, NotSupported and similar). Such an
+    /// object cannot have tags, so nothing is lost without them.
     Unsupported(String),
+    /// MethodNotAllowed / 405. S3-compatible stores without a tagging API
+    /// answer this, but AWS S3 also does for a delete marker, so it only means
+    /// "unsupported" when no version was requested.
+    MethodNotAllowed(String),
 }
 
 /// Classifies a source `get_object_tagging` failure. Returns `None` for any
-/// failure that might hide real tags (network, throttling, 5xx, NoSuchKey, ...),
-/// which must fail the copy.
+/// failure that might be transient or means the object is gone (network,
+/// throttling, timeouts, 5xx, NoSuchKey, NoSuchVersion), which must fail the copy.
 pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<TaggingUnavailable> {
     let sdk = e.downcast_ref::<SdkError<GetObjectTaggingError, Response<SdkBody>>>()?;
     let SdkError::ServiceError(svc) = sdk else {
         return None;
     };
     let status = svc.raw().status().as_u16();
+    let label = || {
+        svc.err()
+            .code()
+            .map_or_else(|| format!("HTTP {status}"), str::to_string)
+    };
     match (svc.err().code(), status) {
-        (Some(code @ "AccessDenied"), _) => Some(TaggingUnavailable::Denied(code.to_string())),
+        (Some("NoSuchTagSet"), _) => Some(TaggingUnavailable::NoTags),
+        (
+            Some("NotImplemented" | "NotSupported" | "UnsupportedOperation" | "XNotImplemented"),
+            _,
+        )
+        | (None, 501) => Some(TaggingUnavailable::Unsupported(label())),
+        (Some("MethodNotAllowed"), _) | (None, 405) => {
+            Some(TaggingUnavailable::MethodNotAllowed(label()))
+        }
         (
             Some(
-                code @ ("NotImplemented"
-                | "MethodNotAllowed"
-                | "NotSupported"
-                | "UnsupportedOperation"
-                | "XNotImplemented"),
+                "NoSuchKey"
+                | "NoSuchVersion"
+                | "NoSuchBucket"
+                | "RequestTimeout"
+                | "SlowDown"
+                | "Throttling"
+                | "ThrottlingException"
+                | "RequestTimeTooSkewed",
             ),
             _,
-        ) => Some(TaggingUnavailable::Unsupported(code.to_string())),
-        (None, 403) => Some(TaggingUnavailable::Denied("HTTP 403".to_string())),
-        (None, 405 | 501) => Some(TaggingUnavailable::Unsupported(format!("HTTP {status}"))),
+        )
+        | (_, 404 | 408 | 429) => None,
+        (_, 400..=499) => Some(TaggingUnavailable::Unreadable(label())),
         _ => None,
     }
 }
@@ -336,17 +358,42 @@ pub(crate) mod tests {
         }
 
         #[test]
-        fn access_denied_is_denied_through_context() {
+        fn access_denied_is_unreadable_through_context() {
             // S3Storage wraps the SdkError with `.context(...)`.
             let e = anyhow::Error::new(get_object_tagging_service_error(Some("AccessDenied"), 403))
                 .context("wrapper");
             assert_eq!(
                 tagging_unavailable_reason(&e),
-                Some(TaggingUnavailable::Denied("AccessDenied".to_string()))
+                Some(TaggingUnavailable::Unreadable("AccessDenied".to_string()))
             );
             assert_eq!(
                 reason(None, 403),
-                Some(TaggingUnavailable::Denied("HTTP 403".to_string()))
+                Some(TaggingUnavailable::Unreadable("HTTP 403".to_string()))
+            );
+        }
+
+        #[test]
+        fn other_client_errors_are_unreadable() {
+            for (code, status) in [
+                (Some("InvalidRequest"), 400),
+                (Some("InvalidArgument"), 400),
+                (None, 400),
+            ] {
+                assert!(
+                    matches!(
+                        reason(code, status),
+                        Some(TaggingUnavailable::Unreadable(_))
+                    ),
+                    "{code:?} {status}"
+                );
+            }
+        }
+
+        #[test]
+        fn no_such_tag_set_means_no_tags() {
+            assert_eq!(
+                reason(Some("NoSuchTagSet"), 404),
+                Some(TaggingUnavailable::NoTags)
             );
         }
 
@@ -354,11 +401,10 @@ pub(crate) mod tests {
         fn unsupported_tagging_api_is_unsupported() {
             for (code, status) in [
                 (Some("NotImplemented"), 501),
-                (Some("MethodNotAllowed"), 405),
+                (Some("NotImplemented"), 400),
                 (Some("NotSupported"), 400),
                 (Some("UnsupportedOperation"), 400),
                 (Some("XNotImplemented"), 501),
-                (None, 405),
                 (None, 501),
             ] {
                 assert!(
@@ -369,16 +415,27 @@ pub(crate) mod tests {
                     "{code:?} {status}"
                 );
             }
+            for (code, status) in [(Some("MethodNotAllowed"), 405), (None, 405)] {
+                assert!(
+                    matches!(
+                        reason(code, status),
+                        Some(TaggingUnavailable::MethodNotAllowed(_))
+                    ),
+                    "{code:?} {status}"
+                );
+            }
         }
 
         #[test]
-        fn other_failures_are_not_unavailable() {
+        fn transient_or_missing_object_failures_are_not_unavailable() {
             for (code, status) in [
                 (Some("NoSuchKey"), 404),
-                (Some("InternalError"), 500),
+                (Some("NoSuchVersion"), 404),
+                (Some("RequestTimeout"), 400),
                 (Some("SlowDown"), 503),
-                (Some("InvalidRequest"), 400),
-                (None, 400),
+                (Some("InternalError"), 500),
+                (None, 404),
+                (None, 429),
                 (None, 500),
             ] {
                 assert_eq!(reason(code, status), None, "{code:?} {status}");

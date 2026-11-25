@@ -696,7 +696,12 @@ fn check_local_source_is_regular_file(
             path.display()
         ));
     }
-    if metadata.len() == 0 && has_unreported_content(path) {
+    // Re-stat after the probe: a regular file that got its first write in the
+    // meantime now reports a size and is a normal file, not a pseudo-file.
+    if metadata.len() == 0
+        && has_unreported_content(path)
+        && std::fs::metadata(path).is_ok_and(|m| m.len() == 0)
+    {
         return Err(anyhow!(
             "source reports a size of 0 but has content (e.g. a /proc or /sys file): {}. \
              To upload it, pipe the file's contents to `s3util cp - s3://bucket/key`.",

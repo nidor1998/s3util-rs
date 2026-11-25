@@ -92,6 +92,16 @@ pub async fn transfer(
     let head_e_tag = head_object_output.e_tag().map(|e_tag| e_tag.to_string());
     let source_tag_count = head_object_output.tag_count();
 
+    // Resolved before any GET so `mv` can refuse without downloading anything.
+    let tagging = resolve_source_tagging(
+        config,
+        &source_clone,
+        source_key,
+        effective_version_id.clone(),
+        source_tag_count,
+    )
+    .await?;
+
     // Get the first chunk range if multipart upload is required.
     let range = first_chunk::get_first_chunk_range(
         &*source,
@@ -161,15 +171,6 @@ pub async fn transfer(
         &get_object_output,
         config.additional_checksum_algorithm.clone(),
     );
-
-    let tagging = resolve_source_tagging(
-        config,
-        &source_clone,
-        source_key,
-        effective_version_id.clone(),
-        source_tag_count,
-    )
-    .await?;
 
     // Build checksum algorithm slice matching s3sync's object.checksum_algorithm() format
     let checksum_algorithms: Option<Vec<_>> = config
@@ -520,35 +521,40 @@ async fn resolve_source_tagging(
     // tags. Ask explicitly rather than silently dropping tags. This costs one
     // extra GetObjectTagging request per untagged object; it is the only way
     // to tell the two cases apart, and --disable-tagging or --tagging skips it.
-    let mut result = source
+    let e = match source
         .get_object_tagging(source_key, version_id.clone())
-        .await;
-
-    // On a versioned bucket the version-id comes from HEAD, not the user, and
-    // a versioned GetObjectTagging needs s3:GetObjectVersionTagging. A caller
-    // with only s3:GetObjectTagging can still read the latest version's tags,
-    // which is the version HEAD just returned.
-    if config.version_id.is_none()
-        && version_id.is_some()
-        && let Err(e) = &result
-        && matches!(
-            crate::transfer::tagging_unavailable_reason(e),
-            Some(TaggingUnavailable::Denied(_))
-        )
+        .await
     {
-        debug!(
-            key = source_key,
-            "versioned GetObjectTagging denied; retrying for the latest version."
-        );
-        result = source.get_object_tagging(source_key, None).await;
-    }
-
-    let e = match result {
         Ok(tags) => return Ok(encode_tag_set(&tags)),
         Err(e) => e,
     };
-
     let reason = crate::transfer::tagging_unavailable_reason(&e);
+
+    // On a versioned bucket the version-id comes from HEAD, not the user, and
+    // a versioned GetObjectTagging needs s3:GetObjectVersionTagging. A caller
+    // with only s3:GetObjectTagging can still read the latest version's tags.
+    // They are used only if the response says the latest version is still the
+    // one HEAD returned; otherwise (another writer, a delete marker, any error)
+    // the original failure stands.
+    if config.version_id.is_none()
+        && version_id.is_some()
+        && matches!(reason, Some(TaggingUnavailable::Unreadable(_)))
+    {
+        match source.get_object_tagging(source_key, None).await {
+            Ok(tags) if tags.version_id() == version_id.as_deref() => {
+                return Ok(encode_tag_set(&tags));
+            }
+            Ok(_) => debug!(
+                key = source_key,
+                "latest version changed since HEAD; its tags do not apply."
+            ),
+            Err(retry_error) => debug!(
+                key = source_key,
+                error = format!("{retry_error:#}"),
+                "latest-version GetObjectTagging retry failed."
+            ),
+        }
+    }
 
     // HEAD proved the object has tags, so copying without them is data loss
     // whatever the reason.
@@ -560,9 +566,20 @@ async fn resolve_source_tagging(
     }
 
     match reason {
+        Some(TaggingUnavailable::NoTags) => Ok(None),
         // The store has no tagging API, so the object has no tags. Most
         // untagged objects on such stores land here, so this must not fail.
+        // 405 means that only for an unversioned request: AWS S3 also returns
+        // it for a delete marker, i.e. a version that changed under us.
         Some(TaggingUnavailable::Unsupported(reason)) => {
+            debug!(
+                key = source_key,
+                reason = reason.as_str(),
+                "source does not support object tagging; copying without tags."
+            );
+            Ok(None)
+        }
+        Some(TaggingUnavailable::MethodNotAllowed(reason)) if version_id.is_none() => {
             debug!(
                 key = source_key,
                 reason = reason.as_str(),
@@ -572,24 +589,25 @@ async fn resolve_source_tagging(
         }
         // The object may have tags we cannot see. `mv` would delete the source
         // after the copy and lose them for good, so it stops here, before
-        // anything is written. `cp` leaves the source in place, so it copies
-        // without tags and warns.
-        Some(TaggingUnavailable::Denied(reason)) if config.fail_on_unreadable_source_tags => Err(e
-            .context(format!(
-                "no permission to read source object tags ({reason}): {source_key}. \
+        // anything is read or written. `cp` leaves the source in place, so it
+        // copies without tags and warns.
+        Some(TaggingUnavailable::Unreadable(reason)) if config.fail_on_unreadable_source_tags => {
+            Err(e.context(format!(
+                "cannot read source object tags ({reason}): {source_key}. \
                  Nothing was copied or deleted. Use --disable-tagging to move without \
                  the source tags, or --tagging to set them explicitly."
-            ))),
-        Some(TaggingUnavailable::Denied(reason)) => {
+            )))
+        }
+        Some(TaggingUnavailable::Unreadable(reason)) => {
             warn!(
                 key = source_key,
                 reason = reason.as_str(),
-                "no permission to read source object tags; copying without tags. \
+                "cannot read source object tags; copying without tags. \
                  Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
             );
             Ok(None)
         }
-        None => Err(e.context(format!(
+        _ => Err(e.context(format!(
             "failed to get source object tagging: {source_key}. \
              Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
         ))),
@@ -642,6 +660,9 @@ mod tests {
         /// Return AccessDenied for a versioned get_object_tagging call, like a
         /// policy without s3:GetObjectVersionTagging.
         deny_versioned_tagging: bool,
+        /// Version-id an unversioned get_object_tagging reports as latest;
+        /// `None` means the HEAD version (`version_id`).
+        latest_version_id: Option<String>,
     }
 
     impl MockSource {
@@ -656,6 +677,7 @@ mod tests {
                 get_object_tagging_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
                 get_object_tagging_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
                 deny_versioned_tagging: false,
+                latest_version_id: None,
             }
         }
         fn get_object_tagging_call_count(&self) -> usize {
@@ -702,6 +724,10 @@ mod tests {
             self.get_object_tagging_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let versioned = version_id.is_some();
+            let reported_version_id = version_id
+                .clone()
+                .or_else(|| self.latest_version_id.clone())
+                .or_else(|| self.version_id.clone());
             self.get_object_tagging_version_ids
                 .lock()
                 .unwrap()
@@ -737,6 +763,7 @@ mod tests {
                 })
                 .collect();
             Ok(GetObjectTaggingOutput::builder()
+                .set_version_id(reported_version_id)
                 .set_tag_set(Some(tag_set))
                 .build()
                 .unwrap())
@@ -1253,6 +1280,54 @@ mod tests {
             target.put_taggings.lock().unwrap().as_slice(),
             &[Some("env=prod".to_string())]
         );
+    }
+
+    /// If the latest version is no longer the HEAD version, its tags belong to
+    /// another object version and must not be used.
+    #[tokio::test]
+    async fn versioned_retry_ignores_tags_of_a_newer_latest_version() {
+        for fail_on_unreadable in [false, true] {
+            let mut source = MockSource::new(Some("V1".to_string()));
+            source.tags = Some(vec![("b".to_string(), "2".to_string())]);
+            source.deny_versioned_tagging = true;
+            source.latest_version_id = Some("V2".to_string());
+            let mut config = minimal_config(false);
+            config.fail_on_unreadable_source_tags = fail_on_unreadable;
+            let (result, target) = run_tag_transfer_with(config, source).await;
+            if fail_on_unreadable {
+                let msg = format!("{:#}", result.unwrap_err());
+                assert!(msg.contains("Nothing was copied"), "{msg}");
+                assert!(target.put_taggings.lock().unwrap().is_empty());
+            } else {
+                result.unwrap();
+                assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_such_tag_set_copies_without_tags() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("NoSuchTagSet", 404));
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    /// AWS S3 answers 405 for a delete marker, so on a versioned request it
+    /// does not mean "no tagging API".
+    #[tokio::test]
+    async fn method_not_allowed_on_a_versioned_request_fails() {
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.tags = None;
+        source.tagging_error = Some(("MethodNotAllowed", 405));
+        let (result, target) = run_tag_transfer(source).await;
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("failed to get source object tagging"), "{msg}");
+        assert!(target.put_taggings.lock().unwrap().is_empty());
     }
 
     /// An explicit --source-version-id names a specific version: never fall

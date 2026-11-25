@@ -58,7 +58,7 @@ pub fn check_storage_path(path: &str) -> Result<String, String> {
 ///
 /// `Url::parse` accepts any `<letters>:<rest>` as a URL, so a local file such
 /// as `report:2024.txt` would be read as scheme `report` and rejected. Only an
-/// explicit `://`, or a prefix the user plausibly meant as a remote location
+/// explicit `<scheme>://` at the start, or a prefix the user plausibly meant as a remote location
 /// (`s3:`, `arn:`, `http:`, `https:`, any case), marks a URL; everything else
 /// is a local path, like the AWS CLI. An ARN typed without `s3://` is thus
 /// still rejected instead of being written to a local directory named `arn:...`.
@@ -67,7 +67,18 @@ fn looks_like_url(path: &str) -> bool {
     URL_PREFIXES.iter().any(|prefix| {
         path.get(..prefix.len())
             .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
-    }) || path.contains("://")
+    }) || has_scheme_separator(path)
+}
+
+/// Whether `path` starts with `<scheme>://` (RFC 3986 scheme characters), so
+/// a `://` later in a local path such as `./dir/a://b` does not count.
+fn has_scheme_separator(path: &str) -> bool {
+    let Some((scheme, _)) = path.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
 }
 
 fn is_multi_region_arn(path: &str) -> bool {
@@ -313,6 +324,17 @@ mod tests {
                 StoragePath::Local(p) => assert_eq!(p, PathBuf::from(path)),
                 _ => panic!("expected local path for {path}"),
             }
+        }
+    }
+
+    #[test]
+    fn double_slash_colon_inside_a_local_path_is_local() {
+        for path in ["./dir/x://y", "dir/a://b", "/tmp/a://b"] {
+            assert_eq!(check_storage_path(path).unwrap(), path, "{path}");
+            assert!(
+                matches!(parse_storage_path(path), StoragePath::Local(_)),
+                "{path}"
+            );
         }
     }
 

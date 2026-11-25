@@ -11,7 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
   `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which has content, such as
-  a `/proc` or `/sys` file (a file that cannot be read is left to the normal upload error). The object size is taken from file metadata, so these uploaded an empty object and
+  a `/proc` or `/sys` file (a file that cannot be read is left to the normal upload error, and a file that grows during the check is
+  accepted). The object size is taken from file metadata, so these uploaded an empty object and
   exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
 - `put-bucket-replication` now accepts, and `get-bucket-replication` now prints, the `Not` filter (on `Filter` and
   on `Filter.And`, with its nested `Or`) and `Destination.EncryptionConfiguration.UseSourceMultiRegionKey`.
@@ -19,20 +20,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   including replication exclusions.
 - S3-to-S3 `cp` and `mv` no longer silently drop the source object's tags when the caller cannot read them. S3
   omits the tag count from `HeadObject` both for an untagged object and when the caller lacks permission to read
-  tags, and `s3util` treated both as "no tags". It now calls `GetObjectTagging` when the count is missing (except
-  on Express One Zone buckets and their `--xa-s3` access points, which have no tags), at the cost of one extra
-  request per untagged object. On a versioned bucket, a denied versioned call (which needs
-  `s3:GetObjectVersionTagging`) is retried for the latest version unless `--source-version-id` was given. If the
-  store does not support tagging (`NotImplemented`, `MethodNotAllowed` and similar), the object is copied without
-  tags. If the call is denied (`AccessDenied`), `cp` copies without tags and logs a warning. **`mv` now fails
-  before copying anything**, since it would delete the source and lose the tags for good; pass
-  `--disable-tagging` to move without the source tags, or `--tagging` to set them explicitly. When `HeadObject`
-  reports that the object has tags, failing to read them always fails the copy. Any other failure fails the copy.
-  `mv --dry-run` does not read tags, so it does not detect a missing tag permission.
+  tags, and `s3util` treated both as "no tags". It now calls `GetObjectTagging` (before downloading anything) when
+  the count is missing, except on Express One Zone buckets and their `--xa-s3` access points, which have no tags.
+  This costs one extra request per untagged object.
+  - On a versioned bucket, a denied versioned call (which needs `s3:GetObjectVersionTagging`) is retried for the
+    latest version unless `--source-version-id` was given; those tags are used only if the latest version is still
+    the one being copied.
+  - `NoSuchTagSet` means no tags. A store without a tagging API (`NotImplemented`, `NotSupported` and similar, or
+    `MethodNotAllowed` on an unversioned request) copies without tags.
+  - If the tags cannot be read (`AccessDenied` or another client error), `cp` copies without tags and logs a
+    warning. **`mv` now fails before copying anything**, since it would delete the source and lose the tags for
+    good; pass `--disable-tagging` to move without the source tags, or `--tagging` to set them explicitly.
+  - When `HeadObject` reports that the object has tags, failing to read them always fails the copy, as does any
+    transient or server error.
+  - `mv --dry-run` does not read tags, so it does not detect a missing tag permission.
 - A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).
 - A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown
-  scheme. Only `s3:`, `arn:`, `http:`, `https:` or a `://` marks a URL (and is validated as one); any other path
-  is local.
+  scheme. Only a leading `s3:`, `arn:`, `http:`, `https:` or `<scheme>://` marks a URL (and is validated as one);
+  any other path is local.
 
 ## [1.12.0] - 2026-11-24
 
