@@ -316,3 +316,24 @@ fn invalid_subcommand_exits_with_error() {
         "expected unknown-subcommand error.\n--- stderr ---\n{stderr}"
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn non_utf8_argument_is_a_usage_error_not_a_panic() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let output = s3util()
+        .arg("cp")
+        .arg(OsStr::from_bytes(b"a\xff"))
+        .arg("s3://bucket/key")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .expect("failed to spawn s3util binary");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_eq!(output.status.code(), Some(2), "stderr={stderr}");
+    assert!(!stderr.contains("panicked"), "stderr={stderr}");
+    assert!(stderr.contains("invalid UTF-8"), "stderr={stderr}");
+}

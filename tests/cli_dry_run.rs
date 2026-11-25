@@ -904,3 +904,46 @@ fn rename_help_lists_dry_run() {
         "rename --help should list --dry-run; got: {stdout}"
     );
 }
+
+// ---------- local source shapes ----------
+
+#[test]
+fn cp_dry_run_accepts_local_filename_containing_colon() {
+    // `a:b` must be a local path, not a URL with scheme `a`.
+    let dir = tempfile::tempdir().unwrap();
+    let src = dir.path().join("report:2024.txt");
+    std::fs::write(&src, b"x").unwrap();
+    let target = format!("{FAKE_BUCKET}/key");
+    let (ok, _stdout, stderr, code) =
+        run(s3util().args(["cp", "--dry-run", src.to_str().unwrap(), &target]));
+    assert!(ok, "colon filename must be accepted; stderr={stderr}");
+    assert_eq!(code, Some(0));
+    assert!(stderr.contains("would copy"), "stderr={stderr}");
+}
+
+#[cfg(unix)]
+#[test]
+fn cp_and_mv_reject_fifo_source() {
+    // A FIFO has no size in its metadata; uploading it would create an empty
+    // object (and mv would then delete the source).
+    let dir = tempfile::tempdir().unwrap();
+    let fifo = dir.path().join("fifo");
+    assert!(
+        Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap()
+            .success()
+    );
+    let target = format!("{FAKE_BUCKET}/key");
+    for subcommand in ["cp", "mv"] {
+        let (ok, _stdout, stderr, _code) =
+            run(s3util().args([subcommand, "--dry-run", fifo.to_str().unwrap(), &target]));
+        assert!(!ok, "{subcommand}: FIFO source must be rejected");
+        assert!(
+            stderr.contains("not a regular file"),
+            "{subcommand}: stderr={stderr}"
+        );
+        assert!(fifo.exists(), "{subcommand}: source must not be removed");
+    }
+}

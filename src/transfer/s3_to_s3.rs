@@ -163,16 +163,24 @@ pub async fn transfer(
         None
     } else if config.tagging.is_some() {
         config.tagging.clone()
-    } else if source_tag_count.is_none_or(|count| count == 0) {
+    } else if source_tag_count == Some(0)
+        || (source_tag_count.is_none() && source_clone.is_express_onezone_storage())
+    {
         // Skip get_object_tagging when the source has no tags.
-        // Notably, S3 Express One Zone buckets don't support tagging —
-        // HeadObject returns no tag_count, and GetObjectTagging would fail.
+        // S3 Express One Zone buckets don't support tagging — HeadObject
+        // returns no tag_count, and GetObjectTagging would fail.
         None
     } else {
+        // A missing tag_count is ambiguous: S3 omits x-amz-tagging-count both
+        // for an untagged object and when the caller lacks permission to read
+        // its tags. Ask explicitly rather than silently dropping tags.
         let tagging_output = source_clone
             .get_object_tagging(source_key, effective_version_id.clone())
             .await
-            .context(format!("failed to get source object tagging: {source_key}"))?;
+            .context(format!(
+                "failed to get source object tagging: {source_key}. \
+                 Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
+            ))?;
         if tagging_output.tag_set().is_empty() {
             None
         } else {
@@ -519,6 +527,12 @@ mod tests {
         /// Records the version-id each `get_object` call was issued with, so a
         /// test can assert the first chunk is pinned to the HEAD-time version.
         get_object_version_ids: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        /// `x-amz-tagging-count` surfaced by head_object.
+        tag_count: Option<i32>,
+        /// Tags returned by get_object_tagging; `None` makes it fail.
+        tags: Option<Vec<(String, String)>>,
+        is_express: bool,
+        get_object_tagging_calls: Arc<std::sync::atomic::AtomicUsize>,
     }
 
     impl MockSource {
@@ -526,7 +540,15 @@ mod tests {
             Self {
                 version_id,
                 get_object_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
+                tag_count: None,
+                tags: Some(Vec::new()),
+                is_express: false,
+                get_object_tagging_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
+        }
+        fn get_object_tagging_call_count(&self) -> usize {
+            self.get_object_tagging_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
         }
         fn recorded_get_object_version_ids(&self) -> Vec<Option<String>> {
             self.get_object_version_ids.lock().unwrap().clone()
@@ -539,7 +561,7 @@ mod tests {
             false
         }
         fn is_express_onezone_storage(&self) -> bool {
-            false
+            self.is_express
         }
         async fn get_object(
             &self,
@@ -565,7 +587,25 @@ mod tests {
             _key: &str,
             _version_id: Option<String>,
         ) -> Result<GetObjectTaggingOutput> {
-            unimplemented!()
+            self.get_object_tagging_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let Some(tags) = &self.tags else {
+                return Err(anyhow::anyhow!("AccessDenied"));
+            };
+            let tag_set = tags
+                .iter()
+                .map(|(k, v)| {
+                    aws_sdk_s3::types::Tag::builder()
+                        .key(k)
+                        .value(v)
+                        .build()
+                        .unwrap()
+                })
+                .collect();
+            Ok(GetObjectTaggingOutput::builder()
+                .set_tag_set(Some(tag_set))
+                .build()
+                .unwrap())
         }
         async fn head_object(
             &self,
@@ -577,9 +617,8 @@ mod tests {
             _sse_c_key: SseCustomerKey,
             _sse_c_key_md5: Option<String>,
         ) -> Result<HeadObjectOutput> {
-            // tag_count is left None so tagging short-circuits without calling
-            // get_object_tagging in the non-disabled, no-explicit-tagging path.
             Ok(HeadObjectOutput::builder()
+                .set_tag_count(self.tag_count)
                 .content_length(4)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
@@ -670,8 +709,11 @@ mod tests {
 
     /// Mock S3 target — returns a populated PutObjectOutput so the etag-present
     /// debug branch is taken (as opposed to the warn branch on no etag).
-    #[derive(Clone)]
-    struct MockTarget;
+    #[derive(Clone, Default)]
+    struct MockTarget {
+        /// Tagging string each put_object call received.
+        put_taggings: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    }
 
     #[async_trait]
     impl StorageTrait for MockTarget {
@@ -754,10 +796,11 @@ mod tests {
             _source_size: u64,
             _source_additional_checksum: Option<String>,
             _get_object_output_first_chunk: GetObjectOutput,
-            _tagging: Option<String>,
+            tagging: Option<String>,
             _object_checksum: Option<crate::types::ObjectChecksum>,
             _if_none_match: Option<String>,
         ) -> Result<PutObjectOutput> {
+            self.put_taggings.lock().unwrap().push(tagging);
             Ok(PutObjectOutput::builder().e_tag("\"target-etag\"").build())
         }
         async fn put_object_tagging(
@@ -872,7 +915,7 @@ mod tests {
     async fn transfer_captures_source_version_id_from_head_object() {
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(Some("V123".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -898,7 +941,7 @@ mod tests {
         let mock = MockSource::new(Some("V123".to_string()));
         let recorder = mock.clone();
         let source: Storage = Box::new(mock);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -927,7 +970,7 @@ mod tests {
         let mock = MockSource::new(None);
         let recorder = mock.clone();
         let source: Storage = Box::new(mock);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -946,7 +989,7 @@ mod tests {
     async fn transfer_captures_none_when_head_object_has_no_version_id() {
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(None));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -959,13 +1002,81 @@ mod tests {
         assert_eq!(outcome.source_version_id, None);
     }
 
+    async fn run_tag_transfer(source: MockSource) -> (Result<TransferOutcome>, MockTarget) {
+        let config = minimal_config(false);
+        let target = MockTarget::default();
+        let recorder = target.clone();
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        let result = transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await;
+        (result, recorder)
+    }
+
+    /// S3 omits x-amz-tagging-count when the caller cannot read the tags, so
+    /// a missing count must not be read as "no tags".
+    #[tokio::test]
+    async fn tags_are_fetched_when_head_omits_tag_count() {
+        let mut source = MockSource::new(None);
+        source.tags = Some(vec![("env".to_string(), "prod".to_string())]);
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 1);
+        assert_eq!(
+            target.put_taggings.lock().unwrap().as_slice(),
+            &[Some("env=prod".to_string())]
+        );
+    }
+
+    #[tokio::test]
+    async fn unreadable_tags_fail_the_copy_instead_of_dropping_them() {
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        let (result, target) = run_tag_transfer(source).await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(err.contains("--disable-tagging"), "error: {err}");
+        assert!(target.put_taggings.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn tag_count_zero_skips_get_object_tagging() {
+        let mut source = MockSource::new(None);
+        source.tag_count = Some(0);
+        source.tags = None;
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 0);
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    #[tokio::test]
+    async fn express_onezone_source_skips_get_object_tagging() {
+        let mut source = MockSource::new(None);
+        source.is_express = true;
+        source.tags = None;
+        let calls = source.clone();
+        let (result, _target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 0);
+    }
+
     #[tokio::test]
     async fn transfer_returns_default_when_cancelled_before_start() {
         // Token cancelled before transfer() runs ⇒ transfer returns the default
         // outcome immediately, without making any source/target call.
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(None));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         token.cancel();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -986,7 +1097,7 @@ mod tests {
         // from the head_object response identically to the download+upload path.
         let config = minimal_config(true);
         let source: Storage = Box::new(MockSource::new(Some("V456".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -1094,7 +1205,6 @@ mod tests {
     async fn mock_source_unimplemented_methods_panic() {
         let source = MockSource::new(None);
 
-        assert_future_panics(source.get_object_tagging("k", None)).await;
         assert_future_panics(source.head_object_first_part(
             "k",
             None,
@@ -1122,7 +1232,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_target_real_return_methods_behave_as_expected() {
-        let target = MockTarget;
+        let target = MockTarget::default();
 
         // S3 target — not a local storage.
         assert!(!target.is_local_storage());
@@ -1156,7 +1266,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_target_unimplemented_methods_panic() {
-        let target = MockTarget;
+        let target = MockTarget::default();
 
         assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
             .await;
@@ -1369,6 +1479,7 @@ mod tests {
         ) -> Result<HeadObjectOutput> {
             Ok(HeadObjectOutput::builder()
                 .content_length(4)
+                .tag_count(0)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
                 .set_version_id(self.head_version_id.clone())
@@ -2379,6 +2490,7 @@ mod tests {
             self.token.cancel();
             Ok(HeadObjectOutput::builder()
                 .content_length(4)
+                .tag_count(0)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
                 .build())
@@ -2469,7 +2581,7 @@ mod tests {
         // tagging is None and the transfer still completes.
         let config = minimal_config(false);
         let source: Storage = Box::new(EmptyTaggingSource);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -2491,7 +2603,7 @@ mod tests {
         let mut config = minimal_config(false);
         config.disable_tagging = true;
         let source: Storage = Box::new(MockSource::new(Some("V1".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -2531,7 +2643,7 @@ mod tests {
         let source: Storage = Box::new(CancelOnHeadSource {
             token: token.clone(),
         });
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
         let outcome = transfer(
@@ -2617,7 +2729,7 @@ mod tests {
         .await;
         assert_future_panics(source.put_object(
             "k",
-            Box::new(MockTarget),
+            Box::<MockTarget>::default(),
             "src",
             0,
             None,
@@ -2769,7 +2881,7 @@ mod tests {
         .await;
         assert_future_panics(source.put_object(
             "k",
-            Box::new(MockTarget),
+            Box::<MockTarget>::default(),
             "src",
             0,
             None,

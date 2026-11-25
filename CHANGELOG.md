@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
+  `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which has content, such as
+  a `/proc` or `/sys` file. The object size is taken from file metadata, so these uploaded an empty object and
+  exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
+- `put-bucket-replication` now accepts, and `get-bucket-replication` now prints, the `Not` filter (on `Filter` and
+  on `Filter.And`, with its nested `Or`) and `Destination.EncryptionConfiguration.UseSourceMultiRegionKey`.
+  Passing the output of `get-bucket-replication` to `put-bucket-replication` silently removed these settings,
+  including replication exclusions.
+- S3-to-S3 `cp` and `mv` no longer silently drop the source object's tags when the caller cannot read them. S3
+  omits the tag count from `HeadObject` both for an untagged object and when the caller lacks permission to read
+  tags, and `s3util` treated both as "no tags". It now calls `GetObjectTagging` when the count is missing (except
+  on Express One Zone, which has no tags), and fails if that call fails; use `--disable-tagging` or `--tagging`
+  to copy anyway.
+- A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).
+- A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown
+  scheme. Only `s3:` or a `://` marks a URL; any other path is local.
+
 ## [1.12.0] - 2026-11-24
 
 Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional checksum algorithms.

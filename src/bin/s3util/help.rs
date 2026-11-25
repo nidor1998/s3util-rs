@@ -131,7 +131,7 @@ const CATEGORIES: &[(&str, &[&str])] = &[
     ),
 ];
 
-/// True when `args` (typically `std::env::args().collect()`) requests
+/// True when `args` (typically a lossy copy of `std::env::args_os()`) requests
 /// top-level help: `s3util -h`, `s3util --help`, or bare `s3util help`.
 /// Argv with no subcommand at all is *not* treated as help — it preserves
 /// the existing "missing subcommand" error path.

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::types::RequestPayer;
 use leaky_bucket::RateLimiter;
 use tracing::{info, trace};
@@ -201,7 +201,7 @@ pub async fn run_copy_phase(config: Config) -> Result<CopyPhase> {
 
     trace!(direction = ?direction, "detected transfer direction");
 
-    check_local_source_not_directory(&config.source, &direction)?;
+    check_local_source_is_regular_file(&config.source, &direction)?;
 
     // For cp, the full path is always passed as the key to get_object/put_object.
     // Storage instances are created with an empty base path so that key = full path.
@@ -660,28 +660,63 @@ fn format_target_path(target: &StoragePath, target_key: &str) -> String {
     }
 }
 
-/// Reject local source directories for `cp`.
+/// Reject local sources that cannot be uploaded as a single sized object.
 ///
-/// LocalStorage::head_object returns a 0-byte success for directories (inherited
-/// from s3sync's recursive-sync semantics). `s3util cp` is single-file only, so
-/// without this guard a command like `s3util cp /tmp/ s3://bucket/` would silently
-/// upload an empty object.
-fn check_local_source_not_directory(
+/// LocalStorage::head_object takes the object size from file metadata and
+/// returns a 0-byte success for directories (inherited from s3sync's
+/// recursive-sync semantics). `s3util cp` is single-file only, so without this
+/// guard a directory, a FIFO / pipe (`<(cmd)`, `/dev/stdin`), a device, or a
+/// pseudo-file such as `/proc/self/status` (size 0 in metadata, but readable
+/// content) would silently upload an empty object — and `mv` would then delete
+/// the source.
+fn check_local_source_is_regular_file(
     source: &StoragePath,
     direction: &TransferDirection,
 ) -> Result<()> {
     if !matches!(direction, TransferDirection::LocalToS3) {
         return Ok(());
     }
-    if let StoragePath::Local(path) = source
-        && path.is_dir()
-    {
+    let StoragePath::Local(path) = source else {
+        return Ok(());
+    };
+    // A missing path is reported as "file not found" by head_object downstream.
+    let Ok(metadata) = std::fs::metadata(path) else {
+        return Ok(());
+    };
+    if metadata.is_dir() {
         return Err(anyhow!(
             "source is a directory: {}. cp command copies a single file.",
             path.display()
         ));
     }
+    if !metadata.is_file() {
+        return Err(anyhow!(
+            "source is not a regular file (pipe, FIFO, socket or device): {}. \
+             To upload a stream, read it from stdin: `... | s3util cp - s3://bucket/key`.",
+            path.display()
+        ));
+    }
+    if metadata.len() == 0 && has_unreported_content(path)? {
+        return Err(anyhow!(
+            "source reports a size of 0 but has content (e.g. a /proc or /sys file): {}. \
+             To upload it, read it from stdin: `cat {} | s3util cp - s3://bucket/key`.",
+            path.display(),
+            path.display()
+        ));
+    }
     Ok(())
+}
+
+/// Whether a file whose metadata says 0 bytes still yields data when read.
+fn has_unreported_content(path: &std::path::Path) -> Result<bool> {
+    use std::io::Read;
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("failed to open source file: {}", path.display()))?;
+    let mut buf = [0u8; 1];
+    let read = file
+        .read(&mut buf)
+        .with_context(|| format!("failed to read source file: {}", path.display()))?;
+    Ok(read > 0)
 }
 
 /// Create a LocalStorage base path (empty — full path is passed as the key).
@@ -919,32 +954,74 @@ mod tests {
     }
 
     #[test]
-    fn check_local_source_not_directory_rejects_directory() {
+    fn check_local_source_is_regular_file_rejects_directory() {
         let tmp = tempfile::tempdir().unwrap();
         let source = StoragePath::Local(tmp.path().to_path_buf());
         let err =
-            check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap_err();
+            check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("source is a directory"), "message: {msg}");
     }
 
     #[test]
-    fn check_local_source_not_directory_allows_file() {
+    fn check_local_source_is_regular_file_allows_file() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let source = StoragePath::Local(tmp.path().to_path_buf());
-        check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap();
+        check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap();
     }
 
     #[test]
-    fn check_local_source_not_directory_allows_nonexistent_path() {
+    fn check_local_source_is_regular_file_allows_nonexistent_path() {
         // head_object downstream turns this into a "file not found" error; the
         // directory guard should not pre-empt that path.
         let source = StoragePath::Local(PathBuf::from("/nonexistent/path/for/test"));
-        check_local_source_not_directory(&source, &TransferDirection::LocalToS3).unwrap();
+        check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap();
     }
 
     #[test]
-    fn check_local_source_not_directory_skips_non_local_to_s3_direction() {
+    fn check_local_source_is_regular_file_allows_empty_file() {
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        let source = StoragePath::Local(tmp.path().to_path_buf());
+        check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_local_source_is_regular_file_rejects_fifo() {
+        let tmp = tempfile::tempdir().unwrap();
+        let fifo = tmp.path().join("fifo");
+        let status = std::process::Command::new("mkfifo")
+            .arg(&fifo)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let source = StoragePath::Local(fifo);
+        let err =
+            check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap_err();
+        let msg = err.to_string();
+        assert!(msg.contains("not a regular file"), "message: {msg}");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_local_source_is_regular_file_rejects_char_device() {
+        let source = StoragePath::Local(PathBuf::from("/dev/null"));
+        let err =
+            check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap_err();
+        assert!(err.to_string().contains("not a regular file"));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn check_local_source_is_regular_file_rejects_proc_pseudo_file() {
+        let source = StoragePath::Local(PathBuf::from("/proc/self/status"));
+        let err =
+            check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap_err();
+        assert!(err.to_string().contains("reports a size of 0"));
+    }
+
+    #[test]
+    fn check_local_source_is_regular_file_skips_non_local_to_s3_direction() {
         // A Local source only reaches transfer for LocalToS3. Guard must be a
         // no-op for every other direction so we don't stat paths that aren't
         // the local source.
@@ -956,7 +1033,7 @@ mod tests {
             TransferDirection::StdioToS3,
             TransferDirection::S3ToStdio,
         ] {
-            check_local_source_not_directory(&source, &direction).unwrap();
+            check_local_source_is_regular_file(&source, &direction).unwrap();
         }
     }
 
