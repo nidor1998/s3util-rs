@@ -174,17 +174,12 @@ pub async fn transfer(
         // A missing tag_count is ambiguous: S3 omits x-amz-tagging-count both
         // for an untagged object and when the caller lacks permission to read
         // its tags. Ask explicitly rather than silently dropping tags.
-        let tagging_output = source_clone
+        match source_clone
             .get_object_tagging(source_key, effective_version_id.clone())
             .await
-            .context(format!(
-                "failed to get source object tagging: {source_key}. \
-                 Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
-            ))?;
-        if tagging_output.tag_set().is_empty() {
-            None
-        } else {
-            Some(
+        {
+            Ok(tagging_output) if tagging_output.tag_set().is_empty() => None,
+            Ok(tagging_output) => Some(
                 tagging_output
                     .tag_set()
                     .iter()
@@ -197,7 +192,27 @@ pub async fn transfer(
                     })
                     .collect::<Vec<_>>()
                     .join("&"),
-            )
+            ),
+            // Most untagged objects land here, so the common no-permission and
+            // no-tagging-API cases must not fail the copy. Warn instead: the
+            // object may have had tags that are not copied.
+            Err(e) => match crate::transfer::tagging_unavailable_reason(&e) {
+                Some(reason) => {
+                    warn!(
+                        key = source_key,
+                        reason = reason.as_str(),
+                        "cannot read source object tags; copying without tags. \
+                         Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
+                    );
+                    None
+                }
+                None => {
+                    return Err(e.context(format!(
+                        "failed to get source object tagging: {source_key}. \
+                         Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
+                    )));
+                }
+            },
         }
     };
 
@@ -531,6 +546,9 @@ mod tests {
         tag_count: Option<i32>,
         /// Tags returned by get_object_tagging; `None` makes it fail.
         tags: Option<Vec<(String, String)>>,
+        /// When `tags` is `None`: fail with an S3 service error carrying this
+        /// (code, HTTP status) instead of a plain non-S3 error.
+        tagging_error: Option<(&'static str, u16)>,
         is_express: bool,
         get_object_tagging_calls: Arc<std::sync::atomic::AtomicUsize>,
     }
@@ -542,6 +560,7 @@ mod tests {
                 get_object_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
                 tag_count: None,
                 tags: Some(Vec::new()),
+                tagging_error: None,
                 is_express: false,
                 get_object_tagging_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
             }
@@ -590,7 +609,16 @@ mod tests {
             self.get_object_tagging_calls
                 .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             let Some(tags) = &self.tags else {
-                return Err(anyhow::anyhow!("AccessDenied"));
+                return Err(match self.tagging_error {
+                    Some((code, status)) => anyhow::Error::new(
+                        crate::transfer::tests::get_object_tagging_service_error(
+                            Some(code),
+                            status,
+                        ),
+                    )
+                    .context("aws_sdk_s3::client::get_object_tagging() failed."),
+                    None => anyhow::anyhow!("connection reset"),
+                });
             };
             let tag_set = tags
                 .iter()
@@ -1037,6 +1065,25 @@ mod tests {
         );
     }
 
+    /// No s3:GetObjectTagging permission, or a store without the tagging API:
+    /// S3 omits the tag count for every untagged object, so failing here would
+    /// break nearly every copy. Copy without tags (with a warning) instead.
+    #[tokio::test]
+    async fn tagging_access_denied_or_not_implemented_copies_without_tags() {
+        for err in [("AccessDenied", 403), ("NotImplemented", 501)] {
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = Some(err);
+            let calls = source.clone();
+            let (result, target) = run_tag_transfer(source).await;
+            result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
+            assert_eq!(calls.get_object_tagging_call_count(), 1);
+            assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+        }
+    }
+
+    /// Any other tagging failure (network, throttling, 5xx) may hide real tags,
+    /// so it still fails the copy.
     #[tokio::test]
     async fn unreadable_tags_fail_the_copy_instead_of_dropping_them() {
         let mut source = MockSource::new(None);

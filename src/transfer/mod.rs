@@ -1,5 +1,6 @@
 use anyhow::{Result, anyhow};
 use aws_sdk_s3::error::ProvideErrorMetadata;
+use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingError;
 use aws_sdk_s3::operation::head_object::HeadObjectError;
 use aws_smithy_runtime_api::client::result::SdkError;
 use aws_smithy_runtime_api::http::Response;
@@ -41,6 +42,23 @@ pub(crate) fn translate_source_head_object_error(e: anyhow::Error, key: &str) ->
         return anyhow!("{}", DisplayErrorContext(sdk));
     }
     e
+}
+
+/// Returns the S3 error code when a source `get_object_tagging` failure means
+/// the tags cannot be read at all — the caller lacks `s3:GetObjectTagging`
+/// (AccessDenied / HTTP 403), or the store does not implement object tagging
+/// (NotImplemented / HTTP 501). Any other failure returns `None`.
+pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<String> {
+    let sdk = e.downcast_ref::<SdkError<GetObjectTaggingError, Response<SdkBody>>>()?;
+    let SdkError::ServiceError(svc) = sdk else {
+        return None;
+    };
+    match (svc.err().code(), svc.raw().status().as_u16()) {
+        (Some(code @ ("AccessDenied" | "NotImplemented")), _) => Some(code.to_string()),
+        (None, 403) => Some("HTTP 403".to_string()),
+        (None, 501) => Some("HTTP 501".to_string()),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -92,7 +110,7 @@ pub fn detect_direction(source: &str, target: &str) -> Result<TransferDirection>
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -265,6 +283,75 @@ mod tests {
                 out.to_string().contains("cannot build request"),
                 "unexpected output: {out}"
             );
+        }
+    }
+
+    pub(crate) fn get_object_tagging_service_error(
+        code: Option<&str>,
+        status: u16,
+    ) -> SdkError<GetObjectTaggingError, Response<SdkBody>> {
+        let mut builder = aws_smithy_types::error::metadata::ErrorMetadata::builder();
+        if let Some(c) = code {
+            builder = builder.code(c);
+        }
+        SdkError::service_error(
+            GetObjectTaggingError::generic(builder.build()),
+            Response::new(
+                aws_smithy_runtime_api::http::StatusCode::try_from(status).unwrap(),
+                SdkBody::from(""),
+            ),
+        )
+    }
+
+    mod tagging_unavailable_reason {
+        use super::*;
+
+        #[test]
+        fn access_denied_is_unavailable_through_context() {
+            // S3Storage wraps the SdkError with `.context(...)`.
+            let e = anyhow::Error::new(get_object_tagging_service_error(Some("AccessDenied"), 403))
+                .context("wrapper");
+            assert_eq!(
+                tagging_unavailable_reason(&e).as_deref(),
+                Some("AccessDenied")
+            );
+        }
+
+        #[test]
+        fn not_implemented_is_unavailable() {
+            let e = anyhow!(get_object_tagging_service_error(
+                Some("NotImplemented"),
+                501
+            ));
+            assert_eq!(
+                tagging_unavailable_reason(&e).as_deref(),
+                Some("NotImplemented")
+            );
+        }
+
+        #[test]
+        fn bare_403_and_501_are_unavailable() {
+            let e = anyhow!(get_object_tagging_service_error(None, 403));
+            assert_eq!(tagging_unavailable_reason(&e).as_deref(), Some("HTTP 403"));
+            let e = anyhow!(get_object_tagging_service_error(None, 501));
+            assert_eq!(tagging_unavailable_reason(&e).as_deref(), Some("HTTP 501"));
+        }
+
+        #[test]
+        fn other_failures_are_not_unavailable() {
+            for (code, status) in [
+                (Some("NoSuchKey"), 404),
+                (Some("InternalError"), 500),
+                (Some("SlowDown"), 503),
+                (None, 500),
+            ] {
+                let e = anyhow!(get_object_tagging_service_error(code, status));
+                assert_eq!(tagging_unavailable_reason(&e), None, "{code:?} {status}");
+            }
+            assert_eq!(tagging_unavailable_reason(&anyhow!("network down")), None);
+            let sdk: SdkError<GetObjectTaggingError, Response<SdkBody>> =
+                SdkError::construction_failure(anyhow!("cannot build request"));
+            assert_eq!(tagging_unavailable_reason(&anyhow!(sdk)), None);
         }
     }
 }
