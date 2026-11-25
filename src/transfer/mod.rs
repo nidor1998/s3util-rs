@@ -44,19 +44,45 @@ pub(crate) fn translate_source_head_object_error(e: anyhow::Error, key: &str) ->
     e
 }
 
-/// Returns the S3 error code when a source `get_object_tagging` failure means
-/// the tags cannot be read at all — the caller lacks `s3:GetObjectTagging`
-/// (AccessDenied / HTTP 403), or the store does not implement object tagging
-/// (NotImplemented / HTTP 501). Any other failure returns `None`.
-pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<String> {
+/// Why a source `get_object_tagging` call could not read the tags at all.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TaggingUnavailable {
+    /// The caller lacks `s3:GetObjectTagging` (AccessDenied / HTTP 403). The
+    /// object may still have tags, so copying without them can lose data.
+    Denied(String),
+    /// The store or bucket type has no object-tagging API (NotImplemented /
+    /// 501, MethodNotAllowed / 405, or an unsupported-operation 400 such as an
+    /// S3 Express directory bucket returns). Such an object cannot have tags,
+    /// so nothing is lost by copying without them.
+    Unsupported(String),
+}
+
+/// Classifies a source `get_object_tagging` failure. Returns `None` for any
+/// failure that might hide real tags (network, throttling, 5xx, NoSuchKey, ...),
+/// which must fail the copy.
+pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<TaggingUnavailable> {
     let sdk = e.downcast_ref::<SdkError<GetObjectTaggingError, Response<SdkBody>>>()?;
     let SdkError::ServiceError(svc) = sdk else {
         return None;
     };
-    match (svc.err().code(), svc.raw().status().as_u16()) {
-        (Some(code @ ("AccessDenied" | "NotImplemented")), _) => Some(code.to_string()),
-        (None, 403) => Some("HTTP 403".to_string()),
-        (None, 501) => Some("HTTP 501".to_string()),
+    let status = svc.raw().status().as_u16();
+    match (svc.err().code(), status) {
+        (Some(code @ "AccessDenied"), _) => Some(TaggingUnavailable::Denied(code.to_string())),
+        (
+            Some(
+                code @ ("NotImplemented"
+                | "MethodNotAllowed"
+                | "NotSupported"
+                | "UnsupportedOperation"
+                | "XNotImplemented"),
+            ),
+            _,
+        ) => Some(TaggingUnavailable::Unsupported(code.to_string())),
+        (Some(code @ "InvalidRequest"), 400) => {
+            Some(TaggingUnavailable::Unsupported(code.to_string()))
+        }
+        (None, 403) => Some(TaggingUnavailable::Denied("HTTP 403".to_string())),
+        (None, 405 | 501) => Some(TaggingUnavailable::Unsupported(format!("HTTP {status}"))),
         _ => None,
     }
 }
@@ -80,10 +106,16 @@ pub struct TransferOutcome {
     /// The source object's version-id observed at copy time.
     /// `None` for Local/stdio sources or non-versioned buckets.
     pub source_version_id: Option<String>,
+    /// `true` when the source tags could not be read for lack of permission
+    /// and the object was copied without them. `mv` must then keep the
+    /// source, since deleting it would lose any tags for good.
+    pub source_tags_unreadable: bool,
 }
 
+/// The `s3://` scheme is case-insensitive, matching the path parser.
 fn is_s3_path(path: &str) -> bool {
-    path.starts_with("s3://")
+    path.get(..5)
+        .is_some_and(|scheme| scheme.eq_ignore_ascii_case("s3://"))
 }
 
 fn is_stdio(path: &str) -> bool {
@@ -306,35 +338,45 @@ pub(crate) mod tests {
     mod tagging_unavailable_reason {
         use super::*;
 
+        fn reason(code: Option<&str>, status: u16) -> Option<TaggingUnavailable> {
+            tagging_unavailable_reason(&anyhow!(get_object_tagging_service_error(code, status)))
+        }
+
         #[test]
-        fn access_denied_is_unavailable_through_context() {
+        fn access_denied_is_denied_through_context() {
             // S3Storage wraps the SdkError with `.context(...)`.
             let e = anyhow::Error::new(get_object_tagging_service_error(Some("AccessDenied"), 403))
                 .context("wrapper");
             assert_eq!(
-                tagging_unavailable_reason(&e).as_deref(),
-                Some("AccessDenied")
+                tagging_unavailable_reason(&e),
+                Some(TaggingUnavailable::Denied("AccessDenied".to_string()))
             );
-        }
-
-        #[test]
-        fn not_implemented_is_unavailable() {
-            let e = anyhow!(get_object_tagging_service_error(
-                Some("NotImplemented"),
-                501
-            ));
             assert_eq!(
-                tagging_unavailable_reason(&e).as_deref(),
-                Some("NotImplemented")
+                reason(None, 403),
+                Some(TaggingUnavailable::Denied("HTTP 403".to_string()))
             );
         }
 
         #[test]
-        fn bare_403_and_501_are_unavailable() {
-            let e = anyhow!(get_object_tagging_service_error(None, 403));
-            assert_eq!(tagging_unavailable_reason(&e).as_deref(), Some("HTTP 403"));
-            let e = anyhow!(get_object_tagging_service_error(None, 501));
-            assert_eq!(tagging_unavailable_reason(&e).as_deref(), Some("HTTP 501"));
+        fn unsupported_tagging_api_is_unsupported() {
+            for (code, status) in [
+                (Some("NotImplemented"), 501),
+                (Some("MethodNotAllowed"), 405),
+                (Some("NotSupported"), 400),
+                (Some("UnsupportedOperation"), 400),
+                (Some("XNotImplemented"), 501),
+                (Some("InvalidRequest"), 400),
+                (None, 405),
+                (None, 501),
+            ] {
+                assert!(
+                    matches!(
+                        reason(code, status),
+                        Some(TaggingUnavailable::Unsupported(_))
+                    ),
+                    "{code:?} {status}"
+                );
+            }
         }
 
         #[test]
@@ -343,15 +385,29 @@ pub(crate) mod tests {
                 (Some("NoSuchKey"), 404),
                 (Some("InternalError"), 500),
                 (Some("SlowDown"), 503),
+                (Some("InvalidRequest"), 500),
+                (None, 400),
                 (None, 500),
             ] {
-                let e = anyhow!(get_object_tagging_service_error(code, status));
-                assert_eq!(tagging_unavailable_reason(&e), None, "{code:?} {status}");
+                assert_eq!(reason(code, status), None, "{code:?} {status}");
             }
             assert_eq!(tagging_unavailable_reason(&anyhow!("network down")), None);
             let sdk: SdkError<GetObjectTaggingError, Response<SdkBody>> =
                 SdkError::construction_failure(anyhow!("cannot build request"));
             assert_eq!(tagging_unavailable_reason(&anyhow!(sdk)), None);
         }
+    }
+
+    #[test]
+    fn s3_scheme_is_detected_case_insensitively() {
+        assert_eq!(
+            detect_direction("./f", "S3://bucket/key").unwrap(),
+            TransferDirection::LocalToS3
+        );
+        assert_eq!(
+            detect_direction("S3://a/k", "s3://b/k").unwrap(),
+            TransferDirection::S3ToS3
+        );
+        assert!(!is_s3_path("s3:"));
     }
 }

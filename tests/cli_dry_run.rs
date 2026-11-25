@@ -907,6 +907,8 @@ fn rename_help_lists_dry_run() {
 
 // ---------- local source shapes ----------
 
+// On Windows `name:stream` is an NTFS alternate data stream, not a file name.
+#[cfg(unix)]
 #[test]
 fn cp_dry_run_accepts_local_filename_containing_colon() {
     // `a:b` must be a local path, not a URL with scheme `a`.

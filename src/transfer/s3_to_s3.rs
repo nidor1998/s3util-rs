@@ -12,7 +12,9 @@ use crate::storage::{
     Storage, check_source_e_tag_unchanged, convert_head_to_get_object_output,
     parse_range_header_string,
 };
-use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
+use crate::transfer::{
+    TaggingUnavailable, TransferOutcome, first_chunk, translate_source_head_object_error,
+};
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, generate_annotation_differences, get_additional_checksum};
 
@@ -159,6 +161,7 @@ pub async fn transfer(
     );
 
     // Get tagging
+    let mut source_tags_unreadable = false;
     let tagging = if config.disable_tagging {
         None
     } else if config.tagging.is_some() {
@@ -194,16 +197,27 @@ pub async fn transfer(
                     .join("&"),
             ),
             // Most untagged objects land here, so the common no-permission and
-            // no-tagging-API cases must not fail the copy. Warn instead: the
-            // object may have had tags that are not copied.
+            // no-tagging-API cases must not fail the copy.
             Err(e) => match crate::transfer::tagging_unavailable_reason(&e) {
-                Some(reason) => {
+                // The store has no tagging API, so the object has no tags.
+                Some(TaggingUnavailable::Unsupported(reason)) => {
+                    debug!(
+                        key = source_key,
+                        reason = reason.as_str(),
+                        "source does not support object tagging; copying without tags."
+                    );
+                    None
+                }
+                // The object may have tags we cannot see. Copy without them,
+                // warn, and tell `mv` not to delete the source.
+                Some(TaggingUnavailable::Denied(reason)) => {
                     warn!(
                         key = source_key,
                         reason = reason.as_str(),
-                        "cannot read source object tags; copying without tags. \
+                        "no permission to read source object tags; copying without tags. \
                          Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
                     );
+                    source_tags_unreadable = true;
                     None
                 }
                 None => {
@@ -320,7 +334,10 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(TransferOutcome { source_version_id })
+    Ok(TransferOutcome {
+        source_version_id,
+        source_tags_unreadable,
+    })
 }
 
 /// Annotation names fetched per ListObjectAnnotations page. s3sync passes its
@@ -1067,16 +1084,22 @@ mod tests {
 
     /// No s3:GetObjectTagging permission, or a store without the tagging API:
     /// S3 omits the tag count for every untagged object, so failing here would
-    /// break nearly every copy. Copy without tags (with a warning) instead.
+    /// break nearly every copy. Copy without tags instead. Only a permission
+    /// failure may hide real tags, so only it marks the outcome for `mv`.
     #[tokio::test]
-    async fn tagging_access_denied_or_not_implemented_copies_without_tags() {
-        for err in [("AccessDenied", 403), ("NotImplemented", 501)] {
+    async fn tagging_access_denied_or_unsupported_copies_without_tags() {
+        for (err, unreadable) in [
+            (("AccessDenied", 403), true),
+            (("NotImplemented", 501), false),
+            (("MethodNotAllowed", 405), false),
+        ] {
             let mut source = MockSource::new(None);
             source.tags = None;
             source.tagging_error = Some(err);
             let calls = source.clone();
             let (result, target) = run_tag_transfer(source).await;
-            result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
+            let outcome = result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
+            assert_eq!(outcome.source_tags_unreadable, unreadable, "{err:?}");
             assert_eq!(calls.get_object_tagging_call_count(), 1);
             assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
         }

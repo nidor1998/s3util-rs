@@ -113,8 +113,18 @@ async fn apply_mv_decision_tree(config: Config, phase: CopyPhase) -> Result<Exit
         return Err(anyhow!(msg));
     }
 
-    // Gate 4: defensive cancellation re-check (token may have flipped between
-    // gate 1 and now if a SIGINT arrived while gate 2/3 were evaluating).
+    // Gate 4: the copy dropped tags it had no permission to read. Deleting
+    // the source would lose them for good.
+    if outcome.source_tags_unreadable {
+        let msg = "source object tags could not be read (no s3:GetObjectTagging permission), \
+                   so the target was written without them; source not deleted \
+                   (use --disable-tagging or --tagging to move without the source tags)";
+        error!("{msg}");
+        return Err(anyhow!(msg));
+    }
+
+    // Gate 5: defensive cancellation re-check (token may have flipped between
+    // gate 1 and now if a SIGINT arrived while gates 2-4 were evaluating).
     if phase.cancellation_token.is_cancelled() {
         return Ok(ExitStatus::Cancelled);
     }
@@ -755,13 +765,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn gate_4_late_cancellation_returns_cancelled_no_delete() {
+    async fn gate_4_unreadable_source_tags_keep_the_source() {
+        let config = minimal_config();
+        let fake = FakeSourceStorage::new(DeleteResult::Ok);
+        let calls = fake.delete_calls.clone();
+        let token = create_pipeline_cancellation_token();
+        let outcome = TransferOutcome {
+            source_tags_unreadable: true,
+            ..Default::default()
+        };
+        let phase = synth_phase(Ok(outcome), false, false, Box::new(fake), token);
+
+        let err = apply_mv_decision_tree(config, phase).await.unwrap_err();
+        assert!(err.to_string().contains("source not deleted"), "{err}");
+        assert!(err.to_string().contains("--disable-tagging"), "{err}");
+        assert_eq!(calls.lock().unwrap().len(), 0);
+    }
+
+    #[tokio::test]
+    async fn gate_5_late_cancellation_returns_cancelled_no_delete() {
         let config = minimal_config();
         let fake = FakeSourceStorage::new(DeleteResult::Ok);
         let calls = fake.delete_calls.clone();
         let token = create_pipeline_cancellation_token();
         // Force the token into the cancelled state but leave phase.cancelled
-        // = false so gate 1 doesn't trip — only gate 4 catches this case.
+        // = false so gate 1 doesn't trip — only gate 5 catches this case.
         token.cancel();
         let phase = synth_phase(
             Ok(TransferOutcome::default()),
@@ -825,6 +853,7 @@ mod tests {
         let token = create_pipeline_cancellation_token();
         let outcome = TransferOutcome {
             source_version_id: Some("CAPTURED".to_string()),
+            ..Default::default()
         };
         let phase = synth_phase(Ok(outcome), false, false, Box::new(fake), token);
 
@@ -842,6 +871,7 @@ mod tests {
         let token = create_pipeline_cancellation_token();
         let outcome = TransferOutcome {
             source_version_id: Some("CAPTURED".to_string()),
+            ..Default::default()
         };
         let phase = synth_phase(Ok(outcome), false, false, Box::new(fake), token);
 

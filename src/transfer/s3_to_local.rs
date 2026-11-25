@@ -173,7 +173,10 @@ pub async fn transfer(
         })
         .await;
 
-    Ok(TransferOutcome { source_version_id })
+    Ok(TransferOutcome {
+        source_version_id,
+        ..Default::default()
+    })
 }
 
 #[cfg(test)]
