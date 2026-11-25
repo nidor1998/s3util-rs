@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Result, anyhow};
 use aws_sdk_s3::types::RequestPayer;
 use leaky_bucket::RateLimiter;
 use tracing::{info, trace};
@@ -696,11 +696,10 @@ fn check_local_source_is_regular_file(
             path.display()
         ));
     }
-    if metadata.len() == 0 && has_unreported_content(path)? {
+    if metadata.len() == 0 && has_unreported_content(path) {
         return Err(anyhow!(
             "source reports a size of 0 but has content (e.g. a /proc or /sys file): {}. \
-             To upload it, read it from stdin: `cat {} | s3util cp - s3://bucket/key`.",
-            path.display(),
+             To upload it, pipe the file's contents to `s3util cp - s3://bucket/key`.",
             path.display()
         ));
     }
@@ -708,15 +707,16 @@ fn check_local_source_is_regular_file(
 }
 
 /// Whether a file whose metadata says 0 bytes still yields data when read.
-fn has_unreported_content(path: &std::path::Path) -> Result<bool> {
+///
+/// Only a probe: if the file cannot be opened or read, it returns `false` and
+/// leaves the normal upload path to report the problem as it always has.
+fn has_unreported_content(path: &std::path::Path) -> bool {
     use std::io::Read;
-    let mut file = std::fs::File::open(path)
-        .with_context(|| format!("failed to open source file: {}", path.display()))?;
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
     let mut buf = [0u8; 1];
-    let read = file
-        .read(&mut buf)
-        .with_context(|| format!("failed to read source file: {}", path.display()))?;
-    Ok(read > 0)
+    file.read(&mut buf).is_ok_and(|read| read > 0)
 }
 
 /// Create a LocalStorage base path (empty — full path is passed as the key).
