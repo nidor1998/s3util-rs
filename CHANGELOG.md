@@ -10,10 +10,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
-  `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which has content, such as
-  a `/proc` or `/sys` file (a file that cannot be read is left to the normal upload error, and a file that grows during the check is
-  accepted). The object size is taken from file metadata, so these uploaded an empty object and
-  exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
+  `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which returns data when
+  read, such as a `/proc`, `/sys` or FUSE file (a file that cannot be read is left to the normal upload error, and
+  a file that grows during the check is accepted). The object size is taken from file metadata, so these uploaded
+  an empty object and exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
 - `put-bucket-replication` now accepts, and `get-bucket-replication` now prints, the `Not` filter (on `Filter` and
   on `Filter.And`, with its nested `Or`) and `Destination.EncryptionConfiguration.UseSourceMultiRegionKey`.
   Passing the output of `get-bucket-replication` to `put-bucket-replication` silently removed these settings,
@@ -26,13 +26,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - On a versioned bucket, a denied versioned call (which needs `s3:GetObjectVersionTagging`) is retried for the
     latest version unless `--source-version-id` was given; those tags are used only if the latest version is still
     the one being copied.
-  - `NoSuchTagSet` means no tags. A store without a tagging API (`NotImplemented`, `NotSupported` and similar, or
-    `MethodNotAllowed` on an unversioned request) copies without tags.
-  - If the tags cannot be read (`AccessDenied` or another client error), `cp` copies without tags and logs a
-    warning. **`mv` now fails before copying anything**, since it would delete the source and lose the tags for
-    good; pass `--disable-tagging` to move without the source tags, or `--tagging` to set them explicitly.
-  - When `HeadObject` reports that the object has tags, failing to read them always fails the copy, as does any
-    transient or server error.
+  - `NoSuchTagSet` means no tags. A store without a tagging API (`NotImplemented`, `MethodNotAllowed`,
+    `NotSupported` and similar) copies without tags.
+  - If the tags cannot be read for any other reason (`AccessDenied`, another client error, or a failure of the
+    lookup itself), `cp` copies without tags and logs a warning: with no tag count from `HeadObject`, the object
+    either has no tags or the caller cannot read them. **`mv` now fails before copying anything**, since it would
+    delete the source and lose any tags for good; pass `--disable-tagging` to move without the source tags, or
+    `--tagging` to set them explicitly. This includes `mv` from an S3-compatible store that rejects the tagging
+    request with an unrecognised error.
+  - When `HeadObject` reports that the object has tags, failing to read them always fails the copy.
   - `mv --dry-run` does not read tags, so it does not detect a missing tag permission.
 - A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).
 - A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown

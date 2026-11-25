@@ -54,13 +54,11 @@ pub(crate) enum TaggingUnavailable {
     /// object may still have tags, so copying without them can lose data.
     Unreadable(String),
     /// The store has no object-tagging API (NotImplemented / 501, as S3
-    /// Express directory buckets return, NotSupported and similar). Such an
-    /// object cannot have tags, so nothing is lost without them.
+    /// Express directory buckets return, MethodNotAllowed / 405, NotSupported
+    /// and similar). Such an object cannot have tags, so nothing is lost
+    /// without them. AWS S3 also answers 405 for a delete marker, but HEAD has
+    /// just succeeded on the same object, so that is not the case here.
     Unsupported(String),
-    /// MethodNotAllowed / 405. S3-compatible stores without a tagging API
-    /// answer this, but AWS S3 also does for a delete marker, so it only means
-    /// "unsupported" when no version was requested.
-    MethodNotAllowed(String),
 }
 
 /// Classifies a source `get_object_tagging` failure. Returns `None` for any
@@ -83,10 +81,8 @@ pub(crate) fn tagging_unavailable_reason(e: &anyhow::Error) -> Option<TaggingUna
             Some("NotImplemented" | "NotSupported" | "UnsupportedOperation" | "XNotImplemented"),
             _,
         )
-        | (None, 501) => Some(TaggingUnavailable::Unsupported(label())),
-        (Some("MethodNotAllowed"), _) | (None, 405) => {
-            Some(TaggingUnavailable::MethodNotAllowed(label()))
-        }
+        | (Some("MethodNotAllowed"), _)
+        | (None, 405 | 501) => Some(TaggingUnavailable::Unsupported(label())),
         (
             Some(
                 "NoSuchKey"
@@ -405,21 +401,14 @@ pub(crate) mod tests {
                 (Some("NotSupported"), 400),
                 (Some("UnsupportedOperation"), 400),
                 (Some("XNotImplemented"), 501),
+                (Some("MethodNotAllowed"), 405),
+                (None, 405),
                 (None, 501),
             ] {
                 assert!(
                     matches!(
                         reason(code, status),
                         Some(TaggingUnavailable::Unsupported(_))
-                    ),
-                    "{code:?} {status}"
-                );
-            }
-            for (code, status) in [(Some("MethodNotAllowed"), 405), (None, 405)] {
-                assert!(
-                    matches!(
-                        reason(code, status),
-                        Some(TaggingUnavailable::MethodNotAllowed(_))
                     ),
                     "{code:?} {status}"
                 );

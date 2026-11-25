@@ -565,12 +565,13 @@ async fn resolve_source_tagging(
         )));
     }
 
+    // From here HEAD gave no tag count. A caller allowed to read tags gets
+    // the count for any tagged object, so the object either has no tags or
+    // the caller cannot read them; this lookup failing never proves tags exist.
     match reason {
         Some(TaggingUnavailable::NoTags) => Ok(None),
         // The store has no tagging API, so the object has no tags. Most
         // untagged objects on such stores land here, so this must not fail.
-        // 405 means that only for an unversioned request: AWS S3 also returns
-        // it for a delete marker, i.e. a version that changed under us.
         Some(TaggingUnavailable::Unsupported(reason)) => {
             debug!(
                 key = source_key,
@@ -579,38 +580,24 @@ async fn resolve_source_tagging(
             );
             Ok(None)
         }
-        Some(TaggingUnavailable::MethodNotAllowed(reason)) if version_id.is_none() => {
-            debug!(
-                key = source_key,
-                reason = reason.as_str(),
-                "source does not support object tagging; copying without tags."
-            );
-            Ok(None)
-        }
-        // The object may have tags we cannot see. `mv` would delete the source
-        // after the copy and lose them for good, so it stops here, before
-        // anything is read or written. `cp` leaves the source in place, so it
-        // copies without tags and warns.
-        Some(TaggingUnavailable::Unreadable(reason)) if config.fail_on_unreadable_source_tags => {
-            Err(e.context(format!(
-                "cannot read source object tags ({reason}): {source_key}. \
-                 Nothing was copied or deleted. Use --disable-tagging to move without \
-                 the source tags, or --tagging to set them explicitly."
-            )))
-        }
-        Some(TaggingUnavailable::Unreadable(reason)) => {
+        // The object may have tags we cannot see (denied, or the lookup itself
+        // failed). `mv` would delete the source after the copy and lose them
+        // for good, so it stops here, before anything is read or written.
+        _ if config.fail_on_unreadable_source_tags => Err(e.context(format!(
+            "cannot read source object tags: {source_key}. \
+             Nothing was copied or deleted. Use --disable-tagging to move without \
+             the source tags, or --tagging to set them explicitly."
+        ))),
+        // `cp` leaves the source in place, so it copies without tags and warns.
+        _ => {
             warn!(
                 key = source_key,
-                reason = reason.as_str(),
+                error = format!("{e:#}"),
                 "cannot read source object tags; copying without tags. \
                  Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
             );
             Ok(None)
         }
-        _ => Err(e.context(format!(
-            "failed to get source object tagging: {source_key}. \
-             Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
-        ))),
     }
 }
 
@@ -1317,17 +1304,18 @@ mod tests {
         assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
     }
 
-    /// AWS S3 answers 405 for a delete marker, so on a versioned request it
-    /// does not mean "no tagging API".
+    /// A store without a tagging API on a versioned bucket: the version-id is
+    /// HEAD's, which exists, so 405 cannot mean a delete marker.
     #[tokio::test]
-    async fn method_not_allowed_on_a_versioned_request_fails() {
+    async fn method_not_allowed_on_a_versioned_request_copies_without_tags() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
         let mut source = MockSource::new(Some("V1".to_string()));
         source.tags = None;
         source.tagging_error = Some(("MethodNotAllowed", 405));
-        let (result, target) = run_tag_transfer(source).await;
-        let msg = format!("{:#}", result.unwrap_err());
-        assert!(msg.contains("failed to get source object tagging"), "{msg}");
-        assert!(target.put_taggings.lock().unwrap().is_empty());
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
     }
 
     /// An explicit --source-version-id names a specific version: never fall
@@ -1376,16 +1364,33 @@ mod tests {
         assert_eq!(calls.get_object_tagging_call_count(), 0);
     }
 
-    /// Any other tagging failure (network, throttling, 5xx) may hide real tags,
-    /// so it still fails the copy.
+    /// With no tag count from HEAD, a failed lookup (network, throttling, 5xx,
+    /// an unrecognised 4xx) does not prove the object has tags: `cp` copies
+    /// without them and warns, `mv` refuses before copying anything.
     #[tokio::test]
-    async fn unreadable_tags_fail_the_copy_instead_of_dropping_them() {
-        let mut source = MockSource::new(None);
-        source.tags = None;
-        let (result, target) = run_tag_transfer(source).await;
-        let err = format!("{:#}", result.unwrap_err());
-        assert!(err.contains("--disable-tagging"), "error: {err}");
-        assert!(target.put_taggings.lock().unwrap().is_empty());
+    async fn failed_tag_lookup_without_tag_count_warns_for_cp_and_fails_mv() {
+        for err in [
+            None,
+            Some(("SlowDown", 503)),
+            Some(("InvalidArgument", 400)),
+        ] {
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = err;
+            let (result, target) = run_tag_transfer(source).await;
+            result.unwrap_or_else(|e| panic!("cp {err:?}: {e:#}"));
+            assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+
+            let mut config = minimal_config(false);
+            config.fail_on_unreadable_source_tags = true;
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = err;
+            let (result, target) = run_tag_transfer_with(config, source).await;
+            let msg = format!("{:#}", result.unwrap_err());
+            assert!(msg.contains("Nothing was copied"), "mv {err:?}: {msg}");
+            assert!(target.put_taggings.lock().unwrap().is_empty());
+        }
     }
 
     #[tokio::test]
