@@ -11,8 +11,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
   `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which returns data when
-  read, such as a `/proc`, `/sys` or FUSE file (a file that cannot be read is left to the normal upload error, and
-  a file that grows during the check is accepted). The object size is taken from file metadata, so these uploaded
+  read, such as a `/proc` or `/sys` file or a file on some FUSE filesystems (a file that cannot be opened or read
+  is rejected, and a file that grows during the check is accepted). The object size is taken from file metadata, so these uploaded
   an empty object and exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
 - `put-bucket-replication` now accepts, and `get-bucket-replication` now prints, the `Not` filter (on `Filter` and
   on `Filter.And`, with its nested `Or`) and `Destination.EncryptionConfiguration.UseSourceMultiRegionKey`.
