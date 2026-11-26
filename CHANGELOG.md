@@ -29,11 +29,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `NoSuchTagSet` means no tags. A store without a tagging API (`NotImplemented`, `MethodNotAllowed`,
     `NotSupported` and similar) copies without tags.
   - If the tags cannot be read for any other reason (`AccessDenied`, another client error, or a failure of the
-    lookup itself), `cp` copies without tags and logs a warning: with no tag count from `HeadObject`, the object
-    either has no tags or the caller cannot read them. **`mv` now fails before copying anything**, since it would
-    delete the source and lose any tags for good; pass `--disable-tagging` to move without the source tags, or
-    `--tagging` to set them explicitly. This includes `mv` from an S3-compatible store that rejects the tagging
-    request with an unrecognised error.
+    lookup itself), `cp` copies without tags, logs a warning and exits with code 3 (warning): with no tag count
+    from `HeadObject`, the object either has no tags or the caller cannot read them. **`mv` now fails before
+    copying anything**, since it would delete the source and lose any tags for good; pass `--disable-tagging` to
+    move without the source tags, or `--tagging` to set them explicitly. This includes `mv` from an S3-compatible
+    store that rejects the tagging request with an unrecognised error.
   - When `HeadObject` reports that the object has tags, failing to read them always fails the copy.
   - `mv --dry-run` does not read tags, so it does not detect a missing tag permission.
 - A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).

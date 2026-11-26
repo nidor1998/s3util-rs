@@ -99,6 +99,7 @@ pub async fn transfer(
         source_key,
         effective_version_id.clone(),
         source_tag_count,
+        &stats_sender,
     )
     .await?;
 
@@ -503,6 +504,7 @@ async fn resolve_source_tagging(
     source_key: &str,
     version_id: Option<String>,
     source_tag_count: Option<i32>,
+    stats_sender: &Sender<SyncStatistics>,
 ) -> Result<Option<String>> {
     if config.disable_tagging {
         return Ok(None);
@@ -588,7 +590,9 @@ async fn resolve_source_tagging(
              Nothing was copied or deleted. Use --disable-tagging to move without \
              the source tags, or --tagging to set them explicitly."
         ))),
-        // `cp` leaves the source in place, so it copies without tags and warns.
+        // `cp` leaves the source in place, so it copies without tags and
+        // warns. The copy may lack tags the source has, so it exits with the
+        // warning status (3) rather than reporting a clean success.
         _ => {
             warn!(
                 key = source_key,
@@ -596,6 +600,12 @@ async fn resolve_source_tagging(
                 "cannot read source object tags; copying without tags. \
                  Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
             );
+            let _ = stats_sender
+                .send(SyncStatistics::SyncWarning {
+                    key: source_key.to_string(),
+                })
+                .await;
+            source.set_warning();
             Ok(None)
         }
     }
@@ -650,6 +660,8 @@ mod tests {
         /// Version-id an unversioned get_object_tagging reports as latest;
         /// `None` means the HEAD version (`version_id`).
         latest_version_id: Option<String>,
+        /// Set when transfer flags a warning (exit status 3).
+        warning_set: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl MockSource {
@@ -665,7 +677,11 @@ mod tests {
                 get_object_tagging_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
                 deny_versioned_tagging: false,
                 latest_version_id: None,
+                warning_set: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }
+        }
+        fn warning_was_set(&self) -> bool {
+            self.warning_set.load(std::sync::atomic::Ordering::SeqCst)
         }
         fn get_object_tagging_call_count(&self) -> usize {
             self.get_object_tagging_calls
@@ -852,7 +868,10 @@ mod tests {
         fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
             unimplemented!()
         }
-        fn set_warning(&self) {}
+        fn set_warning(&self) {
+            self.warning_set
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// Mock S3 target — returns a populated PutObjectOutput so the etag-present
@@ -1190,6 +1209,7 @@ mod tests {
             target.put_taggings.lock().unwrap().as_slice(),
             &[Some("env=prod".to_string())]
         );
+        assert!(!calls.warning_was_set());
     }
 
     /// No s3:GetObjectTagging permission, or a store without the tagging API:
@@ -1211,6 +1231,9 @@ mod tests {
             result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
             assert_eq!(calls.get_object_tagging_call_count(), 1);
             assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            // Denied tags may exist, so `cp` exits with the warning status;
+            // a store without a tagging API has none, so nothing to warn about.
+            assert_eq!(calls.warning_was_set(), err.0 == "AccessDenied", "{err:?}");
         }
     }
 
@@ -1412,9 +1435,11 @@ mod tests {
             let mut source = MockSource::new(None);
             source.tags = None;
             source.tagging_error = err;
+            let warning = source.clone();
             let (result, target) = run_tag_transfer(source).await;
             result.unwrap_or_else(|e| panic!("cp {err:?}: {e:#}"));
             assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            assert!(warning.warning_was_set(), "cp {err:?}: warning not set");
 
             let mut config = minimal_config(false);
             config.fail_on_unreadable_source_tags = true;
