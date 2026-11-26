@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicBool;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use aws_sdk_s3::types::RequestPayer;
 use leaky_bucket::RateLimiter;
 use tracing::{info, trace};
@@ -699,7 +699,7 @@ fn check_local_source_is_regular_file(
     // Re-stat after the probe: a regular file that got its first write in the
     // meantime now reports a size and is a normal file, not a pseudo-file.
     if metadata.len() == 0
-        && has_unreported_content(path)
+        && has_unreported_content(path)?
         && std::fs::metadata(path).is_ok_and(|m| m.len() == 0)
     {
         return Err(anyhow!(
@@ -713,15 +713,18 @@ fn check_local_source_is_regular_file(
 
 /// Whether a file whose metadata says 0 bytes still yields data when read.
 ///
-/// Only a probe: if the file cannot be opened or read, it returns `false` and
-/// leaves the normal upload path to report the problem as it always has.
-fn has_unreported_content(path: &std::path::Path) -> bool {
+/// An open or read error is returned, not treated as "no content": for a
+/// 0-byte source the upload path never reads the file, so it would upload an
+/// empty object without noticing the error, and `mv` would then delete the source.
+fn has_unreported_content(path: &std::path::Path) -> Result<bool> {
     use std::io::Read;
-    let Ok(mut file) = std::fs::File::open(path) else {
-        return false;
-    };
+    let mut file = std::fs::File::open(path)
+        .with_context(|| format!("cannot open source file: {}", path.display()))?;
     let mut buf = [0u8; 1];
-    file.read(&mut buf).is_ok_and(|read| read > 0)
+    let read = file
+        .read(&mut buf)
+        .with_context(|| format!("cannot read source file: {}", path.display()))?;
+    Ok(read > 0)
 }
 
 /// Create a LocalStorage base path (empty — full path is passed as the key).
@@ -988,6 +991,25 @@ mod tests {
         let tmp = tempfile::NamedTempFile::new().unwrap();
         let source = StoragePath::Local(tmp.path().to_path_buf());
         check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn check_local_source_is_regular_file_rejects_unreadable_empty_file() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::NamedTempFile::new().unwrap();
+        std::fs::set_permissions(tmp.path(), std::fs::Permissions::from_mode(0o000)).unwrap();
+        // root ignores file permissions, so the error cannot be produced there.
+        if std::fs::File::open(tmp.path()).is_ok() {
+            return;
+        }
+        let source = StoragePath::Local(tmp.path().to_path_buf());
+        let err =
+            check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap_err();
+        assert!(
+            err.to_string().contains("cannot open source file"),
+            "message: {err:#}"
+        );
     }
 
     #[cfg(unix)]
