@@ -557,8 +557,8 @@ async fn resolve_source_tagging(
     }
 
     // HEAD proved the object has tags, so copying without them is data loss
-    // whatever the reason.
-    if let (Some(count), Some(_)) = (source_tag_count.filter(|n| *n > 0), &reason) {
+    // whatever the reason, including a transient or unclassified failure.
+    if let Some(count) = source_tag_count.filter(|n| *n > 0) {
         return Err(e.context(format!(
             "source object has {count} tag(s) but they cannot be read: {source_key}. \
              Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
@@ -1336,16 +1336,51 @@ mod tests {
     /// read them is an error even for `cp` and even for "unsupported".
     #[tokio::test]
     async fn known_tags_that_cannot_be_read_fail_the_copy() {
-        for err in [("AccessDenied", 403), ("NotImplemented", 501)] {
-            let mut source = MockSource::new(None);
-            source.tag_count = Some(2);
-            source.tags = None;
-            source.tagging_error = Some(err);
-            let (result, target) = run_tag_transfer(source).await;
-            let msg = format!("{:#}", result.unwrap_err());
-            assert!(msg.contains("has 2 tag(s)"), "{err:?}: {msg}");
-            assert!(target.put_taggings.lock().unwrap().is_empty());
+        // Includes failures that classify as neither denied nor unsupported:
+        // a network error (None), throttling, 5xx and 404 must not let `cp`
+        // copy without tags that HEAD says exist.
+        for err in [
+            Some(("AccessDenied", 403)),
+            Some(("NotImplemented", 501)),
+            Some(("NoSuchTagSet", 404)),
+            None,
+            Some(("SlowDown", 503)),
+            Some(("InternalError", 500)),
+            Some(("NoSuchKey", 404)),
+        ] {
+            for fail_on_unreadable in [false, true] {
+                let mut config = minimal_config(false);
+                config.fail_on_unreadable_source_tags = fail_on_unreadable;
+                let mut source = MockSource::new(None);
+                source.tag_count = Some(2);
+                source.tags = None;
+                source.tagging_error = err;
+                let (result, target) = run_tag_transfer_with(config, source).await;
+                let msg = format!("{:#}", result.unwrap_err());
+                assert!(
+                    msg.contains("has 2 tag(s)"),
+                    "{err:?} fail_on_unreadable={fail_on_unreadable}: {msg}"
+                );
+                assert!(target.put_taggings.lock().unwrap().is_empty());
+            }
         }
+    }
+
+    /// On a versioned bucket, a known-tagged object whose versioned lookup is
+    /// denied and whose latest-version retry fails transiently must still fail.
+    #[tokio::test]
+    async fn known_tags_with_failed_versioned_retry_fail_the_copy() {
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.tag_count = Some(1);
+        source.deny_versioned_tagging = true;
+        source.tags = None;
+        source.tagging_error = Some(("SlowDown", 503));
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("has 1 tag(s)"), "{msg}");
+        assert_eq!(calls.get_object_tagging_call_count(), 2);
+        assert!(target.put_taggings.lock().unwrap().is_empty());
     }
 
     /// Directory-bucket access points (`--xa-s3`) have no tagging API either.
