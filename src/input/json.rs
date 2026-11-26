@@ -34,12 +34,14 @@ use aws_sdk_s3::types::{
     OwnerOverride, PartitionDateSource, PartitionedPrefix, Protocol,
     PublicAccessBlockConfiguration, QueueConfiguration, Redirect, RedirectAllRequestsTo,
     ReplicaModifications, ReplicaModificationsStatus, ReplicationConfiguration, ReplicationRule,
-    ReplicationRuleAndOperator, ReplicationRuleFilter, ReplicationRuleStatus, ReplicationTime,
-    ReplicationTimeStatus, ReplicationTimeValue, RoutingRule, S3KeyFilter, ServerSideEncryption,
+    ReplicationRuleAndOperator, ReplicationRuleFilter, ReplicationRuleNotOperator,
+    ReplicationRuleOrOperator, ReplicationRuleStatus, ReplicationTime, ReplicationTimeStatus,
+    ReplicationTimeValue, RoutingRule, S3KeyFilter, ServerSideEncryption,
     ServerSideEncryptionByDefault, ServerSideEncryptionConfiguration, ServerSideEncryptionRule,
     SimplePrefix, SourceSelectionCriteria, SseKmsEncryptedObjects, SseKmsEncryptedObjectsStatus,
     StorageClass, Tag as SdkTag, TargetGrant, TargetObjectKeyFormat, TopicConfiguration,
-    Transition, TransitionStorageClass, Type as GranteeType, WebsiteConfiguration,
+    Transition, TransitionStorageClass, Type as GranteeType, UseSourceMultiRegionKey,
+    UseSourceMultiRegionKeyStatus, WebsiteConfiguration,
 };
 use aws_smithy_types::DateTime;
 use aws_smithy_types_convert::date_time::DateTimeExt;
@@ -1464,6 +1466,7 @@ pub struct ReplicationRuleFilterJson {
     pub Prefix: Option<String>,
     pub Tag: Option<TagJson>,
     pub And: Option<ReplicationRuleAndOperatorJson>,
+    pub Not: Option<ReplicationRuleNotOperatorJson>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1471,6 +1474,24 @@ pub struct ReplicationRuleFilterJson {
 #[allow(non_snake_case)]
 pub struct ReplicationRuleAndOperatorJson {
     pub Prefix: Option<String>,
+    pub Tags: Option<Vec<TagJson>>,
+    pub Not: Option<ReplicationRuleNotOperatorJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleNotOperatorJson {
+    pub Prefix: Option<String>,
+    pub Tag: Option<TagJson>,
+    pub Or: Option<ReplicationRuleOrOperatorJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(non_snake_case)]
+pub struct ReplicationRuleOrOperatorJson {
+    pub Prefixes: Option<Vec<String>>,
     pub Tags: Option<Vec<TagJson>>,
 }
 
@@ -1528,6 +1549,14 @@ pub struct AccessControlTranslationJson {
 #[allow(non_snake_case)]
 pub struct EncryptionConfigurationJson {
     pub ReplicaKmsKeyID: Option<String>,
+    pub UseSourceMultiRegionKey: Option<UseSourceMultiRegionKeyJson>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+#[allow(non_snake_case)]
+pub struct UseSourceMultiRegionKeyJson {
+    pub Status: String,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -1636,13 +1665,44 @@ impl ReplicationRuleFilterJson {
                 ab = ab.prefix(prefix);
             }
             if let Some(tags) = a.Tags {
-                let sdk_tags: Result<Vec<SdkTag>> = tags
-                    .into_iter()
-                    .map(|t| Ok(SdkTag::builder().key(t.Key).value(t.Value).build()?))
-                    .collect();
-                ab = ab.set_tags(Some(sdk_tags?));
+                ab = ab.set_tags(Some(replication_tags_into_sdk(tags)?));
+            }
+            if let Some(n) = a.Not {
+                ab = ab.not(n.into_sdk()?);
             }
             b = b.and(ab.build());
+        }
+        if let Some(n) = self.Not {
+            b = b.not(n.into_sdk()?);
+        }
+        Ok(b.build())
+    }
+}
+
+fn replication_tags_into_sdk(tags: Vec<TagJson>) -> Result<Vec<SdkTag>> {
+    tags.into_iter()
+        .map(|t| Ok(SdkTag::builder().key(t.Key).value(t.Value).build()?))
+        .collect()
+}
+
+impl ReplicationRuleNotOperatorJson {
+    fn into_sdk(self) -> Result<ReplicationRuleNotOperator> {
+        let mut b = ReplicationRuleNotOperator::builder();
+        if let Some(prefix) = self.Prefix {
+            b = b.prefix(prefix);
+        }
+        if let Some(t) = self.Tag {
+            b = b.tag(SdkTag::builder().key(t.Key).value(t.Value).build()?);
+        }
+        if let Some(o) = self.Or {
+            let mut ob = ReplicationRuleOrOperator::builder();
+            if let Some(prefixes) = o.Prefixes {
+                ob = ob.set_prefixes(Some(prefixes));
+            }
+            if let Some(tags) = o.Tags {
+                ob = ob.set_tags(Some(replication_tags_into_sdk(tags)?));
+            }
+            b = b.or(ob.build());
         }
         Ok(b.build())
     }
@@ -1689,6 +1749,13 @@ impl DestinationJson {
             let mut eb = EncryptionConfiguration::builder();
             if let Some(k) = ec.ReplicaKmsKeyID {
                 eb = eb.replica_kms_key_id(k);
+            }
+            if let Some(u) = ec.UseSourceMultiRegionKey {
+                eb = eb.use_source_multi_region_key(
+                    UseSourceMultiRegionKey::builder()
+                        .status(UseSourceMultiRegionKeyStatus::from(u.Status.as_str()))
+                        .build()?,
+                );
             }
             b = b.encryption_configuration(eb.build());
         }
@@ -2862,6 +2929,115 @@ mod tests {
         assert_eq!(and.prefix(), Some("p/"));
         assert_eq!(and.tags().len(), 1);
         assert_eq!(and.tags()[0].key(), "a");
+    }
+
+    #[test]
+    fn replication_into_sdk_filter_with_not_and_or() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": {
+              "Prefix": "data/",
+              "Not": {
+                "Prefix": "data/tmp/",
+                "Tag": {"Key":"skip","Value":"yes"},
+                "Or": { "Prefixes": ["a/", "b/"], "Tags": [{"Key":"x","Value":"1"}] }
+              }
+            },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let filter = cfg.rules()[0].filter().unwrap();
+        assert_eq!(filter.prefix(), Some("data/"));
+        let not = filter.not().unwrap();
+        assert_eq!(not.prefix(), Some("data/tmp/"));
+        assert_eq!(not.tag().unwrap().key(), "skip");
+        let or = not.or().unwrap();
+        assert_eq!(or.prefixes(), &["a/".to_string(), "b/".to_string()]);
+        assert_eq!(or.tags()[0].key(), "x");
+    }
+
+    #[test]
+    fn replication_into_sdk_and_with_not() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Filter": { "And": { "Prefix": "p/", "Not": { "Prefix": "p/skip/" } } },
+            "Status": "Enabled",
+            "Destination": { "Bucket": "arn:aws:s3:::d" }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let and = cfg.rules()[0].filter().unwrap().and().unwrap();
+        assert_eq!(and.not().unwrap().prefix(), Some("p/skip/"));
+    }
+
+    #[test]
+    fn replication_into_sdk_use_source_multi_region_key() {
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "EncryptionConfiguration": {
+                "ReplicaKmsKeyID": "k",
+                "UseSourceMultiRegionKey": { "Status": "Enabled" }
+              }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let ec = cfg.rules()[0]
+            .destination()
+            .unwrap()
+            .encryption_configuration()
+            .unwrap();
+        assert_eq!(ec.replica_kms_key_id(), Some("k"));
+        assert_eq!(
+            ec.use_source_multi_region_key().unwrap().status().as_str(),
+            "Enabled"
+        );
+    }
+
+    #[test]
+    fn replication_round_trips_through_output_json() {
+        // get-bucket-replication output must be accepted verbatim by
+        // put-bucket-replication without losing Not/Or filters or
+        // UseSourceMultiRegionKey.
+        let json = r#"{
+          "Role": "arn:aws:iam::111111111111:role/r",
+          "Rules":[{
+            "ID": "r1",
+            "Filter": {
+              "And": {
+                "Prefix": "p/",
+                "Tags": [{"Key":"a","Value":"1"}],
+                "Not": { "Or": { "Prefixes": ["p/x/", "p/y/"], "Tags": [{"Key":"b","Value":"2"}] } }
+              }
+            },
+            "Status": "Enabled",
+            "Destination": {
+              "Bucket": "arn:aws:s3:::d",
+              "EncryptionConfiguration": { "UseSourceMultiRegionKey": { "Status": "Enabled" } }
+            }
+          }]
+        }"#;
+        let parsed: ReplicationConfigurationJson = serde_json::from_str(json).unwrap();
+        let cfg = parsed.into_sdk().unwrap();
+        let out =
+            aws_sdk_s3::operation::get_bucket_replication::GetBucketReplicationOutput::builder()
+                .replication_configuration(cfg.clone())
+                .build();
+        let emitted = crate::output::json::get_bucket_replication_to_json(&out);
+        let reparsed: ReplicationConfigurationJson =
+            serde_json::from_value(emitted["ReplicationConfiguration"].clone()).unwrap();
+        assert_eq!(reparsed.into_sdk().unwrap(), cfg);
     }
 
     #[test]

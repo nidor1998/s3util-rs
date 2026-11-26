@@ -20,12 +20,16 @@ pub fn check_storage_path(path: &str) -> Result<String, String> {
         return Ok(path.to_string());
     }
 
+    if path.is_empty() {
+        return Err(NO_PATH_SPECIFIED.to_string());
+    }
+
+    if !looks_like_url(path) {
+        return Ok(path.to_string());
+    }
+
     let result = Url::parse(path);
     if result == Err(ParseError::RelativeUrlWithoutBase) {
-        if path.is_empty() {
-            return Err(NO_PATH_SPECIFIED.to_string());
-        }
-
         return Ok(path.to_string());
     }
 
@@ -50,6 +54,33 @@ pub fn check_storage_path(path: &str) -> Result<String, String> {
     Ok(path.to_string())
 }
 
+/// Whether `path` is meant as a URL rather than a local path.
+///
+/// `Url::parse` accepts any `<letters>:<rest>` as a URL, so a local file such
+/// as `report:2024.txt` would be read as scheme `report` and rejected. Only an
+/// explicit `<scheme>://` at the start, or a prefix the user plausibly meant as a remote location
+/// (`s3:`, `arn:`, `http:`, `https:`, any case), marks a URL; everything else
+/// is a local path, like the AWS CLI. An ARN typed without `s3://` is thus
+/// still rejected instead of being written to a local directory named `arn:...`.
+fn looks_like_url(path: &str) -> bool {
+    const URL_PREFIXES: [&str; 4] = ["s3:", "arn:", "http:", "https:"];
+    URL_PREFIXES.iter().any(|prefix| {
+        path.get(..prefix.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+    }) || has_scheme_separator(path)
+}
+
+/// Whether `path` starts with `<scheme>://` (RFC 3986 scheme characters), so
+/// a `://` later in a local path such as `./dir/a://b` does not count.
+fn has_scheme_separator(path: &str) -> bool {
+    let Some((scheme, _)) = path.split_once("://") else {
+        return false;
+    };
+    let mut chars = scheme.chars();
+    chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'))
+}
+
 fn is_multi_region_arn(path: &str) -> bool {
     Regex::new(MULTI_REGION_ARN_REGEX).unwrap().is_match(path)
 }
@@ -68,6 +99,9 @@ pub fn parse_storage_path(path: &str) -> StoragePath {
         };
     }
 
+    if !looks_like_url(path) {
+        return parse_local_path(path);
+    }
     let result = Url::parse(path);
     if result == Err(ParseError::RelativeUrlWithoutBase) {
         return parse_local_path(path);
@@ -273,6 +307,59 @@ mod tests {
     fn invalid_scheme() {
         let result = check_storage_path("https://my-bucket");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn local_path_with_colon_is_accepted() {
+        for path in [
+            "report:2024.txt",
+            "dir/a:b",
+            "./c:d",
+            "/tmp/x:y",
+            "foo:/bar",
+            "C:file",
+        ] {
+            assert_eq!(check_storage_path(path).unwrap(), path, "{path}");
+            match parse_storage_path(path) {
+                StoragePath::Local(p) => assert_eq!(p, PathBuf::from(path)),
+                _ => panic!("expected local path for {path}"),
+            }
+        }
+    }
+
+    #[test]
+    fn double_slash_colon_inside_a_local_path_is_local() {
+        for path in ["./dir/x://y", "dir/a://b", "/tmp/a://b"] {
+            assert_eq!(check_storage_path(path).unwrap(), path, "{path}");
+            assert!(
+                matches!(parse_storage_path(path), StoragePath::Local(_)),
+                "{path}"
+            );
+        }
+    }
+
+    #[test]
+    fn arn_or_web_scheme_without_s3_prefix_is_rejected() {
+        for path in [
+            "arn:aws:s3:us-east-1:123456789012:accesspoint/ap/key",
+            "ARN:aws:s3:::bucket/key",
+            "http:example.com/key",
+            "https:example.com/key",
+        ] {
+            assert!(check_storage_path(path).is_err(), "{path}");
+        }
+    }
+
+    #[test]
+    fn s3_scheme_without_slashes_is_still_validated_as_url() {
+        // `s3:bucket` is a mistyped S3 URL, not a local file.
+        assert!(check_storage_path("s3:bucket").is_err());
+        assert!(check_storage_path("S3:bucket").is_err());
+    }
+
+    #[test]
+    fn non_s3_url_with_double_slash_is_rejected() {
+        assert!(check_storage_path("gs://bucket/key").is_err());
     }
 
     #[test]

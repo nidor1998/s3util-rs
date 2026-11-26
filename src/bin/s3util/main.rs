@@ -34,7 +34,12 @@ fn main() -> ExitCode {
 // `#[tokio::main]`, whose expansion hid them from this lint.
 #[allow(clippy::needless_return)]
 async fn run() -> ExitCode {
-    let raw_args: Vec<String> = std::env::args().collect();
+    // `std::env::args()` panics on a non-UTF-8 argument. A lossy copy is
+    // enough to spot a help request; `Cli::parse()` reads `args_os()` itself
+    // and reports an invalid argument as a normal usage error.
+    let raw_args: Vec<String> = std::env::args_os()
+        .map(|arg| arg.to_string_lossy().into_owned())
+        .collect();
     if help::is_top_level_help_request(&raw_args) {
         let mut stdout = std::io::stdout().lock();
         let _ = help::print_categorized_help(&mut stdout);

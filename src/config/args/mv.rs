@@ -77,6 +77,7 @@ impl TryFrom<MvArgs> for Config {
             value.target,
         )?;
         config.no_fail_on_verify_error = no_fail_on_verify_error;
+        config.fail_on_unreadable_source_tags = true;
         Ok(config)
     }
 }
@@ -113,6 +114,7 @@ mod tests {
         let mv_args = mv_args_from(&["--no-fail-on-verify-error", "s3://a/k", "s3://b/k"]);
         let config = Config::try_from(mv_args).unwrap();
         assert!(config.no_fail_on_verify_error);
+        assert!(config.fail_on_unreadable_source_tags);
     }
 
     #[test]

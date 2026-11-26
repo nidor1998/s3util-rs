@@ -1428,16 +1428,20 @@ fn serialize_replication_rule(r: &aws_sdk_s3::types::ReplicationRule) -> Value {
     Value::Object(m)
 }
 
+fn serialize_replication_tag(t: &aws_sdk_s3::types::Tag) -> Value {
+    let mut tm = Map::new();
+    tm.insert("Key".to_string(), Value::String(t.key().to_string()));
+    tm.insert("Value".to_string(), Value::String(t.value().to_string()));
+    Value::Object(tm)
+}
+
 fn serialize_replication_filter(f: &aws_sdk_s3::types::ReplicationRuleFilter) -> Value {
     let mut m = Map::new();
     if let Some(prefix) = f.prefix() {
         m.insert("Prefix".to_string(), Value::String(prefix.to_string()));
     }
     if let Some(t) = f.tag() {
-        let mut tm = Map::new();
-        tm.insert("Key".to_string(), Value::String(t.key().to_string()));
-        tm.insert("Value".to_string(), Value::String(t.value().to_string()));
-        m.insert("Tag".to_string(), Value::Object(tm));
+        m.insert("Tag".to_string(), serialize_replication_tag(t));
     }
     if let Some(a) = f.and() {
         let mut am = Map::new();
@@ -1445,19 +1449,43 @@ fn serialize_replication_filter(f: &aws_sdk_s3::types::ReplicationRuleFilter) ->
             am.insert("Prefix".to_string(), Value::String(prefix.to_string()));
         }
         if !a.tags().is_empty() {
-            let tags: Vec<Value> = a
-                .tags()
-                .iter()
-                .map(|t| {
-                    let mut tm = Map::new();
-                    tm.insert("Key".to_string(), Value::String(t.key().to_string()));
-                    tm.insert("Value".to_string(), Value::String(t.value().to_string()));
-                    Value::Object(tm)
-                })
-                .collect();
+            let tags: Vec<Value> = a.tags().iter().map(serialize_replication_tag).collect();
             am.insert("Tags".to_string(), Value::Array(tags));
         }
+        if let Some(n) = a.not() {
+            am.insert("Not".to_string(), serialize_replication_not(n));
+        }
         m.insert("And".to_string(), Value::Object(am));
+    }
+    if let Some(n) = f.not() {
+        m.insert("Not".to_string(), serialize_replication_not(n));
+    }
+    Value::Object(m)
+}
+
+fn serialize_replication_not(n: &aws_sdk_s3::types::ReplicationRuleNotOperator) -> Value {
+    let mut m = Map::new();
+    if let Some(prefix) = n.prefix() {
+        m.insert("Prefix".to_string(), Value::String(prefix.to_string()));
+    }
+    if let Some(t) = n.tag() {
+        m.insert("Tag".to_string(), serialize_replication_tag(t));
+    }
+    if let Some(o) = n.or() {
+        let mut om = Map::new();
+        if !o.prefixes().is_empty() {
+            let prefixes: Vec<Value> = o
+                .prefixes()
+                .iter()
+                .map(|p| Value::String(p.to_string()))
+                .collect();
+            om.insert("Prefixes".to_string(), Value::Array(prefixes));
+        }
+        if !o.tags().is_empty() {
+            let tags: Vec<Value> = o.tags().iter().map(serialize_replication_tag).collect();
+            om.insert("Tags".to_string(), Value::Array(tags));
+        }
+        m.insert("Or".to_string(), Value::Object(om));
     }
     Value::Object(m)
 }
@@ -1507,6 +1535,14 @@ fn serialize_destination(d: &aws_sdk_s3::types::Destination) -> Value {
         let mut em = Map::new();
         if let Some(k) = ec.replica_kms_key_id() {
             em.insert("ReplicaKmsKeyID".to_string(), Value::String(k.to_string()));
+        }
+        if let Some(u) = ec.use_source_multi_region_key() {
+            let mut um = Map::new();
+            um.insert(
+                "Status".to_string(),
+                Value::String(u.status().as_str().to_string()),
+            );
+            em.insert("UseSourceMultiRegionKey".to_string(), Value::Object(um));
         }
         m.insert("EncryptionConfiguration".to_string(), Value::Object(em));
     }

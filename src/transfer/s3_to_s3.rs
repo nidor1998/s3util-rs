@@ -1,5 +1,6 @@
 use anyhow::{Context, Result};
 use async_channel::Sender;
+use aws_sdk_s3::operation::get_object_tagging::GetObjectTaggingOutput;
 use futures_util::StreamExt;
 use futures_util::stream::FuturesUnordered;
 use tokio::task;
@@ -12,7 +13,10 @@ use crate::storage::{
     Storage, check_source_e_tag_unchanged, convert_head_to_get_object_output,
     parse_range_header_string,
 };
-use crate::transfer::{TransferOutcome, first_chunk, translate_source_head_object_error};
+use crate::transfer::{
+    TaggingUnavailable, TransferOutcome, first_chunk, translate_source_head_object_error,
+};
+use crate::types::StoragePath;
 use crate::types::token::PipelineCancellationToken;
 use crate::types::{SyncStatistics, generate_annotation_differences, get_additional_checksum};
 
@@ -88,6 +92,17 @@ pub async fn transfer(
     let head_e_tag = head_object_output.e_tag().map(|e_tag| e_tag.to_string());
     let source_tag_count = head_object_output.tag_count();
 
+    // Resolved before any GET so `mv` can refuse without downloading anything.
+    let tagging = resolve_source_tagging(
+        config,
+        &source_clone,
+        source_key,
+        effective_version_id.clone(),
+        source_tag_count,
+        &stats_sender,
+    )
+    .await?;
+
     // Get the first chunk range if multipart upload is required.
     let range = first_chunk::get_first_chunk_range(
         &*source,
@@ -157,41 +172,6 @@ pub async fn transfer(
         &get_object_output,
         config.additional_checksum_algorithm.clone(),
     );
-
-    // Get tagging
-    let tagging = if config.disable_tagging {
-        None
-    } else if config.tagging.is_some() {
-        config.tagging.clone()
-    } else if source_tag_count.is_none_or(|count| count == 0) {
-        // Skip get_object_tagging when the source has no tags.
-        // Notably, S3 Express One Zone buckets don't support tagging —
-        // HeadObject returns no tag_count, and GetObjectTagging would fail.
-        None
-    } else {
-        let tagging_output = source_clone
-            .get_object_tagging(source_key, effective_version_id.clone())
-            .await
-            .context(format!("failed to get source object tagging: {source_key}"))?;
-        if tagging_output.tag_set().is_empty() {
-            None
-        } else {
-            Some(
-                tagging_output
-                    .tag_set()
-                    .iter()
-                    .map(|tag| {
-                        format!(
-                            "{}={}",
-                            urlencoding::encode(tag.key()),
-                            urlencoding::encode(tag.value())
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("&"),
-            )
-        }
-    };
 
     // Build checksum algorithm slice matching s3sync's object.checksum_algorithm() format
     let checksum_algorithms: Option<Vec<_>> = config
@@ -487,6 +467,150 @@ async fn sync_object_annotations(
     Ok(need_modify)
 }
 
+/// Directory-bucket access points (`--xa-s3`) are Express One Zone too, but
+/// the storage-level Express check (which also drives checksum defaults) only
+/// knows bucket names. Neither has an object-tagging API.
+const EXPRESS_ONEZONE_ACCESS_POINT_SUFFIX: &str = "--xa-s3";
+
+fn source_has_no_tagging_api(config: &Config, source: &Storage) -> bool {
+    source.is_express_onezone_storage()
+        || matches!(&config.source, StoragePath::S3 { bucket, .. }
+            if bucket.ends_with(EXPRESS_ONEZONE_ACCESS_POINT_SUFFIX))
+}
+
+fn encode_tag_set(tags: &GetObjectTaggingOutput) -> Option<String> {
+    if tags.tag_set().is_empty() {
+        return None;
+    }
+    Some(
+        tags.tag_set()
+            .iter()
+            .map(|tag| {
+                format!(
+                    "{}={}",
+                    urlencoding::encode(tag.key()),
+                    urlencoding::encode(tag.value())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("&"),
+    )
+}
+
+/// Decide which tags the target gets, as a `PutObject` tagging string.
+async fn resolve_source_tagging(
+    config: &Config,
+    source: &Storage,
+    source_key: &str,
+    version_id: Option<String>,
+    source_tag_count: Option<i32>,
+    stats_sender: &Sender<SyncStatistics>,
+) -> Result<Option<String>> {
+    if config.disable_tagging {
+        return Ok(None);
+    }
+    if config.tagging.is_some() {
+        return Ok(config.tagging.clone());
+    }
+    if source_tag_count == Some(0)
+        || (source_tag_count.is_none() && source_has_no_tagging_api(config, source))
+    {
+        return Ok(None);
+    }
+
+    // A missing tag_count is ambiguous: S3 omits x-amz-tagging-count both for
+    // an untagged object and when the caller lacks permission to read its
+    // tags. Ask explicitly rather than silently dropping tags. This costs one
+    // extra GetObjectTagging request per untagged object; it is the only way
+    // to tell the two cases apart, and --disable-tagging or --tagging skips it.
+    let e = match source
+        .get_object_tagging(source_key, version_id.clone())
+        .await
+    {
+        Ok(tags) => return Ok(encode_tag_set(&tags)),
+        Err(e) => e,
+    };
+    let reason = crate::transfer::tagging_unavailable_reason(&e);
+
+    // On a versioned bucket the version-id comes from HEAD, not the user, and
+    // a versioned GetObjectTagging needs s3:GetObjectVersionTagging. A caller
+    // with only s3:GetObjectTagging can still read the latest version's tags.
+    // They are used only if the response says the latest version is still the
+    // one HEAD returned; otherwise (another writer, a delete marker, any error)
+    // the original failure stands.
+    if config.version_id.is_none()
+        && version_id.is_some()
+        && matches!(reason, Some(TaggingUnavailable::Unreadable(_)))
+    {
+        match source.get_object_tagging(source_key, None).await {
+            Ok(tags) if tags.version_id() == version_id.as_deref() => {
+                return Ok(encode_tag_set(&tags));
+            }
+            Ok(_) => debug!(
+                key = source_key,
+                "latest version changed since HEAD; its tags do not apply."
+            ),
+            Err(retry_error) => debug!(
+                key = source_key,
+                error = format!("{retry_error:#}"),
+                "latest-version GetObjectTagging retry failed."
+            ),
+        }
+    }
+
+    // HEAD proved the object has tags, so copying without them is data loss
+    // whatever the reason, including a transient or unclassified failure.
+    if let Some(count) = source_tag_count.filter(|n| *n > 0) {
+        return Err(e.context(format!(
+            "source object has {count} tag(s) but they cannot be read: {source_key}. \
+             Use --disable-tagging to copy without tags, or --tagging to set them explicitly."
+        )));
+    }
+
+    // From here HEAD gave no tag count. A caller allowed to read tags gets
+    // the count for any tagged object, so the object either has no tags or
+    // the caller cannot read them; this lookup failing never proves tags exist.
+    match reason {
+        Some(TaggingUnavailable::NoTags) => Ok(None),
+        // The store has no tagging API, so the object has no tags. Most
+        // untagged objects on such stores land here, so this must not fail.
+        Some(TaggingUnavailable::Unsupported(reason)) => {
+            debug!(
+                key = source_key,
+                reason = reason.as_str(),
+                "source does not support object tagging; copying without tags."
+            );
+            Ok(None)
+        }
+        // The object may have tags we cannot see (denied, or the lookup itself
+        // failed). `mv` would delete the source after the copy and lose them
+        // for good, so it stops here, before anything is read or written.
+        _ if config.fail_on_unreadable_source_tags => Err(e.context(format!(
+            "cannot read source object tags: {source_key}. \
+             Nothing was copied or deleted. Use --disable-tagging to move without \
+             the source tags, or --tagging to set them explicitly."
+        ))),
+        // `cp` leaves the source in place, so it copies without tags and
+        // warns. The copy may lack tags the source has, so it exits with the
+        // warning status (3) rather than reporting a clean success.
+        _ => {
+            warn!(
+                key = source_key,
+                error = format!("{e:#}"),
+                "cannot read source object tags; copying without tags. \
+                 Use --disable-tagging to skip reading tags, or --tagging to set them explicitly."
+            );
+            let _ = stats_sender
+                .send(SyncStatistics::SyncWarning {
+                    key: source_key.to_string(),
+                })
+                .await;
+            source.set_warning();
+            Ok(None)
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -519,6 +643,25 @@ mod tests {
         /// Records the version-id each `get_object` call was issued with, so a
         /// test can assert the first chunk is pinned to the HEAD-time version.
         get_object_version_ids: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        /// `x-amz-tagging-count` surfaced by head_object.
+        tag_count: Option<i32>,
+        /// Tags returned by get_object_tagging; `None` makes it fail.
+        tags: Option<Vec<(String, String)>>,
+        /// When `tags` is `None`: fail with an S3 service error carrying this
+        /// (code, HTTP status) instead of a plain non-S3 error.
+        tagging_error: Option<(&'static str, u16)>,
+        is_express: bool,
+        get_object_tagging_calls: Arc<std::sync::atomic::AtomicUsize>,
+        /// Version-id each get_object_tagging call was issued with.
+        get_object_tagging_version_ids: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+        /// Return AccessDenied for a versioned get_object_tagging call, like a
+        /// policy without s3:GetObjectVersionTagging.
+        deny_versioned_tagging: bool,
+        /// Version-id an unversioned get_object_tagging reports as latest;
+        /// `None` means the HEAD version (`version_id`).
+        latest_version_id: Option<String>,
+        /// Set when transfer flags a warning (exit status 3).
+        warning_set: Arc<std::sync::atomic::AtomicBool>,
     }
 
     impl MockSource {
@@ -526,7 +669,23 @@ mod tests {
             Self {
                 version_id,
                 get_object_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
+                tag_count: None,
+                tags: Some(Vec::new()),
+                tagging_error: None,
+                is_express: false,
+                get_object_tagging_calls: Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+                get_object_tagging_version_ids: Arc::new(std::sync::Mutex::new(Vec::new())),
+                deny_versioned_tagging: false,
+                latest_version_id: None,
+                warning_set: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             }
+        }
+        fn warning_was_set(&self) -> bool {
+            self.warning_set.load(std::sync::atomic::Ordering::SeqCst)
+        }
+        fn get_object_tagging_call_count(&self) -> usize {
+            self.get_object_tagging_calls
+                .load(std::sync::atomic::Ordering::SeqCst)
         }
         fn recorded_get_object_version_ids(&self) -> Vec<Option<String>> {
             self.get_object_version_ids.lock().unwrap().clone()
@@ -539,7 +698,7 @@ mod tests {
             false
         }
         fn is_express_onezone_storage(&self) -> bool {
-            false
+            self.is_express
         }
         async fn get_object(
             &self,
@@ -563,9 +722,54 @@ mod tests {
         async fn get_object_tagging(
             &self,
             _key: &str,
-            _version_id: Option<String>,
+            version_id: Option<String>,
         ) -> Result<GetObjectTaggingOutput> {
-            unimplemented!()
+            self.get_object_tagging_calls
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let versioned = version_id.is_some();
+            let reported_version_id = version_id
+                .clone()
+                .or_else(|| self.latest_version_id.clone())
+                .or_else(|| self.version_id.clone());
+            self.get_object_tagging_version_ids
+                .lock()
+                .unwrap()
+                .push(version_id);
+            if self.deny_versioned_tagging && versioned {
+                return Err(anyhow::Error::new(
+                    crate::transfer::tests::get_object_tagging_service_error(
+                        Some("AccessDenied"),
+                        403,
+                    ),
+                ));
+            }
+            let Some(tags) = &self.tags else {
+                return Err(match self.tagging_error {
+                    Some((code, status)) => anyhow::Error::new(
+                        crate::transfer::tests::get_object_tagging_service_error(
+                            Some(code),
+                            status,
+                        ),
+                    )
+                    .context("aws_sdk_s3::client::get_object_tagging() failed."),
+                    None => anyhow::anyhow!("connection reset"),
+                });
+            };
+            let tag_set = tags
+                .iter()
+                .map(|(k, v)| {
+                    aws_sdk_s3::types::Tag::builder()
+                        .key(k)
+                        .value(v)
+                        .build()
+                        .unwrap()
+                })
+                .collect();
+            Ok(GetObjectTaggingOutput::builder()
+                .set_version_id(reported_version_id)
+                .set_tag_set(Some(tag_set))
+                .build()
+                .unwrap())
         }
         async fn head_object(
             &self,
@@ -577,9 +781,8 @@ mod tests {
             _sse_c_key: SseCustomerKey,
             _sse_c_key_md5: Option<String>,
         ) -> Result<HeadObjectOutput> {
-            // tag_count is left None so tagging short-circuits without calling
-            // get_object_tagging in the non-disabled, no-explicit-tagging path.
             Ok(HeadObjectOutput::builder()
+                .set_tag_count(self.tag_count)
                 .content_length(4)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
@@ -665,13 +868,19 @@ mod tests {
         fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
             unimplemented!()
         }
-        fn set_warning(&self) {}
+        fn set_warning(&self) {
+            self.warning_set
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     }
 
     /// Mock S3 target — returns a populated PutObjectOutput so the etag-present
     /// debug branch is taken (as opposed to the warn branch on no etag).
-    #[derive(Clone)]
-    struct MockTarget;
+    #[derive(Clone, Default)]
+    struct MockTarget {
+        /// Tagging string each put_object call received.
+        put_taggings: Arc<std::sync::Mutex<Vec<Option<String>>>>,
+    }
 
     #[async_trait]
     impl StorageTrait for MockTarget {
@@ -754,10 +963,11 @@ mod tests {
             _source_size: u64,
             _source_additional_checksum: Option<String>,
             _get_object_output_first_chunk: GetObjectOutput,
-            _tagging: Option<String>,
+            tagging: Option<String>,
             _object_checksum: Option<crate::types::ObjectChecksum>,
             _if_none_match: Option<String>,
         ) -> Result<PutObjectOutput> {
+            self.put_taggings.lock().unwrap().push(tagging);
             Ok(PutObjectOutput::builder().e_tag("\"target-etag\"").build())
         }
         async fn put_object_tagging(
@@ -861,6 +1071,7 @@ mod tests {
             is_stdio_source: false,
             is_stdio_target: false,
             no_fail_on_verify_error: false,
+            fail_on_unreadable_source_tags: false,
             skip_existing: false,
             dry_run: false,
             enable_sync_object_annotations: false,
@@ -872,7 +1083,7 @@ mod tests {
     async fn transfer_captures_source_version_id_from_head_object() {
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(Some("V123".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -898,7 +1109,7 @@ mod tests {
         let mock = MockSource::new(Some("V123".to_string()));
         let recorder = mock.clone();
         let source: Storage = Box::new(mock);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -927,7 +1138,7 @@ mod tests {
         let mock = MockSource::new(None);
         let recorder = mock.clone();
         let source: Storage = Box::new(mock);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -946,7 +1157,7 @@ mod tests {
     async fn transfer_captures_none_when_head_object_has_no_version_id() {
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(None));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -959,13 +1170,319 @@ mod tests {
         assert_eq!(outcome.source_version_id, None);
     }
 
+    async fn run_tag_transfer(source: MockSource) -> (Result<TransferOutcome>, MockTarget) {
+        run_tag_transfer_with(minimal_config(false), source).await
+    }
+
+    async fn run_tag_transfer_with(
+        config: Config,
+        source: MockSource,
+    ) -> (Result<TransferOutcome>, MockTarget) {
+        let target = MockTarget::default();
+        let recorder = target.clone();
+        let token = create_pipeline_cancellation_token();
+        let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
+        let result = transfer(
+            &config,
+            Box::new(source),
+            Box::new(target),
+            "src/key",
+            "dst/key",
+            token,
+            stats_tx,
+        )
+        .await;
+        (result, recorder)
+    }
+
+    /// S3 omits x-amz-tagging-count when the caller cannot read the tags, so
+    /// a missing count must not be read as "no tags".
+    #[tokio::test]
+    async fn tags_are_fetched_when_head_omits_tag_count() {
+        let mut source = MockSource::new(None);
+        source.tags = Some(vec![("env".to_string(), "prod".to_string())]);
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 1);
+        assert_eq!(
+            target.put_taggings.lock().unwrap().as_slice(),
+            &[Some("env=prod".to_string())]
+        );
+        assert!(!calls.warning_was_set());
+    }
+
+    /// No s3:GetObjectTagging permission, or a store without the tagging API:
+    /// S3 omits the tag count for every untagged object, so failing here would
+    /// break nearly every copy. Copy without tags instead. Only a permission
+    /// failure may hide real tags; see the `mv` test below.
+    #[tokio::test]
+    async fn tagging_access_denied_or_unsupported_copies_without_tags() {
+        for err in [
+            ("AccessDenied", 403),
+            ("NotImplemented", 501),
+            ("MethodNotAllowed", 405),
+        ] {
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = Some(err);
+            let calls = source.clone();
+            let (result, target) = run_tag_transfer(source).await;
+            result.unwrap_or_else(|e| panic!("{err:?}: {e:#}"));
+            assert_eq!(calls.get_object_tagging_call_count(), 1);
+            assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            // Denied tags may exist, so `cp` exits with the warning status;
+            // a store without a tagging API has none, so nothing to warn about.
+            assert_eq!(calls.warning_was_set(), err.0 == "AccessDenied", "{err:?}");
+        }
+    }
+
+    /// `mv` deletes the source after the copy, so tags it cannot read would be
+    /// lost for good: it fails before writing anything. Unsupported tagging
+    /// still copies, since such an object has no tags.
+    #[tokio::test]
+    async fn mv_fails_before_writing_when_tags_are_denied() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("AccessDenied", 403));
+        let (result, target) = run_tag_transfer_with(config.clone(), source).await;
+        let err = format!("{:#}", result.unwrap_err());
+        assert!(
+            err.contains("Nothing was copied or deleted"),
+            "error: {err}"
+        );
+        assert!(err.contains("--disable-tagging"), "error: {err}");
+        assert!(target.put_taggings.lock().unwrap().is_empty());
+
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("NotImplemented", 501));
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    /// A versioned GetObjectTagging needs s3:GetObjectVersionTagging. When the
+    /// version-id came from HEAD (not the user), a denial retries for the
+    /// latest version, which only needs s3:GetObjectTagging.
+    #[tokio::test]
+    async fn versioned_tagging_denied_retries_for_latest_version() {
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.tags = Some(vec![("env".to_string(), "prod".to_string())]);
+        source.deny_versioned_tagging = true;
+        let calls = source.clone();
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(
+            calls
+                .get_object_tagging_version_ids
+                .lock()
+                .unwrap()
+                .as_slice(),
+            &[Some("V1".to_string()), None]
+        );
+        assert_eq!(
+            target.put_taggings.lock().unwrap().as_slice(),
+            &[Some("env=prod".to_string())]
+        );
+    }
+
+    /// If the latest version is no longer the HEAD version, its tags belong to
+    /// another object version and must not be used.
+    #[tokio::test]
+    async fn versioned_retry_ignores_tags_of_a_newer_latest_version() {
+        for fail_on_unreadable in [false, true] {
+            let mut source = MockSource::new(Some("V1".to_string()));
+            source.tags = Some(vec![("b".to_string(), "2".to_string())]);
+            source.deny_versioned_tagging = true;
+            source.latest_version_id = Some("V2".to_string());
+            let mut config = minimal_config(false);
+            config.fail_on_unreadable_source_tags = fail_on_unreadable;
+            let (result, target) = run_tag_transfer_with(config, source).await;
+            if fail_on_unreadable {
+                let msg = format!("{:#}", result.unwrap_err());
+                assert!(msg.contains("Nothing was copied"), "{msg}");
+                assert!(target.put_taggings.lock().unwrap().is_empty());
+            } else {
+                result.unwrap();
+                assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn no_such_tag_set_copies_without_tags() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        source.tagging_error = Some(("NoSuchTagSet", 404));
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    /// A store without a tagging API on a versioned bucket: the version-id is
+    /// HEAD's, which exists, so 405 cannot mean a delete marker.
+    #[tokio::test]
+    async fn method_not_allowed_on_a_versioned_request_copies_without_tags() {
+        let mut config = minimal_config(false);
+        config.fail_on_unreadable_source_tags = true;
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.tags = None;
+        source.tagging_error = Some(("MethodNotAllowed", 405));
+        let (result, target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    /// An explicit --source-version-id names a specific version: never fall
+    /// back to the latest version's tags.
+    #[tokio::test]
+    async fn explicit_version_tagging_denied_does_not_retry() {
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.deny_versioned_tagging = true;
+        let calls = source.clone();
+        let mut config = minimal_config(false);
+        config.version_id = Some("V1".to_string());
+        let (result, _target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 1);
+    }
+
+    /// HEAD reporting a tag count proves the object has tags, so failing to
+    /// read them is an error even for `cp` and even for "unsupported".
+    #[tokio::test]
+    async fn known_tags_that_cannot_be_read_fail_the_copy() {
+        // Includes failures that classify as neither denied nor unsupported:
+        // a network error (None), throttling, 5xx and 404 must not let `cp`
+        // copy without tags that HEAD says exist.
+        for err in [
+            Some(("AccessDenied", 403)),
+            Some(("NotImplemented", 501)),
+            Some(("NoSuchTagSet", 404)),
+            None,
+            Some(("SlowDown", 503)),
+            Some(("InternalError", 500)),
+            Some(("NoSuchKey", 404)),
+        ] {
+            for fail_on_unreadable in [false, true] {
+                let mut config = minimal_config(false);
+                config.fail_on_unreadable_source_tags = fail_on_unreadable;
+                let mut source = MockSource::new(None);
+                source.tag_count = Some(2);
+                source.tags = None;
+                source.tagging_error = err;
+                let (result, target) = run_tag_transfer_with(config, source).await;
+                let msg = format!("{:#}", result.unwrap_err());
+                assert!(
+                    msg.contains("has 2 tag(s)"),
+                    "{err:?} fail_on_unreadable={fail_on_unreadable}: {msg}"
+                );
+                assert!(target.put_taggings.lock().unwrap().is_empty());
+            }
+        }
+    }
+
+    /// On a versioned bucket, a known-tagged object whose versioned lookup is
+    /// denied and whose latest-version retry fails transiently must still fail.
+    #[tokio::test]
+    async fn known_tags_with_failed_versioned_retry_fail_the_copy() {
+        let mut source = MockSource::new(Some("V1".to_string()));
+        source.tag_count = Some(1);
+        source.deny_versioned_tagging = true;
+        source.tags = None;
+        source.tagging_error = Some(("SlowDown", 503));
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        let msg = format!("{:#}", result.unwrap_err());
+        assert!(msg.contains("has 1 tag(s)"), "{msg}");
+        assert_eq!(calls.get_object_tagging_call_count(), 2);
+        assert!(target.put_taggings.lock().unwrap().is_empty());
+    }
+
+    /// Directory-bucket access points (`--xa-s3`) have no tagging API either.
+    #[tokio::test]
+    async fn express_access_point_source_skips_get_object_tagging() {
+        let mut config = minimal_config(false);
+        config.source = crate::types::StoragePath::S3 {
+            bucket: "myap--usw2-az1--xa-s3".to_string(),
+            prefix: String::new(),
+        };
+        let mut source = MockSource::new(None);
+        source.tags = None;
+        let calls = source.clone();
+        let (result, _target) = run_tag_transfer_with(config, source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 0);
+    }
+
+    /// With no tag count from HEAD, a failed lookup (network, throttling, 5xx,
+    /// an unrecognised 4xx) does not prove the object has tags: `cp` copies
+    /// without them and warns, `mv` refuses before copying anything.
+    #[tokio::test]
+    async fn failed_tag_lookup_without_tag_count_warns_for_cp_and_fails_mv() {
+        for err in [
+            None,
+            Some(("SlowDown", 503)),
+            Some(("InvalidArgument", 400)),
+        ] {
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = err;
+            let warning = source.clone();
+            let (result, target) = run_tag_transfer(source).await;
+            result.unwrap_or_else(|e| panic!("cp {err:?}: {e:#}"));
+            assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+            assert!(warning.warning_was_set(), "cp {err:?}: warning not set");
+
+            let mut config = minimal_config(false);
+            config.fail_on_unreadable_source_tags = true;
+            let mut source = MockSource::new(None);
+            source.tags = None;
+            source.tagging_error = err;
+            let (result, target) = run_tag_transfer_with(config, source).await;
+            let msg = format!("{:#}", result.unwrap_err());
+            assert!(msg.contains("Nothing was copied"), "mv {err:?}: {msg}");
+            assert!(target.put_taggings.lock().unwrap().is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn tag_count_zero_skips_get_object_tagging() {
+        let mut source = MockSource::new(None);
+        source.tag_count = Some(0);
+        source.tags = None;
+        let calls = source.clone();
+        let (result, target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 0);
+        assert_eq!(target.put_taggings.lock().unwrap().as_slice(), &[None]);
+    }
+
+    #[tokio::test]
+    async fn express_onezone_source_skips_get_object_tagging() {
+        let mut source = MockSource::new(None);
+        source.is_express = true;
+        source.tags = None;
+        let calls = source.clone();
+        let (result, _target) = run_tag_transfer(source).await;
+        result.unwrap();
+        assert_eq!(calls.get_object_tagging_call_count(), 0);
+    }
+
     #[tokio::test]
     async fn transfer_returns_default_when_cancelled_before_start() {
         // Token cancelled before transfer() runs ⇒ transfer returns the default
         // outcome immediately, without making any source/target call.
         let config = minimal_config(false);
         let source: Storage = Box::new(MockSource::new(None));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         token.cancel();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
@@ -986,7 +1503,7 @@ mod tests {
         // from the head_object response identically to the download+upload path.
         let config = minimal_config(true);
         let source: Storage = Box::new(MockSource::new(Some("V456".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -1094,7 +1611,6 @@ mod tests {
     async fn mock_source_unimplemented_methods_panic() {
         let source = MockSource::new(None);
 
-        assert_future_panics(source.get_object_tagging("k", None)).await;
         assert_future_panics(source.head_object_first_part(
             "k",
             None,
@@ -1122,7 +1638,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_target_real_return_methods_behave_as_expected() {
-        let target = MockTarget;
+        let target = MockTarget::default();
 
         // S3 target — not a local storage.
         assert!(!target.is_local_storage());
@@ -1156,7 +1672,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_target_unimplemented_methods_panic() {
-        let target = MockTarget;
+        let target = MockTarget::default();
 
         assert_future_panics(target.get_object("k", None, None, None, None, no_sse_c_key(), None))
             .await;
@@ -1369,6 +1885,7 @@ mod tests {
         ) -> Result<HeadObjectOutput> {
             Ok(HeadObjectOutput::builder()
                 .content_length(4)
+                .tag_count(0)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
                 .set_version_id(self.head_version_id.clone())
@@ -2379,6 +2896,7 @@ mod tests {
             self.token.cancel();
             Ok(HeadObjectOutput::builder()
                 .content_length(4)
+                .tag_count(0)
                 .e_tag("\"abc\"")
                 .last_modified(DateTime::from_secs(0))
                 .build())
@@ -2469,7 +2987,7 @@ mod tests {
         // tagging is None and the transfer still completes.
         let config = minimal_config(false);
         let source: Storage = Box::new(EmptyTaggingSource);
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -2491,7 +3009,7 @@ mod tests {
         let mut config = minimal_config(false);
         config.disable_tagging = true;
         let source: Storage = Box::new(MockSource::new(Some("V1".to_string())));
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let token = create_pipeline_cancellation_token();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
@@ -2531,7 +3049,7 @@ mod tests {
         let source: Storage = Box::new(CancelOnHeadSource {
             token: token.clone(),
         });
-        let target: Storage = Box::new(MockTarget);
+        let target: Storage = Box::<MockTarget>::default();
         let (stats_tx, _stats_rx) = async_channel::unbounded::<SyncStatistics>();
 
         let outcome = transfer(
@@ -2617,7 +3135,7 @@ mod tests {
         .await;
         assert_future_panics(source.put_object(
             "k",
-            Box::new(MockTarget),
+            Box::<MockTarget>::default(),
             "src",
             0,
             None,
@@ -2769,7 +3287,7 @@ mod tests {
         .await;
         assert_future_panics(source.put_object(
             "k",
-            Box::new(MockTarget),
+            Box::<MockTarget>::default(),
             "src",
             0,
             None,

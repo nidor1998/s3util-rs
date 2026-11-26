@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
+  `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which returns data when
+  read, such as a `/proc` or `/sys` file or a file on some FUSE filesystems (a file that cannot be opened or read
+  is rejected, and a file that grows during the check is accepted). The object size is taken from file metadata, so these uploaded
+  an empty object and exited 0, and `mv` then deleted the source. Read such input from stdin instead (`... | s3util cp - s3://...`).
+- `put-bucket-replication` now accepts, and `get-bucket-replication` now prints, the `Not` filter (on `Filter` and
+  on `Filter.And`, with its nested `Or`) and `Destination.EncryptionConfiguration.UseSourceMultiRegionKey`.
+  Passing the output of `get-bucket-replication` to `put-bucket-replication` silently removed these settings,
+  including replication exclusions.
+- S3-to-S3 `cp` and `mv` no longer silently drop the source object's tags when the caller cannot read them. S3
+  omits the tag count from `HeadObject` both for an untagged object and when the caller lacks permission to read
+  tags, and `s3util` treated both as "no tags". It now calls `GetObjectTagging` (before downloading anything) when
+  the count is missing, except on Express One Zone buckets and their `--xa-s3` access points, which have no tags.
+  This costs one extra request per untagged object.
+  - On a versioned bucket, a denied versioned call (which needs `s3:GetObjectVersionTagging`) is retried for the
+    latest version unless `--source-version-id` was given; those tags are used only if the latest version is still
+    the one being copied.
+  - `NoSuchTagSet` means no tags. A store without a tagging API (`NotImplemented`, `MethodNotAllowed`,
+    `NotSupported` and similar) copies without tags.
+  - If the tags cannot be read for any other reason (`AccessDenied`, another client error, or a failure of the
+    lookup itself), `cp` copies without tags, logs a warning and exits with code 3 (warning): with no tag count
+    from `HeadObject`, the object either has no tags or the caller cannot read them. **`mv` now fails before
+    copying anything**, since it would delete the source and lose any tags for good; pass `--disable-tagging` to
+    move without the source tags, or `--tagging` to set them explicitly. This includes `mv` from an S3-compatible
+    store that rejects the tagging request with an unrecognised error.
+  - When `HeadObject` reports that the object has tags, failing to read them always fails the copy.
+  - `mv --dry-run` does not read tags, so it does not detect a missing tag permission.
+- A non-UTF-8 command-line argument no longer panics; it is reported as a usage error (exit 2).
+- A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown
+  scheme. Only a leading `s3:`, `arn:`, `http:`, `https:` or `<scheme>://` marks a URL (and is validated as one);
+  any other path is local.
+
 ## [1.12.0] - 2026-11-24
 
 Adds the `SHA512`, `MD5`, `XXHASH128`, `XXHASH3` and `XXHASH64` additional checksum algorithms.

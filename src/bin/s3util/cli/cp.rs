@@ -143,6 +143,7 @@ mod tests {
             is_stdio_source: false,
             is_stdio_target: false,
             no_fail_on_verify_error: false,
+            fail_on_unreadable_source_tags: false,
             skip_existing: true,
             dry_run: false,
             enable_sync_object_annotations: false,
