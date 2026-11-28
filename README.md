@@ -290,7 +290,7 @@ Both storages must be S3, and S3 Express One Zone is not supported.
 
 ### Rate limiting
 
-`--rate-limit-bandwidth <BYTES_PER_SEC>` caps throughput using a leaky-bucket algorithm. Accepts unit-suffixed values like `50MB`, `100MiB`, `1GB`.
+`--rate-limit-bandwidth <BYTES_PER_SEC>` caps throughput using a leaky-bucket algorithm. Accepts unit-suffixed values like `50MB`, `100MiB`, `1GB`. Size suffixes are case-sensitive; see [--multipart-threshold / --multipart-chunksize](#--multipart-threshold----multipart-chunksize).
 
 ### Observability
 
@@ -864,6 +864,19 @@ Number of parallel part uploads/downloads during multipart transfers. Default: `
 
 Object size threshold for switching to multipart (`--multipart-threshold`, default `8MiB`) and the size of each part (`--multipart-chunksize`, default `8MiB`). Both accept unit-suffixed values (`MB`, `MiB`, `GB`, `GiB`).
 
+The last letter of a size suffix is case-sensitive, here and in `--rate-limit-bandwidth`: an uppercase `B` means bytes, and a lowercase `b` means bits. A value written with a lowercase `b` is one eighth of the value written with an uppercase `B`, and the converted byte count must still meet the option's minimum (5MiB for these two options, 1MiB for `--rate-limit-bandwidth`), so `8mb` (1,000,000 bytes) is rejected by all three.
+
+| Value  | Meaning     | Bytes         |
+|--------|-------------|---------------|
+| `8MiB` | 8 mebibytes | 8,388,608     |
+| `8MB`  | 8 megabytes | 8,000,000     |
+| `8Mib` | 8 mebibits  | 1,048,576     |
+| `8mb`  | 8 megabits  | 1,000,000     |
+| `5GiB` | 5 gibibytes | 5,368,709,120 |
+| `5gib` | 5 gibibits  | 671,088,640   |
+
+For example, `--rate-limit-bandwidth 100mb` limits the bandwidth to 12.5MB/sec, not 100MB/sec. Always write the suffix with an uppercase `B` unless you intend bits.
+
 ### --auto-chunksize
 
 Match source/target chunk layout automatically (extra `HeadObject` per part). Recommended for S3→S3 copies where you want identical composite ETags on both sides.
@@ -894,7 +907,7 @@ Access public S3 buckets anonymously — skips the entire AWS credential chain (
 
 ### --rate-limit-bandwidth
 
-Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB`, `GB`, `GiB`.
+Maximum bytes per second for the transfer. Accepts unit suffixes like `MB`, `MiB`, `GB`, `GiB`. A suffix ending in a lowercase `b` means bits, not bytes (see [--multipart-threshold / --multipart-chunksize](#--multipart-threshold----multipart-chunksize)).
 
 ### --dry-run
 

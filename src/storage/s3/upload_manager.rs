@@ -137,6 +137,73 @@ pub struct MutipartEtags {
     pub digest: Vec<u8>,
     pub part_number: i32,
 }
+/// The part tasks of one multipart upload attempt.
+///
+/// A failed part makes the whole attempt fail, and the multipart upload is then aborted.
+/// The other part tasks must not outlive the attempt: they would keep uploading to an aborted
+/// upload ID (a part that lands after the abort is stored and billed until the upload is
+/// aborted again) and keep counting their bytes. So the remaining tasks are aborted when the
+/// attempt fails, and also when this is dropped by an early return.
+struct UploadPartTasks {
+    join_handles: FuturesUnordered<JoinHandle<Result<()>>>,
+}
+
+impl UploadPartTasks {
+    fn new() -> Self {
+        Self {
+            join_handles: FuturesUnordered::new(),
+        }
+    }
+
+    fn push(&mut self, join_handle: JoinHandle<Result<()>>) {
+        self.join_handles.push(join_handle);
+    }
+
+    /// Waits for every part task. With `cancellation_token`, a cancellation seen after a part
+    /// has finished fails the attempt as `Cancelled`.
+    async fn join_all(
+        &mut self,
+        cancellation_token: Option<&PipelineCancellationToken>,
+    ) -> Result<()> {
+        while let Some(join_result) = self.join_handles.next().await {
+            let result = match join_result {
+                Err(join_error) => Err(anyhow!(join_error)),
+                Ok(Err(task_error)) => Err(task_error),
+                Ok(Ok(())) if cancellation_token.is_some_and(|token| token.is_cancelled()) => {
+                    Err(anyhow!(S3syncError::Cancelled))
+                }
+                Ok(Ok(())) => Ok(()),
+            };
+
+            if result.is_err() {
+                self.abort_and_wait().await;
+                return result;
+            }
+        }
+
+        Ok(())
+    }
+
+    // Waits until the aborted tasks have actually stopped, so that the caller can abort the
+    // multipart upload without a part of this attempt still being in flight.
+    async fn abort_and_wait(&mut self) {
+        self.abort();
+        while self.join_handles.next().await.is_some() {}
+    }
+
+    fn abort(&self) {
+        for join_handle in self.join_handles.iter() {
+            join_handle.abort();
+        }
+    }
+}
+
+impl Drop for UploadPartTasks {
+    fn drop(&mut self) {
+        self.abort();
+    }
+}
+
 pub struct UploadManager {
     client: Arc<Client>,
     config: Config,
@@ -438,7 +505,8 @@ impl UploadManager {
         key: &str,
         mut get_object_output_first_chunk: GetObjectOutput,
     ) -> Result<PutObjectOutput> {
-        get_object_output_first_chunk = self.modify_metadata(get_object_output_first_chunk);
+        get_object_output_first_chunk =
+            Self::modify_metadata(&self.config, get_object_output_first_chunk);
 
         if self.is_auto_chunksize_enabled() {
             if is_multipart_upload_e_tag(
@@ -493,20 +561,20 @@ impl UploadManager {
         Ok(put_object_output)
     }
 
-    fn modify_metadata(&self, mut get_object_output: GetObjectOutput) -> GetObjectOutput {
-        if self.config.no_sync_system_metadata {
+    fn modify_metadata(config: &Config, mut get_object_output: GetObjectOutput) -> GetObjectOutput {
+        if config.no_sync_system_metadata {
             get_object_output = Self::clear_system_meta_data(get_object_output);
         }
 
-        if self.config.no_sync_user_defined_metadata {
+        if config.no_sync_user_defined_metadata {
             get_object_output.metadata = None
         }
 
-        if self.config.metadata.is_some() {
-            get_object_output.metadata = Some(self.config.metadata.as_ref().unwrap().clone());
+        if config.metadata.is_some() {
+            get_object_output.metadata = Some(config.metadata.as_ref().unwrap().clone());
         }
 
-        if self.config.put_last_modified_metadata {
+        if config.put_last_modified_metadata {
             get_object_output = Self::modify_last_modified_metadata(get_object_output);
         }
 
@@ -642,11 +710,8 @@ impl UploadManager {
             } else {
                 expires_to_sdk(self.config.expires)?
             },
-            metadata: if self.config.metadata.is_none() {
-                get_object_output_first_chunk.metadata().cloned()
-            } else {
-                self.config.metadata.clone()
-            },
+            // --metadata is already applied by modify_metadata(), which also adds the s3sync origin metadata.
+            metadata: get_object_output_first_chunk.metadata().cloned(),
             request_payer: self.request_payer.clone(),
             storage_class: storage_class.clone(),
             website_redirect_location: if self.config.website_redirect.is_none() {
@@ -967,7 +1032,7 @@ impl UploadManager {
 
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
-        let mut upload_parts_join_handles = FuturesUnordered::new();
+        let mut upload_part_tasks = UploadPartTasks::new();
         for (part_number, offset) in (1i32..).zip((0..source_total_size).step_by(config_chunksize))
         {
             if self.cancellation_token.is_cancelled() {
@@ -1265,15 +1330,12 @@ impl UploadManager {
                 Ok(())
             });
 
-            upload_parts_join_handles.push(task);
+            upload_part_tasks.push(task);
         }
 
-        while let Some(result) = upload_parts_join_handles.next().await {
-            result??;
-            if self.cancellation_token.is_cancelled() {
-                return Err(anyhow!(S3syncError::Cancelled));
-            }
-        }
+        upload_part_tasks
+            .join_all(Some(&self.cancellation_token))
+            .await?;
 
         let total_upload_size: i64 = shared_total_upload_size.lock().unwrap().iter().sum();
         let source_total_size = self
@@ -1487,7 +1549,7 @@ impl UploadManager {
             .clone()
             .map(|algo| AdditionalChecksum::new(algo, self.config.full_object_checksum));
 
-        let mut upload_parts_join_handles = FuturesUnordered::new();
+        let mut upload_part_tasks = UploadPartTasks::new();
 
         loop {
             if self.cancellation_token.is_cancelled() {
@@ -1644,7 +1706,7 @@ impl UploadManager {
                 Ok(())
             });
 
-            upload_parts_join_handles.push(task);
+            upload_part_tasks.push(task);
             part_number += 1;
 
             if is_last_chunk {
@@ -1652,11 +1714,13 @@ impl UploadManager {
             }
         }
 
-        while let Some(result) = upload_parts_join_handles.next().await {
-            result
-                .context("upload_parts_stream join failed")?
-                .context("upload_parts_stream task failed")?;
-        }
+        upload_part_tasks.join_all(None).await.map_err(|e| {
+            if e.is::<task::JoinError>() {
+                e.context("upload_parts_stream join failed")
+            } else {
+                e.context("upload_parts_stream task failed")
+            }
+        })?;
 
         // Sort parts by part_number since tasks finished in arbitrary order.
         let mut parts = shared_upload_parts.lock().unwrap().clone();
@@ -1707,7 +1771,7 @@ impl UploadManager {
             .map(|e_tag| e_tag.to_string());
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
-        let mut upload_parts_join_handles = FuturesUnordered::new();
+        let mut upload_part_tasks = UploadPartTasks::new();
         let mut part_number = 1;
         let mut offset = 0;
 
@@ -2013,18 +2077,15 @@ impl UploadManager {
                 Ok(())
             });
 
-            upload_parts_join_handles.push(task);
+            upload_part_tasks.push(task);
 
             offset += object_part_chunksize;
             part_number += 1;
         }
 
-        while let Some(result) = upload_parts_join_handles.next().await {
-            result??;
-            if self.cancellation_token.is_cancelled() {
-                return Err(anyhow!(S3syncError::Cancelled));
-            }
-        }
+        upload_part_tasks
+            .join_all(Some(&self.cancellation_token))
+            .await?;
 
         let total_upload_size: i64 = shared_total_upload_size.lock().unwrap().iter().sum();
         let source_total_size = self
@@ -2189,11 +2250,8 @@ impl UploadManager {
             } else {
                 expires_to_sdk(self.config.expires)?
             },
-            metadata: if self.config.metadata.is_none() {
-                get_object_output.metadata().cloned()
-            } else {
-                self.config.metadata.clone()
-            },
+            // --metadata is already applied by modify_metadata(), which also adds the s3sync origin metadata.
+            metadata: get_object_output.metadata().cloned(),
             request_payer: self.request_payer.clone(),
             storage_class: storage_class.clone(),
             website_redirect_location: if self.config.website_redirect.is_none() {
@@ -2617,6 +2675,157 @@ mod tests {
     use super::*;
     use aws_sdk_s3::primitives::DateTime;
     use tracing_subscriber::EnvFilter;
+
+    // Reports when the task that owns it has stopped, whether it finished or was aborted.
+    struct StoppedFlag(Arc<AtomicBool>);
+
+    impl Drop for StoppedFlag {
+        fn drop(&mut self) {
+            self.0.store(true, Ordering::SeqCst);
+        }
+    }
+
+    fn spawn_never_ending_part_task(tasks: &mut UploadPartTasks) -> Arc<AtomicBool> {
+        let stopped = Arc::new(AtomicBool::new(false));
+        let stopped_flag = StoppedFlag(stopped.clone());
+        tasks.push(task::spawn(async move {
+            let _stopped_flag = stopped_flag;
+            std::future::pending::<()>().await;
+            Ok(())
+        }));
+        stopped
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_join_all_succeeds() {
+        let mut tasks = UploadPartTasks::new();
+        tasks.push(task::spawn(async { Ok(()) }));
+        tasks.push(task::spawn(async { Ok(()) }));
+
+        let cancellation_token = crate::types::token::create_pipeline_cancellation_token();
+        assert!(tasks.join_all(Some(&cancellation_token)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_failed_part_stops_other_parts() {
+        let mut tasks = UploadPartTasks::new();
+        let stopped = spawn_never_ending_part_task(&mut tasks);
+        tasks.push(task::spawn(async { Err(anyhow!("upload_part() failed.")) }));
+
+        let cancellation_token = crate::types::token::create_pipeline_cancellation_token();
+        let result = tasks.join_all(Some(&cancellation_token)).await;
+
+        assert_eq!(result.unwrap_err().to_string(), "upload_part() failed.");
+        // No waiting here: join_all() returns only after the other part has stopped.
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_panicked_part_is_a_join_error() {
+        let mut tasks = UploadPartTasks::new();
+        let stopped = spawn_never_ending_part_task(&mut tasks);
+        tasks.push(task::spawn(async { panic!("part task panicked") }));
+
+        let error = tasks.join_all(None).await.unwrap_err();
+
+        assert!(error.is::<task::JoinError>());
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_cancellation_stops_other_parts() {
+        let mut tasks = UploadPartTasks::new();
+        let stopped = spawn_never_ending_part_task(&mut tasks);
+        tasks.push(task::spawn(async { Ok(()) }));
+
+        let cancellation_token = crate::types::token::create_pipeline_cancellation_token();
+        cancellation_token.cancel();
+        let result = tasks.join_all(Some(&cancellation_token)).await;
+
+        let error = result.unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<S3syncError>(),
+            Some(S3syncError::Cancelled)
+        ));
+        assert!(stopped.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_without_token_ignores_cancellation() {
+        let mut tasks = UploadPartTasks::new();
+        tasks.push(task::spawn(async { Ok(()) }));
+
+        // The stdin path checks the token itself after the parts are joined.
+        assert!(tasks.join_all(None).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn upload_part_tasks_drop_aborts_parts() {
+        let mut tasks = UploadPartTasks::new();
+        let stopped = spawn_never_ending_part_task(&mut tasks);
+
+        drop(tasks);
+
+        let part_stopped = tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            while !stopped.load(Ordering::SeqCst) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await;
+        assert!(part_stopped.is_ok());
+    }
+
+    fn build_cp_config(extra_args: &[&str]) -> Config {
+        let mut args = vec!["s3util", "cp"];
+        args.extend_from_slice(extra_args);
+        args.extend_from_slice(&["s3://source-bucket/key", "s3://target-bucket/key"]);
+        let cli = crate::config::args::parse_from_args(args).unwrap();
+        let crate::config::args::Commands::Cp(cp_args) = cli.command else {
+            panic!("expected Cp variant");
+        };
+        Config::try_from(cp_args).unwrap()
+    }
+
+    #[test]
+    fn modify_metadata_with_metadata_option_and_put_last_modified_metadata() {
+        init_dummy_tracing_subscriber();
+
+        let config =
+            build_cp_config(&["--metadata", "key1=value1", "--put-last-modified-metadata"]);
+        let get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .metadata("source_key", "source_value")
+            .build();
+
+        let get_object_output = UploadManager::modify_metadata(&config, get_object_output);
+        let metadata = get_object_output.metadata().unwrap();
+
+        assert_eq!(metadata.len(), 2);
+        assert_eq!(metadata.get("key1").unwrap(), "value1");
+        assert_eq!(
+            metadata
+                .get(S3SYNC_ORIGIN_LAST_MODIFIED_METADATA_KEY)
+                .unwrap(),
+            "1970-01-01T00:00:00+00:00"
+        );
+    }
+
+    #[test]
+    fn modify_metadata_with_metadata_option_only() {
+        init_dummy_tracing_subscriber();
+
+        let config = build_cp_config(&["--metadata", "key1=value1"]);
+        let get_object_output = GetObjectOutput::builder()
+            .last_modified(DateTime::from_secs(0))
+            .metadata("source_key", "source_value")
+            .build();
+
+        let get_object_output = UploadManager::modify_metadata(&config, get_object_output);
+        let metadata = get_object_output.metadata().unwrap();
+
+        assert_eq!(metadata.len(), 1);
+        assert_eq!(metadata.get("key1").unwrap(), "value1");
+    }
 
     #[test]
     fn modify_last_modified_metadata_with_new() {
@@ -3851,8 +4060,8 @@ mod upload_error_path_tests {
         fn get_rate_limit_bandwidth(&self) -> Option<Arc<RateLimiter>> {
             None
         }
-        fn generate_copy_source_key(&self, _key: &str, _version_id: Option<String>) -> String {
-            unimplemented!()
+        fn generate_copy_source_key(&self, key: &str, _version_id: Option<String>) -> String {
+            format!("source-bucket/{key}")
         }
         fn set_warning(&self) {}
     }
@@ -4119,15 +4328,6 @@ mod upload_error_path_tests {
         assert!(result.is_err(), "expected the future to panic");
     }
 
-    fn assert_call_panics<F, R>(f: F)
-    where
-        F: FnOnce() -> R,
-    {
-        use std::panic::AssertUnwindSafe;
-        let result = std::panic::catch_unwind(AssertUnwindSafe(f));
-        assert!(result.is_err(), "expected the call to panic");
-    }
-
     fn dummy_tagging() -> Tagging {
         Tagging::builder()
             .set_tag_set(Some(vec![]))
@@ -4153,6 +4353,11 @@ mod upload_error_path_tests {
             .send_stats(SyncStatistics::SyncComplete { key: "k".into() })
             .await;
         source.set_warning();
+        // Server-side copy only needs a copy source string, never the source data.
+        assert_eq!(
+            source.generate_copy_source_key("k", None),
+            "source-bucket/k"
+        );
     }
 
     #[tokio::test]
@@ -4197,8 +4402,6 @@ mod upload_error_path_tests {
         .await;
         assert_future_panics(source.put_object_tagging("k", None, dummy_tagging())).await;
         assert_future_panics(source.delete_object("k", None)).await;
-
-        assert_call_panics(|| source.generate_copy_source_key("k", None));
     }
 
     // ------------------------------------------------------------------
@@ -4366,6 +4569,242 @@ mod upload_error_path_tests {
             }
         });
         addr
+    }
+
+    /// Start an endpoint that records the header lines (lowercased names) of
+    /// every request and answers 400, so a test can inspect what was sent.
+    fn spawn_header_recording_stub() -> (String, Arc<Mutex<Vec<String>>>) {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub listener");
+        let addr = listener.local_addr().expect("stub local addr").to_string();
+        let recorded = Arc::new(Mutex::new(Vec::new()));
+        let recorded_by_stub = recorded.clone();
+        thread::spawn(move || {
+            for stream in listener.incoming() {
+                let Ok(stream) = stream else { continue };
+                let recorded = recorded_by_stub.clone();
+                thread::spawn(move || {
+                    let mut reader = BufReader::new(stream);
+                    let mut content_length: usize = 0;
+                    loop {
+                        let mut line = String::new();
+                        match reader.read_line(&mut line) {
+                            Ok(0) | Err(_) => return,
+                            Ok(_) => {}
+                        }
+                        let line = line.trim_end();
+                        if line.is_empty() {
+                            break;
+                        }
+                        if let Some((name, value)) = line.split_once(':') {
+                            let name = name.to_ascii_lowercase();
+                            let value = value.trim();
+                            if name == "content-length" {
+                                content_length = value.parse().unwrap_or(0);
+                            }
+                            recorded.lock().unwrap().push(format!("{name}: {value}"));
+                        }
+                    }
+                    if content_length > 0 {
+                        let mut body = vec![0u8; content_length];
+                        let _ = reader.read_exact(&mut body);
+                    }
+                    let body = xml_error_body("BadRequest");
+                    let mut stream = reader.into_inner();
+                    let _ = stream.write_all(
+                        format!(
+                            "HTTP/1.1 400 stub\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+                            body.len()
+                        )
+                        .as_bytes(),
+                    );
+                    let _ = stream.write_all(&body);
+                    let _ = stream.flush();
+                });
+            }
+        });
+        (addr, recorded)
+    }
+
+    fn metadata_and_last_modified_config(addr: &str) -> Config {
+        let mut config = stub_endpoint_config(addr);
+        config.metadata = Some(HashMap::from([("key1".to_string(), "value1".to_string())]));
+        config.put_last_modified_metadata = true;
+        config
+    }
+
+    fn chunk_with_source_metadata() -> GetObjectOutput {
+        GetObjectOutput::builder()
+            .content_length(4)
+            .last_modified(DateTime::from_secs(0))
+            .metadata("source_key", "source_value")
+            .body(ByteStream::from(b"data".to_vec()))
+            .build()
+    }
+
+    fn assert_metadata_headers(recorded: &Arc<Mutex<Vec<String>>>) {
+        let headers = recorded.lock().unwrap().clone();
+        assert!(
+            headers.contains(&"x-amz-meta-key1: value1".to_string()),
+            "--metadata was not sent: {headers:?}"
+        );
+        assert!(
+            headers.contains(
+                &"x-amz-meta-s3sync_origin_last_modified: 1970-01-01T00:00:00+00:00".to_string()
+            ),
+            "--put-last-modified-metadata was discarded by --metadata: {headers:?}"
+        );
+        assert!(
+            !headers
+                .iter()
+                .any(|header| header.starts_with("x-amz-meta-source_key")),
+            "--metadata must replace the source metadata: {headers:?}"
+        );
+    }
+
+    // --metadata must not discard the origin metadata added by --put-last-modified-metadata.
+    #[tokio::test]
+    async fn singlepart_sends_metadata_option_with_last_modified_metadata() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let config = metadata_and_last_modified_config(&addr);
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload("target-bucket", "key", chunk_with_source_metadata())
+            .await
+            .unwrap_err();
+
+        assert_metadata_headers(&recorded);
+    }
+
+    #[tokio::test]
+    async fn multipart_sends_metadata_option_with_last_modified_metadata() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let mut config = metadata_and_last_modified_config(&addr);
+        // Force the multipart path for a small object.
+        config.transfer_config.multipart_threshold = 4;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", chunk_with_source_metadata())
+            .await
+            .unwrap_err();
+        assert!(
+            format!("{err:#}").contains("create_multipart_upload"),
+            "expected create_multipart_upload to be what fails: {err:#}"
+        );
+
+        assert_metadata_headers(&recorded);
+    }
+
+    // Server-side copy replaces the metadata (MetadataDirective::Replace), so CopyObject must
+    // carry both --metadata and the origin metadata.
+    #[tokio::test]
+    async fn server_side_copy_sends_metadata_option_with_last_modified_metadata() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let mut config = metadata_and_last_modified_config(&addr);
+        config.server_side_copy = true;
+        // Keep the 4-byte object on the single-part (CopyObject) path.
+        config.transfer_config.multipart_threshold = 8 * 1024 * 1024;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload("target-bucket", "key", chunk_with_source_metadata())
+            .await
+            .unwrap_err();
+
+        let headers = recorded.lock().unwrap().clone();
+        assert!(
+            headers.contains(&"x-amz-copy-source: source-bucket/source-key".to_string()),
+            "expected a CopyObject request: {headers:?}"
+        );
+        assert!(
+            headers.contains(&"x-amz-metadata-directive: REPLACE".to_string()),
+            "{headers:?}"
+        );
+        assert_metadata_headers(&recorded);
+    }
+
+    // Without --metadata, the source metadata is kept next to the origin metadata.
+    #[tokio::test]
+    async fn singlepart_keeps_source_metadata_with_last_modified_metadata() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let mut config = metadata_and_last_modified_config(&addr);
+        config.metadata = None;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload("target-bucket", "key", chunk_with_source_metadata())
+            .await
+            .unwrap_err();
+
+        let headers = recorded.lock().unwrap().clone();
+        assert!(
+            headers.contains(&"x-amz-meta-source_key: source_value".to_string()),
+            "the source metadata was dropped: {headers:?}"
+        );
+        assert!(
+            headers.contains(
+                &"x-amz-meta-s3sync_origin_last_modified: 1970-01-01T00:00:00+00:00".to_string()
+            ),
+            "{headers:?}"
+        );
+    }
+
+    // --metadata alone replaces the source metadata and adds no origin metadata.
+    #[tokio::test]
+    async fn singlepart_sends_metadata_option_only() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let mut config = metadata_and_last_modified_config(&addr);
+        config.put_last_modified_metadata = false;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let _ = t
+            .manager
+            .upload("target-bucket", "key", chunk_with_source_metadata())
+            .await
+            .unwrap_err();
+
+        let headers = recorded.lock().unwrap().clone();
+        let metadata_headers: Vec<&String> = headers
+            .iter()
+            .filter(|header| header.starts_with("x-amz-meta-"))
+            .collect();
+        assert_eq!(
+            metadata_headers,
+            vec!["x-amz-meta-key1: value1"],
+            "{headers:?}"
+        );
+    }
+
+    // The stdin path has no source object: its origin metadata is the upload time.
+    #[tokio::test]
+    async fn upload_stream_sends_metadata_option_with_last_modified_metadata() {
+        let (addr, recorded) = spawn_header_recording_stub();
+        let config = metadata_and_last_modified_config(&addr);
+        let mut t = manager_with(config, None, None).await;
+
+        let reader = Box::new(std::io::Cursor::new(b"aaaabbbb".to_vec()));
+        let _ = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap_err();
+
+        let headers = recorded.lock().unwrap().clone();
+        assert!(
+            headers.contains(&"x-amz-meta-key1: value1".to_string()),
+            "--metadata was not sent: {headers:?}"
+        );
+        assert!(
+            headers
+                .iter()
+                .any(|header| header.starts_with("x-amz-meta-s3sync_origin_last_modified: ")),
+            "--put-last-modified-metadata was discarded by --metadata: {headers:?}"
+        );
     }
 
     /// Like `dead_endpoint_config`, but pointing at a live stub endpoint.

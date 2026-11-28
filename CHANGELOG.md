@@ -9,6 +9,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An S3 path with `?` or `#` directly after the bucket name (e.g. `s3://bucket?x`) is now rejected with an
+  argument error. Previously the `?`/`#` part was dropped, so `s3://bucket?x` addressed the bucket itself and
+  `s3://bucket?a/b` silently addressed the key `b`. After the first `/`, `?` and `#` are still ordinary key
+  characters (`s3://bucket/data#old` is the key `data#old`).
+- `--metadata` no longer discards the `s3sync_origin_last_modified` metadata added by
+  `--put-last-modified-metadata` when the source is a local file or an S3 object. (A stdin upload already kept
+  it.)
+- When one part of a multipart upload fails, or the transfer is cancelled, the other part uploads are now stopped
+  before the multipart upload is aborted. Previously they kept running, so a part could still be uploaded after
+  the abort and stay stored (and billed) under the aborted upload ID.
 - `cp` and `mv` now reject a local source that is not a regular file — a pipe or FIFO (including `<(cmd)` and
   `/dev/stdin`), a socket or a device — and a file whose metadata reports 0 bytes but which returns data when
   read, such as a `/proc` or `/sys` file or a file on some FUSE filesystems (a file that cannot be opened or read
@@ -40,6 +50,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A local path containing `:` (for example `report:2024.txt`) is no longer rejected as a URL with an unknown
   scheme. Only a leading `s3:`, `arn:`, `http:`, `https:` or `<scheme>://` marks a URL (and is validated as one);
   any other path is local.
+
+### Changed
+
+- Documented that size suffixes are case-sensitive in the help text of `--rate-limit-bandwidth`,
+  `--multipart-threshold` and `--multipart-chunksize`, and in `README.md`. A suffix ending in a lowercase `b`
+  means bits, not bytes (e.g. `64Mib` is 8MiB). The behavior is unchanged.
 
 ## [1.12.0] - 2026-11-24
 

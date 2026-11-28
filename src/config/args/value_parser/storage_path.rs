@@ -43,6 +43,9 @@ pub fn check_storage_path(path: &str) -> Result<String, String> {
             if parsed.host_str().is_none() {
                 return Err(NO_BUCKET_NAME_SPECIFIED.to_string());
             }
+            if !is_bucket_followed_by_prefix(path) {
+                return Err(INVALID_PATH.to_string());
+            }
         }
         _ => {
             if !is_windows_absolute_path(path) {
@@ -180,6 +183,20 @@ fn parse_s3_path(path: &str) -> StoragePath {
     StoragePath::S3 { bucket, prefix }
 }
 
+/// Whether the bucket name of an `s3://` path ends at a `/` or at the end of the path.
+///
+/// `?` and `#` are ordinary characters in a key, so they are allowed after the
+/// first `/`. Directly after the bucket name (e.g. `s3://bucket?x`) there is no
+/// key to attach them to: the url crate would drop them as a query or fragment,
+/// and `s3://bucket?a/b` would silently address the key `b`.
+fn is_bucket_followed_by_prefix(path: &str) -> bool {
+    let after_authority = path.find("://").map(|i| &path[i + 3..]).unwrap_or(path);
+    match after_authority.find(['/', '?', '#']) {
+        Some(i) => after_authority[i..].starts_with('/'),
+        None => true,
+    }
+}
+
 fn is_windows_absolute_path(path: &str) -> bool {
     if !cfg!(windows) {
         return false;
@@ -278,6 +295,104 @@ mod tests {
         match parse_storage_path("s3://bucket/my%20key") {
             StoragePath::S3 { prefix, .. } => assert_eq!(prefix, "my%20key"),
             _ => panic!("expected S3 path"),
+        }
+    }
+
+    #[test]
+    fn parse_s3_url_with_question_mark_and_hash() {
+        // '?' and '#' are valid in S3 keys and must not be treated as URL query/fragment delimiters.
+        let cases = [
+            ("s3://test-bucket/data#old/", "data#old/"),
+            ("s3://test-bucket/data?old/", "data?old/"),
+            ("s3://test-bucket/data#", "data#"),
+            ("s3://test-bucket/data?", "data?"),
+            ("s3://test-bucket/a?b#c?d#e/", "a?b#c?d#e/"),
+            ("s3://test-bucket/a#b?c/", "a#b?c/"),
+            ("s3://test-bucket/#top", "#top"),
+            ("s3://test-bucket/?top", "?top"),
+            (
+                "s3://test-bucket/dir/こんにちは#☃?x y/",
+                "dir/こんにちは#☃?x y/",
+            ),
+            ("s3://test-bucket/a%23b%3Fc#d", "a%23b%3Fc#d"),
+            ("s3://test-bucket/%FF", "%FF"),
+            ("s3://test-bucket/100%", "100%"),
+            ("s3://test-bucket/a?x/../y#%2e%2e/z", "a?x/../y#%2e%2e/z"),
+            ("s3://test-bucket/dir\\file", "dir\\file"),
+            ("s3://test-bucket/a%20b c", "a%20b c"),
+            ("s3://test-bucket/a/../b", "a/../b"),
+            ("s3://test-bucket/./a/./b/", "./a/./b/"),
+            ("s3://test-bucket//", "/"),
+            ("s3://test-bucket/", ""),
+            ("s3://test-bucket", ""),
+        ];
+
+        for (s3_url, expected_prefix) in cases {
+            check_storage_path(s3_url).unwrap();
+            match parse_storage_path(s3_url) {
+                StoragePath::S3 { bucket, prefix } => {
+                    assert_eq!(bucket, "test-bucket", "url: {s3_url}");
+                    assert_eq!(prefix, expected_prefix, "url: {s3_url}");
+                }
+                _ => panic!("expected S3 path for {s3_url}"),
+            }
+        }
+    }
+
+    #[test]
+    fn check_s3_url_with_query_or_fragment_after_bucket_error() {
+        // Without '/' after the bucket name, there is no key to attach '?' or '#' to.
+        for s3_url in [
+            "s3://my-bucket?old",
+            "s3://my-bucket#old",
+            "s3://my-bucket?a/b",
+            "s3://my-bucket#a/b",
+            "S3://my-bucket?old",
+        ] {
+            assert_eq!(
+                check_storage_path(s3_url).unwrap_err(),
+                INVALID_PATH,
+                "url: {s3_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn bucket_followed_by_prefix() {
+        for s3_url in [
+            "s3://my-bucket",
+            "s3://my-bucket/",
+            "s3://my-bucket/key",
+            "s3://my-bucket/?key",
+            "s3://my-bucket/#key",
+            "s3://my-bucket/a?b#c",
+            "S3://my-bucket/a?b",
+        ] {
+            assert!(is_bucket_followed_by_prefix(s3_url), "url: {s3_url}");
+        }
+
+        for s3_url in [
+            "s3://my-bucket?",
+            "s3://my-bucket#",
+            "s3://my-bucket?key",
+            "s3://my-bucket#key",
+            "s3://my-bucket?a/b",
+            "s3://my-bucket#a/b",
+            "s3://my-bucket?a#b/c",
+        ] {
+            assert!(!is_bucket_followed_by_prefix(s3_url), "url: {s3_url}");
+        }
+    }
+
+    #[test]
+    fn check_s3_url_with_empty_query_or_fragment_after_bucket_error() {
+        // A bare trailing '?' or '#' is dropped by the url crate as well.
+        for s3_url in ["s3://my-bucket?", "s3://my-bucket#"] {
+            assert_eq!(
+                check_storage_path(s3_url).unwrap_err(),
+                INVALID_PATH,
+                "url: {s3_url}"
+            );
         }
     }
 

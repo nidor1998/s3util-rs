@@ -337,3 +337,65 @@ fn non_utf8_argument_is_a_usage_error_not_a_panic() {
     assert!(!stderr.contains("panicked"), "stderr={stderr}");
     assert!(stderr.contains("invalid UTF-8"), "stderr={stderr}");
 }
+
+#[test]
+fn cp_s3_path_with_query_or_fragment_after_bucket_rejected() {
+    // '?' or '#' directly after the bucket name is not part of a key, and must
+    // not be dropped silently (`s3://bucket?a/b` would address the key `b`).
+    for target in ["s3://bucket?old", "s3://bucket#old", "s3://bucket?a/b"] {
+        let (ok, _stdout, stderr) = run(s3util().args(["cp", "test_data/5byte.dat", target]));
+        assert!(!ok, "{target} must be rejected");
+        assert!(
+            stderr.contains("path must be a valid URL or a local path."),
+            "{target}: expected the invalid path error, got: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn cp_s3_path_with_query_or_fragment_in_key_passes_validation() {
+    // After the first '/', '?' and '#' are ordinary key characters. The dry run
+    // fails later or succeeds, but never with the invalid path error.
+    for target in ["s3://bucket/data?old", "s3://bucket/data#old"] {
+        let (_ok, _stdout, stderr) = run(s3util().args([
+            "cp",
+            "--dry-run",
+            "--target-access-key",
+            "AKIAIOSFODNN7EXAMPLE",
+            "--target-secret-access-key",
+            "wJalrXUtnFEMIK7MDENG",
+            "--target-region",
+            "us-east-1",
+            "test_data/5byte.dat",
+            target,
+        ]));
+        assert!(
+            !stderr.contains("path must be a valid URL or a local path."),
+            "{target}: must not be rejected as an invalid path: {stderr}"
+        );
+    }
+}
+
+#[test]
+fn s3_path_with_query_or_fragment_after_bucket_rejected_by_every_path_command() {
+    // The check lives in the shared path parser, so it must hold for commands
+    // other than cp: dropping `?a/` would make these act on another key or bucket.
+    let invocations: [&[&str]; 8] = [
+        &["mv", "test_data/5byte.dat", "s3://bucket?a/b"],
+        &["cp", "s3://bucket#a/b", "-"],
+        &["rm", "s3://bucket?a/b"],
+        &["head-object", "s3://bucket?a/b"],
+        &["presign", "s3://bucket#a/b"],
+        &["get-object-tagging", "s3://bucket?a/b"],
+        &["head-bucket", "s3://bucket?x"],
+        &["delete-bucket", "s3://bucket#x"],
+    ];
+    for args in invocations {
+        let (ok, _stdout, stderr) = run(s3util().args(args));
+        assert!(!ok, "{args:?} must be rejected");
+        assert!(
+            stderr.contains("path must be a valid URL or a local path."),
+            "{args:?}: expected the invalid path error, got: {stderr}"
+        );
+    }
+}
