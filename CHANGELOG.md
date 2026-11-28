@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.12.1] - 2026-11-28
 
 ### Fixed
 
@@ -56,6 +56,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Documented that size suffixes are case-sensitive in the help text of `--rate-limit-bandwidth`,
   `--multipart-threshold` and `--multipart-chunksize`, and in `README.md`. A suffix ending in a lowercase `b`
   means bits, not bytes (e.g. `64Mib` is 8MiB). The behavior is unchanged.
+- Updated dependencies
 
 ## [1.12.0] - 2026-11-24
 
