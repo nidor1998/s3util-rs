@@ -4464,6 +4464,8 @@ mod upload_error_path_tests {
         abort_status: u16,
         /// Status for a whole-object PUT (PutObject/CopyObject); always an error.
         object_put_status: u16,
+        /// Every request received, as "METHOD target".
+        requests: Arc<Mutex<Vec<String>>>,
     }
 
     impl Default for MultipartStub {
@@ -4474,6 +4476,7 @@ mod upload_error_path_tests {
                 complete_checksum_crc32: None,
                 abort_status: 204,
                 object_put_status: 400,
+                requests: Arc::new(Mutex::new(Vec::new())),
             }
         }
     }
@@ -4504,6 +4507,10 @@ mod upload_error_path_tests {
             .nth(1)
             .unwrap_or("")
             .to_string();
+        stub.requests
+            .lock()
+            .unwrap()
+            .push(format!("{method} {target}"));
 
         let mut content_length: usize = 0;
         loop {
@@ -4612,8 +4619,9 @@ mod upload_error_path_tests {
         addr
     }
 
-    /// Start an endpoint that records the header lines (lowercased names) of
-    /// every request and answers 400, so a test can inspect what was sent.
+    /// Start an endpoint that records the request line (as `request-line: METHOD target`)
+    /// and the header lines (lowercased names) of every request and answers 400, so a
+    /// test can inspect what was sent.
     fn spawn_header_recording_stub() -> (String, Arc<Mutex<Vec<String>>>) {
         let listener = TcpListener::bind("127.0.0.1:0").expect("bind stub listener");
         let addr = listener.local_addr().expect("stub local addr").to_string();
@@ -4625,6 +4633,17 @@ mod upload_error_path_tests {
                 let recorded = recorded_by_stub.clone();
                 thread::spawn(move || {
                     let mut reader = BufReader::new(stream);
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).is_err() || request_line.is_empty() {
+                        return;
+                    }
+                    let mut request_parts = request_line.split_whitespace();
+                    let method = request_parts.next().unwrap_or("");
+                    let target = request_parts.next().unwrap_or("");
+                    recorded
+                        .lock()
+                        .unwrap()
+                        .push(format!("request-line: {method} {target}"));
                     let mut content_length: usize = 0;
                     loop {
                         let mut line = String::new();
@@ -4673,6 +4692,31 @@ mod upload_error_path_tests {
         config
     }
 
+    /// The 4-byte test object must stay below the threshold to be sent as a PutObject.
+    fn singlepart_metadata_config(addr: &str) -> Config {
+        let mut config = metadata_and_last_modified_config(addr);
+        config.transfer_config.multipart_threshold = 8 * 1024 * 1024;
+        config
+    }
+
+    /// The only request sent must be a whole-object PUT, not a multipart call.
+    fn assert_whole_object_put(recorded: &Arc<Mutex<Vec<String>>>) {
+        let headers = recorded.lock().unwrap().clone();
+        let request_lines: Vec<&String> = headers
+            .iter()
+            .filter(|header| header.starts_with("request-line: "))
+            .collect();
+        assert_eq!(request_lines.len(), 1, "{request_lines:?}");
+        let request_line = request_lines[0];
+        assert!(
+            request_line.starts_with("request-line: PUT ")
+                && !request_line.contains("uploads")
+                && !request_line.contains("partNumber=")
+                && !request_line.contains("uploadId="),
+            "expected a whole-object PUT: {request_line}"
+        );
+    }
+
     fn chunk_with_source_metadata() -> GetObjectOutput {
         GetObjectOutput::builder()
             .content_length(4)
@@ -4706,7 +4750,7 @@ mod upload_error_path_tests {
     #[tokio::test]
     async fn singlepart_sends_metadata_option_with_last_modified_metadata() {
         let (addr, recorded) = spawn_header_recording_stub();
-        let config = metadata_and_last_modified_config(&addr);
+        let config = singlepart_metadata_config(&addr);
         let mut t = manager_with(config, None, Some(4)).await;
 
         let _ = t
@@ -4715,6 +4759,7 @@ mod upload_error_path_tests {
             .await
             .unwrap_err();
 
+        assert_whole_object_put(&recorded);
         assert_metadata_headers(&recorded);
     }
 
@@ -4772,7 +4817,7 @@ mod upload_error_path_tests {
     #[tokio::test]
     async fn singlepart_keeps_source_metadata_with_last_modified_metadata() {
         let (addr, recorded) = spawn_header_recording_stub();
-        let mut config = metadata_and_last_modified_config(&addr);
+        let mut config = singlepart_metadata_config(&addr);
         config.metadata = None;
         let mut t = manager_with(config, None, Some(4)).await;
 
@@ -4782,6 +4827,7 @@ mod upload_error_path_tests {
             .await
             .unwrap_err();
 
+        assert_whole_object_put(&recorded);
         let headers = recorded.lock().unwrap().clone();
         assert!(
             headers.contains(&"x-amz-meta-source_key: source_value".to_string()),
@@ -4799,7 +4845,7 @@ mod upload_error_path_tests {
     #[tokio::test]
     async fn singlepart_sends_metadata_option_only() {
         let (addr, recorded) = spawn_header_recording_stub();
-        let mut config = metadata_and_last_modified_config(&addr);
+        let mut config = singlepart_metadata_config(&addr);
         config.put_last_modified_metadata = false;
         let mut t = manager_with(config, None, Some(4)).await;
 
@@ -4809,6 +4855,7 @@ mod upload_error_path_tests {
             .await
             .unwrap_err();
 
+        assert_whole_object_put(&recorded);
         let headers = recorded.lock().unwrap().clone();
         let metadata_headers: Vec<&String> = headers
             .iter()
@@ -5967,9 +6014,11 @@ mod upload_error_path_tests {
                 .with_writer(std::io::sink)
                 .finish(),
         );
+        let requests = Arc::new(Mutex::new(Vec::new()));
         let addr = spawn_multipart_stub(MultipartStub {
             complete_e_tag: PART_DATA_STREAM_E_TAG.to_string(),
             abort_status: 404,
+            requests: requests.clone(),
             ..MultipartStub::default()
         });
         let token = create_pipeline_cancellation_token();
@@ -5995,6 +6044,19 @@ mod upload_error_path_tests {
         assert_eq!(
             err.downcast_ref::<S3syncError>(),
             Some(&S3syncError::Cancelled)
+        );
+
+        let requests = requests.lock().unwrap().clone();
+        assert!(
+            requests.iter().any(|request| request.starts_with("DELETE ")
+                && request.contains("uploadId=cov-upload-id")),
+            "AbortMultipartUpload was not sent: {requests:?}"
+        );
+        assert!(
+            !requests
+                .iter()
+                .any(|request| request.starts_with("POST ") && request.contains("uploadId=")),
+            "CompleteMultipartUpload must not be sent: {requests:?}"
         );
     }
 
@@ -6099,6 +6161,12 @@ mod upload_error_path_tests {
             .upload("target-bucket", "key", remote_first_chunk("\"cafe\""))
             .await
             .unwrap_err();
+        // The failure must be the stub's HTTP 400 answer, not a dispatch failure.
+        let debug_message = format!("{err:?}");
+        assert!(
+            debug_message.contains("StubObjectPutError"),
+            "expected the stub's HTTP 400 response: {debug_message}"
+        );
         let message = format!("{err:#}");
         assert!(
             !message.contains("was modified during the transfer"),
