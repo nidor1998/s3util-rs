@@ -259,19 +259,23 @@ But use additional checksum for upload (The hash value is stored in the target o
     #[arg(long, env, default_value_t = DEFAULT_MAX_PARALLEL_MULTIPART_UPLOADS, value_parser = clap::value_parser!(u16).range(1..), help_heading = "Performance")]
     pub max_parallel_uploads: u16,
 
-    /// Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB
-    #[arg(long, env, value_parser = human_bytes::check_human_bandwidth, help_heading = "Performance")]
+    #[arg(long, env, value_parser = human_bytes::check_human_bandwidth, help_heading = "Performance",
+    help = "Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB",
+    long_help=r#"Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB
+A suffix ending in a lowercase b means bits, not bytes (e.g. 64Mib = 8MiB)."#)]
     pub rate_limit_bandwidth: Option<String>,
 
     #[arg(long, env, conflicts_with_all = ["auto_chunksize"], default_value = DEFAULT_MULTIPART_THRESHOLD, value_parser = human_bytes::check_human_bytes, help_heading = "Multipart Settings",
     long_help=r#"Object size threshold for multipart upload.
 Allow suffixes: MB, MiB, GB, GiB.
+A suffix ending in a lowercase b means bits, not bytes (e.g. 64Mib = 8MiB).
 The larger the size, the larger the memory usage."#)]
     pub multipart_threshold: String,
 
     #[arg(long, env, conflicts_with_all = ["auto_chunksize"], default_value = DEFAULT_MULTIPART_CHUNKSIZE, value_parser = human_bytes::check_human_bytes, help_heading = "Multipart Settings",
     long_help=r#"Chunk size for multipart upload of individual files.
 Allow suffixes: MB, MiB, GB, GiB.
+A suffix ending in a lowercase b means bits, not bytes (e.g. 64Mib = 8MiB).
 The larger the size, the larger the memory usage."#)]
     pub multipart_chunksize: String,
 

@@ -4210,6 +4210,33 @@ mod tests {
         }
     }
 
+    /// Three leading letters are a weekday only when a `,` follows directly;
+    /// anything else is not a weekday, so there is nothing to mismatch.
+    #[test]
+    fn rfc2822_weekday_without_a_comma_is_not_checked() {
+        let monday = OffsetDateTime::from_unix_timestamp(NEW_YEAR_2024).unwrap();
+        // "Tue" would be the wrong day, but no comma follows it.
+        assert!(rfc2822_weekday_matches("Tue 01 Jan 2024", &monday));
+        assert!(rfc2822_weekday_matches("Tue", &monday));
+        assert!(!rfc2822_weekday_matches("Tue, 01 Jan 2024", &monday));
+    }
+
+    #[test]
+    fn skip_rfc2822_cfws_leaves_an_unterminated_comment_in_place() {
+        assert_eq!(skip_rfc2822_cfws("  (never closed"), "(never closed");
+        assert_eq!(skip_rfc2822_cfws("(a (nested) one"), "(a (nested) one");
+        // A terminated comment before it is still skipped.
+        assert_eq!(skip_rfc2822_cfws("(ok) (open"), "(open");
+    }
+
+    #[test]
+    fn timestamp_json_from_string_is_text() {
+        assert_eq!(
+            TimestampJson::from("2024-01-01T00:00:00Z".to_string()),
+            TimestampJson::Text("2024-01-01T00:00:00Z".to_string())
+        );
+    }
+
     #[test]
     fn eight_digit_string_is_a_basic_date_never_an_epoch() {
         assert_eq!(

@@ -4511,6 +4511,47 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    // --metadata must not discard the origin metadata added by --put-last-modified-metadata.
+    #[tokio::test]
+    async fn local_to_s3_with_put_last_modified_metadata_and_metadata_option() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket, REGION).await;
+
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file =
+            TestHelper::create_test_file(&local_dir, "plm.txt", b"put last modified test");
+
+        let target = format!("s3://{}/plm.txt", bucket);
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                "--put-last-modified-metadata",
+                "--metadata",
+                "key1=value1",
+                test_file.to_str().unwrap(),
+                &target,
+            ])
+            .await;
+
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+
+        let head = helper.head_object(&bucket, "plm.txt", None).await;
+        let metadata = head.metadata().unwrap();
+        assert_eq!(metadata.get("key1").unwrap(), "value1");
+        assert!(metadata.contains_key("s3sync_origin_last_modified"));
+
+        helper.delete_bucket_with_cascade(&bucket).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     #[tokio::test]
     async fn local_to_s3_with_disable_tagging() {
         TestHelper::init_dummy_tracing_subscriber();

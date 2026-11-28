@@ -297,6 +297,22 @@ fn put_object_annotation_unexpected_error_exits_1() {
 }
 
 #[test]
+fn delete_bucket_tagging_unexpected_error_exits_1() {
+    assert_other_error(
+        &["delete-bucket-tagging", "s3://cov-bucket"],
+        "delete-bucket-tagging on s3://cov-bucket",
+    );
+}
+
+#[test]
+fn delete_bucket_policy_unexpected_error_exits_1() {
+    assert_other_error(
+        &["delete-bucket-policy", "s3://cov-bucket"],
+        "delete-bucket-policy on s3://cov-bucket",
+    );
+}
+
+#[test]
 fn delete_object_annotation_unexpected_error_exits_1() {
     assert_other_error(
         &[

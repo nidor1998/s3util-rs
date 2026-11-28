@@ -3479,6 +3479,54 @@ mod tests {
     }
 
     #[test]
+    fn get_bucket_replication_filter_with_top_level_not_emits_prefix_and_tag() {
+        let tag = aws_sdk_s3::types::Tag::builder()
+            .key("env")
+            .value("dev")
+            .build()
+            .unwrap();
+        let not = aws_sdk_s3::types::ReplicationRuleNotOperator::builder()
+            .prefix("tmp/")
+            .tag(tag)
+            .build();
+        let filter = aws_sdk_s3::types::ReplicationRuleFilter::builder()
+            .not(not)
+            .build();
+        let dest = aws_sdk_s3::types::Destination::builder()
+            .bucket("arn:aws:s3:::d")
+            .build()
+            .unwrap();
+        let rule = aws_sdk_s3::types::ReplicationRule::builder()
+            .filter(filter)
+            .status(aws_sdk_s3::types::ReplicationRuleStatus::Enabled)
+            .destination(dest)
+            .build()
+            .unwrap();
+        let cfg = aws_sdk_s3::types::ReplicationConfiguration::builder()
+            .role("arn:aws:iam::111111111111:role/r")
+            .rules(rule)
+            .build()
+            .unwrap();
+        let out = GetBucketReplicationOutput::builder()
+            .replication_configuration(cfg)
+            .build();
+        let json = get_bucket_replication_to_json(&out);
+        let filter_json = &json["ReplicationConfiguration"]["Rules"][0]["Filter"];
+        assert!(
+            filter_json.get("And").is_none(),
+            "a Not-only filter must not emit And: {filter_json:?}"
+        );
+        let not_json = &filter_json["Not"];
+        assert_eq!(not_json["Prefix"], Value::String("tmp/".into()));
+        assert_eq!(not_json["Tag"]["Key"], Value::String("env".into()));
+        assert_eq!(not_json["Tag"]["Value"], Value::String("dev".into()));
+        assert!(
+            not_json.get("Or").is_none(),
+            "an absent Or must be omitted: {not_json:?}"
+        );
+    }
+
+    #[test]
     fn get_bucket_replication_with_destination_options() {
         let enc = aws_sdk_s3::types::EncryptionConfiguration::builder()
             .replica_kms_key_id("arn:aws:kms:us-east-1:1:key/abc")

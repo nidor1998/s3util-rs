@@ -1890,6 +1890,8 @@ mod put_object_error_path_tests {
     /// `put_object_multipart` issues for parts ≥ 2.
     #[derive(Clone)]
     enum PartBehavior {
+        /// The ranged `get_object` itself fails.
+        GetObjectError,
         /// Response without a ContentLength at all.
         NoContentLength,
         /// Body that fails on the first poll (`SdkBody::taken()`).
@@ -1932,6 +1934,7 @@ mod put_object_error_path_tests {
             _sse_c_key_md5: Option<String>,
         ) -> Result<GetObjectOutput> {
             match &self.behavior {
+                PartBehavior::GetObjectError => Err(anyhow!("simulated ranged get failure")),
                 PartBehavior::NoContentLength => Ok(GetObjectOutput::builder()
                     .body(ByteStream::from(vec![]))
                     .build()),
@@ -2517,6 +2520,43 @@ mod put_object_error_path_tests {
         let mut config = config_for_target(key);
         config.transfer_config.multipart_chunksize = 5;
         (config, first_chunk(5, ByteStream::from(vec![b'x'; 5])))
+    }
+
+    // A failed ranged get_object() for the second or later part must be returned as an error, not a panic.
+    #[tokio::test]
+    async fn multipart_part_get_object_error_is_propagated() {
+        let dir = tempdir();
+        let key = key_in(dir.path(), "out.dat");
+        let (config, chunk) = two_part_setup(&key);
+        let t = local_storage_with_config(config, create_pipeline_cancellation_token());
+
+        let err = t
+            .storage
+            .put_object_multipart(
+                &key,
+                "src-key",
+                mock_source(PartBehavior::GetObjectError),
+                10,
+                None,
+                chunk,
+                None,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert!(
+            err.downcast_ref::<tokio::task::JoinError>().is_none(),
+            "the part task panicked: {err:?}"
+        );
+        assert!(
+            format!("{err:#}").contains("get_object() failed."),
+            "unexpected error: {err:#}"
+        );
+        assert!(
+            format!("{err:#}").contains("simulated ranged get failure"),
+            "the cause must be kept: {err:#}"
+        );
+        assert!(!Path::new(&key).exists());
     }
 
     #[tokio::test]

@@ -979,6 +979,17 @@ mod tests {
     }
 
     #[test]
+    fn check_local_source_is_regular_file_ignores_non_local_source() {
+        // Only a Local source can be a directory or pseudo-file; any other
+        // source must pass through even when the direction says LocalToS3.
+        let source = StoragePath::S3 {
+            bucket: "bucket".to_string(),
+            prefix: "key".to_string(),
+        };
+        check_local_source_is_regular_file(&source, &TransferDirection::LocalToS3).unwrap();
+    }
+
+    #[test]
     fn check_local_source_is_regular_file_allows_nonexistent_path() {
         // head_object downstream turns this into a "file not found" error; the
         // directory guard should not pre-empt that path.

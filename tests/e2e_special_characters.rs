@@ -123,6 +123,105 @@ mod tests {
         let _ = std::fs::remove_dir_all(&local_dir);
     }
 
+    // '?' and '#' are ordinary key characters, and percent escapes are not decoded:
+    // the key is used exactly as given, in every transfer direction.
+    #[tokio::test]
+    async fn question_mark_hash_and_percent_in_key_are_literal() {
+        TestHelper::init_dummy_tracing_subscriber();
+
+        let helper = TestHelper::new().await;
+        let bucket1 = TestHelper::generate_bucket_name();
+        let bucket2 = TestHelper::generate_bucket_name();
+        helper.create_bucket(&bucket1, REGION).await;
+        helper.create_bucket(&bucket2, REGION).await;
+
+        let key = "dir/data#old?x%20y";
+        let test_content = b"literal key test";
+        let local_dir = TestHelper::create_temp_dir();
+        let test_file = TestHelper::create_test_file(&local_dir, "literal.txt", test_content);
+
+        let path1 = format!("s3://{}/{}", bucket1, key);
+        let path2 = format!("s3://{}/{}", bucket2, key);
+
+        // local -> S3
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--target-profile",
+                "s3util-e2e-test",
+                test_file.to_str().unwrap(),
+                &path1,
+            ])
+            .await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert!(helper.is_object_exist(&bucket1, key, None).await);
+        // Neither truncated at '#'/'?' nor percent-decoded.
+        assert!(!helper.is_object_exist(&bucket1, "dir/data", None).await);
+        assert!(!helper.is_object_exist(&bucket1, "dir/data#old", None).await);
+        assert!(
+            !helper
+                .is_object_exist(&bucket1, "dir/data#old?x y", None)
+                .await
+        );
+
+        // S3 -> S3, download and upload, then server-side copy
+        for (extra_args, target_bucket, target_path) in [
+            (vec![], &bucket2, path2.clone()),
+            (
+                vec!["--server-side-copy"],
+                &bucket2,
+                format!("{path2}#ssc?"),
+            ),
+        ] {
+            let mut args = vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                "--target-profile",
+                "s3util-e2e-test",
+            ];
+            args.extend(extra_args);
+            args.push(&path1);
+            args.push(&target_path);
+            let stats = helper.cp_test_data(args).await;
+            assert_eq!(stats.sync_complete, 1);
+            assert_eq!(stats.sync_error, 0);
+            assert_eq!(stats.sync_warning, 0);
+
+            let target_key = target_path
+                .strip_prefix(&format!("s3://{}/", target_bucket))
+                .unwrap();
+            helper
+                .verify_object_content_md5(target_bucket, target_key, test_content)
+                .await;
+        }
+
+        // S3 -> local
+        let local_file = local_dir.join("literal_downloaded.txt");
+        let stats = helper
+            .cp_test_data(vec![
+                "s3util",
+                "cp",
+                "--source-profile",
+                "s3util-e2e-test",
+                &path2,
+                local_file.to_str().unwrap(),
+            ])
+            .await;
+        assert_eq!(stats.sync_complete, 1);
+        assert_eq!(stats.sync_error, 0);
+        assert_eq!(stats.sync_warning, 0);
+        assert_eq!(std::fs::read(&local_file).unwrap(), test_content);
+
+        helper.delete_bucket_with_cascade(&bucket1).await;
+        helper.delete_bucket_with_cascade(&bucket2).await;
+        let _ = std::fs::remove_dir_all(&local_dir);
+    }
+
     #[tokio::test]
     async fn s3_to_s3_server_side_copy_special_chars() {
         TestHelper::init_dummy_tracing_subscriber();
