@@ -1033,6 +1033,9 @@ impl UploadManager {
         let mut body = get_object_output_first_chunk.body.into_async_read();
 
         let mut upload_part_tasks = UploadPartTasks::new();
+        // An early return must not leave a part in flight when the caller aborts the
+        // multipart upload, so the part tasks are stopped before the error is returned.
+        let spawn_result: Result<()> = async {
         for (part_number, offset) in (1i32..).zip((0..source_total_size).step_by(config_chunksize))
         {
             if self.cancellation_token.is_cancelled() {
@@ -1332,6 +1335,13 @@ impl UploadManager {
 
             upload_part_tasks.push(task);
         }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = spawn_result {
+            upload_part_tasks.abort_and_wait().await;
+            return Err(e);
+        }
 
         upload_part_tasks
             .join_all(Some(&self.cancellation_token))
@@ -1551,167 +1561,179 @@ impl UploadManager {
 
         let mut upload_part_tasks = UploadPartTasks::new();
 
-        loop {
-            if self.cancellation_token.is_cancelled() {
-                return Err(anyhow!(S3syncError::Cancelled));
-            }
-
-            // Read up to config_chunksize bytes for this part.
-            let mut buffer = vec![0u8; config_chunksize];
-            let read_result = read_exact_or_eof(
-                &mut reader,
-                &mut buffer,
-                self.source.get_rate_limit_bandwidth().as_deref(),
-                &self.cancellation_token,
-            )
-            .await;
-            if read_result.is_err() && self.cancellation_token.is_cancelled() {
-                return Err(anyhow!(S3syncError::Cancelled));
-            }
-            let n = read_result.context("read_exact_or_eof: reader returned an error")?;
-            if n == 0 {
-                // Clean EOF on a chunk boundary.
-                break;
-            }
-            buffer.truncate(n);
-            let is_last_chunk = n < config_chunksize;
-
-            // Incremental additional checksum — synchronous, in part order.
-            if let Some(c) = additional_checksum.as_mut() {
-                c.update(&buffer);
-                let _ = c.finalize();
-            }
-
-            total_uploaded_size += n as u64;
-
-            // Capture per-task locals.
-            let upload_parts = Arc::clone(&shared_upload_parts);
-            let multipart_etags = Arc::clone(&shared_multipart_etags);
-            let client = Arc::clone(&self.client);
-            let target_bucket = bucket.to_string();
-            let target_key = key.to_string();
-            let target_upload_id = upload_id.to_string();
-            let target_sse_c = self.config.target_sse_c.clone();
-            let target_sse_c_key = self.config.target_sse_c_key.clone().key.clone();
-            let target_sse_c_key_md5 = self.config.target_sse_c_key_md5.clone();
-            let additional_checksum_algorithm = self.config.additional_checksum_algorithm.clone();
-            let disable_payload_signing = self.config.disable_payload_signing;
-            let disable_content_md5_header = self.config.disable_content_md5_header;
-            let express_onezone_storage = self.express_onezone_storage;
-            let request_payer = self.request_payer.clone();
-            let stats_sender = self.stats_sender.clone();
-            let current_part_number = part_number;
-            let part_size = n as i64;
-
-            debug!(
-                key = key,
-                part_number = current_part_number,
-                size = part_size,
-                is_last = is_last_chunk,
-                "upload_part() start (streaming)"
-            );
-
-            let permit = self
-                .config
-                .clone()
-                .target_client_config
-                .unwrap()
-                .parallel_upload_semaphore
-                .acquire_owned()
-                .await?;
-
-            let task: JoinHandle<Result<()>> = task::spawn(async move {
-                let _permit = permit;
-
-                let md5_digest;
-                let md5_digest_base64 = if !express_onezone_storage && !disable_content_md5_header {
-                    let md5_digest_raw = md5::compute(&buffer);
-                    md5_digest = Some(md5_digest_raw);
-                    Some(general_purpose::STANDARD.encode(md5_digest_raw.as_slice()))
-                } else {
-                    md5_digest = None;
-                    None
-                };
-
-                // Compute per-part additional checksum for the upload_part call itself.
-                let additional_checksum_values = calculate_additional_checksum_values(
-                    additional_checksum_algorithm.as_ref(),
-                    &buffer,
-                    md5_digest_base64.as_deref(),
-                );
-
-                let body = ByteStream::from(buffer);
-
-                let mut upload_part_builder = client
-                    .upload_part()
-                    .set_request_payer(request_payer.clone())
-                    .bucket(&target_bucket)
-                    .key(&target_key)
-                    .upload_id(&target_upload_id)
-                    .part_number(current_part_number)
-                    .content_length(part_size)
-                    .body(body)
-                    .set_content_md5(md5_digest_base64)
-                    .set_sse_customer_algorithm(target_sse_c.clone())
-                    .set_sse_customer_key(target_sse_c_key.clone())
-                    .set_sse_customer_key_md5(target_sse_c_key_md5.clone());
-
-                if let Some(algo) = additional_checksum_algorithm.as_ref() {
-                    upload_part_builder =
-                        upload_part_builder.set_checksum_algorithm(Some(algo.clone()));
+        // An early return must not leave a part in flight when the caller aborts the
+        // multipart upload, so the part tasks are stopped before the error is returned.
+        let spawn_result: Result<()> = async {
+            loop {
+                if self.cancellation_token.is_cancelled() {
+                    return Err(anyhow!(S3syncError::Cancelled));
                 }
-                let upload_part_builder = set_upload_part_additional_checksum(
-                    upload_part_builder,
-                    additional_checksum_values,
-                );
 
-                let upload_part_output = if disable_payload_signing {
-                    upload_part_builder
-                        .customize()
-                        .disable_payload_signing()
-                        .send()
-                        .await
-                        .context("aws_sdk_s3::client::Client upload_part() failed.")?
-                } else {
-                    upload_part_builder
-                        .send()
-                        .await
-                        .context("aws_sdk_s3::client::Client upload_part() failed.")?
-                };
+                // Read up to config_chunksize bytes for this part.
+                let mut buffer = vec![0u8; config_chunksize];
+                let read_result = read_exact_or_eof(
+                    &mut reader,
+                    &mut buffer,
+                    self.source.get_rate_limit_bandwidth().as_deref(),
+                    &self.cancellation_token,
+                )
+                .await;
+                if read_result.is_err() && self.cancellation_token.is_cancelled() {
+                    return Err(anyhow!(S3syncError::Cancelled));
+                }
+                let n = read_result.context("read_exact_or_eof: reader returned an error")?;
+                if n == 0 {
+                    // Clean EOF on a chunk boundary.
+                    break;
+                }
+                buffer.truncate(n);
+                let is_last_chunk = n < config_chunksize;
+
+                // Incremental additional checksum — synchronous, in part order.
+                if let Some(c) = additional_checksum.as_mut() {
+                    c.update(&buffer);
+                    let _ = c.finalize();
+                }
+
+                total_uploaded_size += n as u64;
+
+                // Capture per-task locals.
+                let upload_parts = Arc::clone(&shared_upload_parts);
+                let multipart_etags = Arc::clone(&shared_multipart_etags);
+                let client = Arc::clone(&self.client);
+                let target_bucket = bucket.to_string();
+                let target_key = key.to_string();
+                let target_upload_id = upload_id.to_string();
+                let target_sse_c = self.config.target_sse_c.clone();
+                let target_sse_c_key = self.config.target_sse_c_key.clone().key.clone();
+                let target_sse_c_key_md5 = self.config.target_sse_c_key_md5.clone();
+                let additional_checksum_algorithm =
+                    self.config.additional_checksum_algorithm.clone();
+                let disable_payload_signing = self.config.disable_payload_signing;
+                let disable_content_md5_header = self.config.disable_content_md5_header;
+                let express_onezone_storage = self.express_onezone_storage;
+                let request_payer = self.request_payer.clone();
+                let stats_sender = self.stats_sender.clone();
+                let current_part_number = part_number;
+                let part_size = n as i64;
 
                 debug!(
-                    key = &target_key,
+                    key = key,
                     part_number = current_part_number,
-                    "upload_part() complete (streaming)"
+                    size = part_size,
+                    is_last = is_last_chunk,
+                    "upload_part() start (streaming)"
                 );
-                trace!(key = &target_key, "{upload_part_output:?}");
 
-                if md5_digest.is_some() {
-                    let mut locked_etags = multipart_etags.lock().unwrap();
-                    locked_etags.push(MutipartEtags {
-                        digest: md5_digest.as_ref().unwrap().as_slice().to_vec(),
-                        part_number: current_part_number,
-                    });
+                let permit = self
+                    .config
+                    .clone()
+                    .target_client_config
+                    .unwrap()
+                    .parallel_upload_semaphore
+                    .acquire_owned()
+                    .await?;
+
+                let task: JoinHandle<Result<()>> = task::spawn(async move {
+                    let _permit = permit;
+
+                    let md5_digest;
+                    let md5_digest_base64 =
+                        if !express_onezone_storage && !disable_content_md5_header {
+                            let md5_digest_raw = md5::compute(&buffer);
+                            md5_digest = Some(md5_digest_raw);
+                            Some(general_purpose::STANDARD.encode(md5_digest_raw.as_slice()))
+                        } else {
+                            md5_digest = None;
+                            None
+                        };
+
+                    // Compute per-part additional checksum for the upload_part call itself.
+                    let additional_checksum_values = calculate_additional_checksum_values(
+                        additional_checksum_algorithm.as_ref(),
+                        &buffer,
+                        md5_digest_base64.as_deref(),
+                    );
+
+                    let body = ByteStream::from(buffer);
+
+                    let mut upload_part_builder = client
+                        .upload_part()
+                        .set_request_payer(request_payer.clone())
+                        .bucket(&target_bucket)
+                        .key(&target_key)
+                        .upload_id(&target_upload_id)
+                        .part_number(current_part_number)
+                        .content_length(part_size)
+                        .body(body)
+                        .set_content_md5(md5_digest_base64)
+                        .set_sse_customer_algorithm(target_sse_c.clone())
+                        .set_sse_customer_key(target_sse_c_key.clone())
+                        .set_sse_customer_key_md5(target_sse_c_key_md5.clone());
+
+                    if let Some(algo) = additional_checksum_algorithm.as_ref() {
+                        upload_part_builder =
+                            upload_part_builder.set_checksum_algorithm(Some(algo.clone()));
+                    }
+                    let upload_part_builder = set_upload_part_additional_checksum(
+                        upload_part_builder,
+                        additional_checksum_values,
+                    );
+
+                    let upload_part_output = if disable_payload_signing {
+                        upload_part_builder
+                            .customize()
+                            .disable_payload_signing()
+                            .send()
+                            .await
+                            .context("aws_sdk_s3::client::Client upload_part() failed.")?
+                    } else {
+                        upload_part_builder
+                            .send()
+                            .await
+                            .context("aws_sdk_s3::client::Client upload_part() failed.")?
+                    };
+
+                    debug!(
+                        key = &target_key,
+                        part_number = current_part_number,
+                        "upload_part() complete (streaming)"
+                    );
+                    trace!(key = &target_key, "{upload_part_output:?}");
+
+                    if md5_digest.is_some() {
+                        let mut locked_etags = multipart_etags.lock().unwrap();
+                        locked_etags.push(MutipartEtags {
+                            digest: md5_digest.as_ref().unwrap().as_slice().to_vec(),
+                            part_number: current_part_number,
+                        });
+                    }
+
+                    let mut locked_upload_parts = upload_parts.lock().unwrap();
+                    locked_upload_parts.push(build_completed_part(
+                        &upload_part_output,
+                        current_part_number,
+                    ));
+                    drop(locked_upload_parts);
+
+                    let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(part_size as u64));
+
+                    Ok(())
+                });
+
+                upload_part_tasks.push(task);
+                part_number += 1;
+
+                if is_last_chunk {
+                    break;
                 }
-
-                let mut locked_upload_parts = upload_parts.lock().unwrap();
-                locked_upload_parts.push(build_completed_part(
-                    &upload_part_output,
-                    current_part_number,
-                ));
-                drop(locked_upload_parts);
-
-                let _ = stats_sender.send_blocking(SyncStatistics::SyncBytes(part_size as u64));
-
-                Ok(())
-            });
-
-            upload_part_tasks.push(task);
-            part_number += 1;
-
-            if is_last_chunk {
-                break;
             }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = spawn_result {
+            upload_part_tasks.abort_and_wait().await;
+            return Err(e);
         }
 
         upload_part_tasks.join_all(None).await.map_err(|e| {
@@ -1775,6 +1797,9 @@ impl UploadManager {
         let mut part_number = 1;
         let mut offset = 0;
 
+        // An early return must not leave a part in flight when the caller aborts the
+        // multipart upload, so the part tasks are stopped before the error is returned.
+        let spawn_result: Result<()> = async {
         while part_number <= self.object_parts.as_ref().unwrap().len() as i32 {
             if self.cancellation_token.is_cancelled() {
                 return Err(anyhow!(S3syncError::Cancelled));
@@ -2081,6 +2106,13 @@ impl UploadManager {
 
             offset += object_part_chunksize;
             part_number += 1;
+        }
+            Ok(())
+        }
+        .await;
+        if let Err(e) = spawn_result {
+            upload_part_tasks.abort_and_wait().await;
+            return Err(e);
         }
 
         upload_part_tasks

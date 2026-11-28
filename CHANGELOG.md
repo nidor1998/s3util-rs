@@ -14,8 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `s3://bucket?a/b` silently addressed the key `b`. After the first `/`, `?` and `#` are still ordinary key
   characters (`s3://bucket/data#old` is the key `data#old`).
 - `--metadata` no longer discards the `s3sync_origin_last_modified` metadata added by
-  `--put-last-modified-metadata` when the source is a local file or an S3 object. (A stdin upload already kept
-  it.)
+  `--put-last-modified-metadata` when the source is a local file, an S3 object, or stdin input smaller than
+  `--multipart-threshold`. (A larger, streamed stdin upload already kept it.)
 - When one part of a multipart upload fails, or the transfer is cancelled, the other part uploads are now stopped
   before the multipart upload is aborted. Previously they kept running, so a part could still be uploaded after
   the abort and stay stored (and billed) under the aborted upload ID.

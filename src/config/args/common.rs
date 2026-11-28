@@ -260,6 +260,7 @@ But use additional checksum for upload (The hash value is stored in the target o
     pub max_parallel_uploads: u16,
 
     #[arg(long, env, value_parser = human_bytes::check_human_bandwidth, help_heading = "Performance",
+    help = "Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB",
     long_help=r#"Rate limit bandwidth (bytes per sec). Allow suffixes: MB, MiB, GB, GiB
 A suffix ending in a lowercase b means bits, not bytes (e.g. 64Mib = 8MiB)."#)]
     pub rate_limit_bandwidth: Option<String>,
