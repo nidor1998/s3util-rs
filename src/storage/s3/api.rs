@@ -2044,6 +2044,21 @@ mod presign_tests {
         );
     }
 
+    /// SigV4 caps a presigned URL at one week; the SDK's refusal must name
+    /// the offending duration instead of surfacing bare.
+    #[tokio::test]
+    async fn presign_rejects_expiry_over_one_week() {
+        let too_long = Duration::from_secs(7 * 24 * 60 * 60 + 1);
+        let err = presign_get_object(&offline_client(), "my-bucket", "my-key", too_long, None)
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("invalid presigning config (expires_in=604801s)"),
+            "unexpected error: {message}"
+        );
+    }
+
     /// The two URLs must differ in more than the header list: signing an extra
     /// header changes the signature itself.
     #[tokio::test]

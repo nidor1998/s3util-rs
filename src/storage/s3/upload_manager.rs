@@ -4462,6 +4462,8 @@ mod upload_error_path_tests {
         complete_checksum_crc32: Option<String>,
         /// Status for AbortMultipartUpload (204 = success).
         abort_status: u16,
+        /// Status for a whole-object PUT (PutObject/CopyObject); always an error.
+        object_put_status: u16,
     }
 
     impl Default for MultipartStub {
@@ -4471,6 +4473,7 @@ mod upload_error_path_tests {
                 complete_e_tag: "\"cov-complete-etag\"".to_string(),
                 complete_checksum_crc32: None,
                 abort_status: 204,
+                object_put_status: 400,
             }
         }
     }
@@ -4548,6 +4551,12 @@ mod upload_error_path_tests {
                 } else {
                     (stub.part_status, vec![], xml_error_body("InternalError"))
                 }
+            } else if method == "PUT" {
+                (
+                    stub.object_put_status,
+                    vec![],
+                    xml_error_body("StubObjectPutError"),
+                )
             } else if method == "DELETE" {
                 if stub.abort_status == 204 {
                     (204, vec![], Vec::new())
@@ -5922,6 +5931,224 @@ mod upload_error_path_tests {
         assert_eq!(
             err.downcast_ref::<S3syncError>(),
             Some(&S3syncError::Cancelled)
+        );
+    }
+
+    /// Reader that cancels the pipeline token while reporting EOF, like a
+    /// Ctrl+C that kills the process feeding stdin.
+    struct CancelAtEof {
+        inner: std::io::Cursor<Vec<u8>>,
+        token: PipelineCancellationToken,
+    }
+
+    impl tokio::io::AsyncRead for CancelAtEof {
+        fn poll_read(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+            buf: &mut tokio::io::ReadBuf<'_>,
+        ) -> std::task::Poll<std::io::Result<()>> {
+            let filled_before = buf.filled().len();
+            let result = std::pin::Pin::new(&mut self.inner).poll_read(cx, buf);
+            if buf.filled().len() == filled_before {
+                self.token.cancel();
+            }
+            result
+        }
+    }
+
+    // Every part uploaded, but the EOF came from a cancellation: the truncated
+    // stream must not be committed, and a failing abort must not mask that.
+    #[tokio::test]
+    async fn upload_stream_cancelled_at_eof_aborts_instead_of_completing() {
+        // Enable the abort-failure warning for this test's thread, discarding the output.
+        let _tracing = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::WARN)
+                .with_writer(std::io::sink)
+                .finish(),
+        );
+        let addr = spawn_multipart_stub(MultipartStub {
+            complete_e_tag: PART_DATA_STREAM_E_TAG.to_string(),
+            abort_status: 404,
+            ..MultipartStub::default()
+        });
+        let token = create_pipeline_cancellation_token();
+        let mut t = manager_with_full(
+            stub_endpoint_config(&addr),
+            None,
+            None,
+            None,
+            token.clone(),
+            Box::new(NullSource),
+        )
+        .await;
+
+        let reader = Box::new(CancelAtEof {
+            inner: std::io::Cursor::new(PART_DATA.to_vec()),
+            token,
+        });
+        let err = t
+            .manager
+            .upload_stream("target-bucket", "key", reader)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err.downcast_ref::<S3syncError>(),
+            Some(&S3syncError::Cancelled)
+        );
+    }
+
+    // Remote source with a multipart-style ETag + --disable-multipart-verify:
+    // the ETag mismatch must be skipped, neither fatal nor a warning.
+    #[tokio::test]
+    async fn multipart_e_tag_mismatch_is_skipped_when_multipart_verify_disabled() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut config = stub_endpoint_config(&addr);
+        config.disable_multipart_verify = true;
+        config.disable_additional_checksum_verify = true;
+        let mut t = manager_with_full(
+            config,
+            None,
+            Some(8),
+            None,
+            create_pipeline_cancellation_token(),
+            ranged_source(RangedMode::Normal),
+        )
+        .await;
+
+        let output = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap();
+        assert_eq!(output.e_tag().unwrap(), "\"cov-complete-etag\"");
+        assert!(!t.has_warning.load(Ordering::SeqCst));
+    }
+
+    // ---- HTTP 412 from a server-side copy gets an explanation ----
+
+    fn server_side_copy_config(addr: &str) -> Config {
+        let mut config = stub_endpoint_config(addr);
+        config.server_side_copy = true;
+        config
+    }
+
+    #[tokio::test]
+    async fn copy_object_precondition_failed_reports_modified_source() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            object_put_status: 412,
+            ..MultipartStub::default()
+        });
+        let mut config = server_side_copy_config(&addr);
+        // Keep the 4-byte object on the single-part (CopyObject) path.
+        config.transfer_config.multipart_threshold = 8 * 1024 * 1024;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe\""))
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(
+                "source object was modified during the transfer: key=source-key. \
+                 nothing was copied; retry it."
+            ),
+            "unexpected error: {message}"
+        );
+    }
+
+    // With --if-none-match the 412 has two possible causes, and S3 does not
+    // say which; the message must not blame the source alone.
+    #[tokio::test]
+    async fn copy_object_precondition_failed_with_if_none_match_names_both_causes() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            object_put_status: 412,
+            ..MultipartStub::default()
+        });
+        let mut config = server_side_copy_config(&addr);
+        config.transfer_config.multipart_threshold = 8 * 1024 * 1024;
+        let mut t = manager_with(config, None, Some(4)).await;
+        t.manager.if_none_match = Some("*".to_string());
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe\""))
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains("server-side copy precondition failed: key=key.")
+                && message.contains("the target object already exists (--if-none-match)")
+                && message.contains("the source object was modified during the transfer"),
+            "unexpected error: {message}"
+        );
+    }
+
+    // A non-412 CopyObject failure must not get the "source was modified" story.
+    #[tokio::test]
+    async fn copy_object_other_failure_gets_no_precondition_context() {
+        let addr = spawn_multipart_stub(MultipartStub::default());
+        let mut config = server_side_copy_config(&addr);
+        config.transfer_config.multipart_threshold = 8 * 1024 * 1024;
+        let mut t = manager_with(config, None, Some(4)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe\""))
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            !message.contains("was modified during the transfer"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn upload_part_copy_precondition_failed_reports_modified_source() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            part_status: 412,
+            ..MultipartStub::default()
+        });
+        let mut t = manager_with(server_side_copy_config(&addr), None, Some(8)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(
+                "source object was modified during the transfer: key=source-key, part_number="
+            ) && message.contains("the server-side copy was stopped"),
+            "unexpected error: {message}"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_chunksize_upload_part_copy_precondition_failed_reports_modified_source() {
+        let addr = spawn_multipart_stub(MultipartStub {
+            part_status: 412,
+            ..MultipartStub::default()
+        });
+        let (mut config, parts) = auto_chunksize_config(&addr);
+        config.server_side_copy = true;
+        let mut t = manager_with(config, Some(parts), Some(8)).await;
+
+        let err = t
+            .manager
+            .upload("target-bucket", "key", remote_first_chunk("\"cafe-2\""))
+            .await
+            .unwrap_err();
+        let message = format!("{err:#}");
+        assert!(
+            message.contains(
+                "source object was modified during the transfer: key=source-key, part_number="
+            ) && message.contains("the server-side copy was stopped"),
+            "unexpected error: {message}"
         );
     }
 }

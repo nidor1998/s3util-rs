@@ -94,6 +94,13 @@ fn cp_invalid_source_path_rejected_by_value_parser() {
 }
 
 #[test]
+fn mv_auto_complete_shell_short_circuits_without_paths() {
+    let (ok, stdout, _stderr) = run(s3util().args(["mv", "--auto-complete-shell", "bash"]));
+    assert!(ok, "mv --auto-complete-shell must succeed without paths");
+    assert!(stdout.contains("_s3util"));
+}
+
+#[test]
 fn mv_help_succeeds() {
     let (ok, stdout, _stderr) = run(s3util().args(["mv", "--help"]));
     assert!(ok, "mv --help must succeed");

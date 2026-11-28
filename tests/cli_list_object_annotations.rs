@@ -34,6 +34,14 @@ fn help_succeeds_and_lists_options() {
 }
 
 #[test]
+fn auto_complete_shell_short_circuits_without_target() {
+    let (ok, stdout, _stderr, _code) =
+        run(s3util().args(["list-object-annotations", "--auto-complete-shell", "bash"]));
+    assert!(ok, "auto-complete-shell must succeed without a target");
+    assert!(stdout.contains("_s3util"));
+}
+
+#[test]
 fn missing_positional_exits_2() {
     let (ok, _stdout, stderr, code) = run(s3util().arg("list-object-annotations"));
     assert!(!ok);
